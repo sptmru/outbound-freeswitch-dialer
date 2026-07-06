@@ -15,6 +15,7 @@ create table if not exists agents (
   user_id uuid not null references users(id) on delete cascade,
   sip_username text not null unique,
   sip_password_hash text not null,
+  sip_password_encrypted text not null,
   display_name text not null,
   status text not null default 'offline',
   last_registered_at timestamptz,

@@ -21,6 +21,8 @@ services:
     restart: unless-stopped
     env_file:
       - ${APP_ENV_FILE:-../../.env}
+    environment:
+      FREESWITCH_GENERATED_CONFIG_DIR: /var/lib/outbound-dialer/freeswitch
     depends_on:
       postgres:
         condition: service_healthy
@@ -30,6 +32,8 @@ services:
       - "host.docker.internal:host-gateway"
     ports:
       - "${API_PUBLIC_PORT:-3000}:3000"
+    volumes:
+      - freeswitch_generated:/var/lib/outbound-dialer/freeswitch
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 15s
@@ -37,14 +41,26 @@ services:
       retries: 5
 
   freeswitch:
-    image: ${FREESWITCH_IMAGE:-safarov/freeswitch:latest}
+    build:
+      context: ../..
+      dockerfile: infra/freeswitch/Dockerfile
+      args:
+        FREESWITCH_BASE_IMAGE: ${FREESWITCH_BASE_IMAGE:-safarov/freeswitch:latest}
     restart: unless-stopped
     network_mode: host
     environment:
       FREESWITCH_ESL_PASSWORD: ${FREESWITCH_ESL_PASSWORD}
+      FREESWITCH_ESL_ACL: ${FREESWITCH_ESL_ACL}
+      FREESWITCH_CONFIG_DIR: ${FREESWITCH_CONFIG_DIR}
       FREESWITCH_DOMAIN: ${FREESWITCH_DOMAIN}
+      FREESWITCH_RTP_START_PORT: ${FREESWITCH_RTP_START_PORT}
+      FREESWITCH_RTP_END_PORT: ${FREESWITCH_RTP_END_PORT}
       FREESWITCH_EXTERNAL_SIP_IP: ${FREESWITCH_EXTERNAL_SIP_IP}
       FREESWITCH_EXTERNAL_RTP_IP: ${FREESWITCH_EXTERNAL_RTP_IP}
+      FREESWITCH_INTERNAL_SIP_PORT: ${FREESWITCH_INTERNAL_SIP_PORT}
+      FREESWITCH_EXTERNAL_PROFILE_SIP_PORT: ${FREESWITCH_EXTERNAL_PROFILE_SIP_PORT}
+      FREESWITCH_EXTERNAL_PROFILE_TLS_PORT: ${FREESWITCH_EXTERNAL_PROFILE_TLS_PORT}
+      FREESWITCH_WEBRTC_WSS_PORT: ${FREESWITCH_WEBRTC_WSS_PORT}
       MAXO_TRUNK_MODE: ${MAXO_TRUNK_MODE}
       MAXO_SIP_PROXY: ${MAXO_SIP_PROXY}
       MAXO_SIP_REALM: ${MAXO_SIP_REALM}
@@ -52,9 +68,39 @@ services:
       MAXO_USERNAME: ${MAXO_USERNAME}
       MAXO_PASSWORD: ${MAXO_PASSWORD}
       MAXO_CALLER_ID: ${MAXO_CALLER_ID}
+    healthcheck:
+      test: ["CMD-SHELL", "fs_cli -H 127.0.0.1 -P 8021 -p \"$${FREESWITCH_ESL_PASSWORD}\" -x status >/dev/null"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
     volumes:
-      - ../freeswitch/conf:/etc/freeswitch/dialer:ro
+      - ../freeswitch/templates:/opt/outbound-dialer/templates:ro
+      - freeswitch_generated:/var/lib/outbound-dialer/freeswitch
+      - freeswitch_logs:/var/log/freeswitch
       - ../freeswitch/recordings:/var/lib/freeswitch/storage/recordings
+
+  fail2ban:
+    image: crazymax/fail2ban:latest
+    restart: unless-stopped
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    environment:
+      TZ: ${TZ:-UTC}
+      F2B_LOG_LEVEL: ${FAIL2BAN_LOG_LEVEL:-INFO}
+      F2B_DB_PURGE_AGE: ${FAIL2BAN_DB_PURGE_AGE:-7d}
+    depends_on:
+      freeswitch:
+        condition: service_started
+    volumes:
+      - fail2ban_data:/data
+      - ../fail2ban/jail.d/freeswitch.conf:/data/jail.d/freeswitch.conf:ro
+      - ../fail2ban/filter.d/freeswitch-sip-scan.conf:/data/filter.d/freeswitch-sip-scan.conf:ro
+      - freeswitch_logs:/var/log/freeswitch:ro
 
 volumes:
   postgres_data:
+  freeswitch_generated:
+  freeswitch_logs:
+  fail2ban_data:

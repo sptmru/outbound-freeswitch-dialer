@@ -1,8 +1,10 @@
 import cors from "@fastify/cors";
 import Fastify from "fastify";
+import { ZodError } from "zod";
 import { registerAuthRoutes } from "./auth/routes.js";
 import { loadConfig } from "./config.js";
 import { createPool, runMigrations } from "./db.js";
+import { provisionAllAgentDirectories } from "./freeswitch/provisioning.js";
 import { registerHealthRoutes } from "./health.js";
 import { bootstrapAdmin } from "./users.js";
 
@@ -13,6 +15,30 @@ const app = Fastify({
   }
 });
 const pool = createPool(config);
+
+app.setErrorHandler((error, _request, reply) => {
+  if (error instanceof ZodError) {
+    return reply.code(400).send({
+      message: "Validation failed",
+      issues: error.issues
+    });
+  }
+
+  if (isPostgresError(error, "23505")) {
+    return reply.code(409).send({
+      message: "Record already exists"
+    });
+  }
+
+  app.log.error(error);
+  return reply.code(500).send({
+    message: "Internal server error"
+  });
+});
+
+function isPostgresError(error: unknown, code: string): error is { code: string } {
+  return typeof error === "object" && error !== null && "code" in error && error.code === code;
+}
 
 await app.register(cors, {
   origin: config.corsOrigins
@@ -28,6 +54,8 @@ app.get("/", async () => ({
 
 async function start() {
   await runMigrations(pool);
+  const provisionedAgents = await provisionAllAgentDirectories(pool, config);
+  app.log.info({ provisionedAgents }, "FreeSWITCH agent directory synchronized");
   const admin = await bootstrapAdmin(pool, config);
   if (admin) {
     app.log.info({ email: admin.email }, "bootstrap admin is available");

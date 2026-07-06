@@ -1,7 +1,9 @@
 import type pg from "pg";
 import type { UserRole } from "@outbound-dialer/shared";
 import type { AppConfig } from "./config.js";
+import { encryptSecret } from "./auth/crypto.js";
 import { generateSecret, hashSecret } from "./auth/passwords.js";
+import { provisionAgentDirectory } from "./freeswitch/provisioning.js";
 
 export interface UserRecord {
   id: string;
@@ -78,11 +80,12 @@ export async function createUserWithOptionalAgent(
       const sipUsername = await nextSipUsername(client, config.SIP_USERNAME_PREFIX);
       await client.query(
         `
-          insert into agents (user_id, sip_username, sip_password_hash, display_name)
-          values ($1, $2, $3, $4)
+          insert into agents (user_id, sip_username, sip_password_hash, sip_password_encrypted, display_name)
+          values ($1, $2, $3, $4, $5)
         `,
-        [user.id, sipUsername, await hashSecret(sipPassword), input.name]
+        [user.id, sipUsername, await hashSecret(sipPassword), encryptSecret(config, sipPassword), input.name]
       );
+      await provisionAgentDirectory(config, { sipUsername, sipPassword, displayName: input.name });
       agentCredentials = { sipUsername, sipPassword };
     }
 

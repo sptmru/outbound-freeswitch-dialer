@@ -21,7 +21,9 @@ const envSchema = z.object({
   BOOTSTRAP_ADMIN_EMAIL: z.string().email().optional(),
   BOOTSTRAP_ADMIN_PASSWORD: z.string().min(12).optional(),
   BOOTSTRAP_ADMIN_NAME: z.string().default("Admin"),
-  SIP_USERNAME_PREFIX: z.string().regex(/^[a-zA-Z0-9_-]+$/).default("agent")
+  SIP_USERNAME_PREFIX: z.string().regex(/^[a-zA-Z0-9_-]+$/).default("agent"),
+  FREESWITCH_GENERATED_CONFIG_DIR: z.string().default("/var/lib/outbound-dialer/freeswitch"),
+  FREESWITCH_DOMAIN: z.string().default("localhost")
 });
 
 export type AppConfig = z.infer<typeof envSchema> & {

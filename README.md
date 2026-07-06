@@ -90,6 +90,7 @@ GET /health
 Health output includes PostgreSQL and FreeSWITCH ESL connectivity. The ESL check can be temporarily disabled with `FREESWITCH_ESL_ENABLED=false` while FreeSWITCH runtime configuration is still being finalized.
 
 FreeSWITCH is started in host network mode. Keep `FREESWITCH_ESL_HOST=host.docker.internal` for the API container unless the API is also moved to host networking.
+The default `FREESWITCH_ESL_ACL=any_v4.auto` allows the API container to reach host-mode ESL; restrict host firewall access to port `8021` in production.
 
 Auth endpoints:
 
@@ -100,3 +101,18 @@ POST /admin/users
 ```
 
 `BOOTSTRAP_ADMIN_EMAIL` and `BOOTSTRAP_ADMIN_PASSWORD` create the first admin account on startup if it does not already exist. Creating a user with `role: "agent"` automatically creates SIP credentials and returns the SIP password once in the response.
+
+Agent SIP directory files are rendered into the shared `freeswitch_generated` Docker volume. The API writes files under `directory/default`, and the FreeSWITCH wrapper image links that path into `/etc/freeswitch/directory/default` before startup.
+
+FreeSWITCH runtime config is rendered at container startup from templates in `infra/freeswitch/templates`:
+
+- ESL password and ACL.
+- Global domain, RTP range, and advertised SIP/RTP IPs.
+- Internal WebRTC SIP profile.
+- Optional Maxo registration gateway when `MAXO_TRUNK_MODE=registration` and trunk credentials are present.
+- IP-auth outbound routing skeleton for `MAXO_TRUNK_MODE=ip_auth`.
+- Manual voicemail-drop dialplan context.
+
+Fail2ban runs as a separate host-network container and watches FreeSWITCH logs
+for SIP scanner noise such as `Can't find user [...] from <ip>`. The jail lives
+in `infra/fail2ban` and bans matching IPs after repeated misses.
