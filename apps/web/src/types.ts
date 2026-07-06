@@ -2,6 +2,7 @@ export type {
   AdminOverviewResponse,
   AgentDeskResponse,
   CampaignContactsResponse,
+  CampaignContactListItem,
   CreateCampaignRequest,
   CreateContactRequest,
   CreateSuppressionRequest,
@@ -13,5 +14,6 @@ export type {
   LeadSummary,
   ManualDialValidationResponse,
   MutationResponse,
-  PublicUser
+  PublicUser,
+  SuppressContactRequest
 } from "@outbound-dialer/shared";

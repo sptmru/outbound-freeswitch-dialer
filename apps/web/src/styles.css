@@ -469,6 +469,10 @@ input[type="checkbox"] {
   color: #ffffff;
 }
 
+.icon-button.danger-icon {
+  color: #9d2518;
+}
+
 .signal-strip {
   border: 1px solid #e0e6ee;
   border-radius: 8px;
@@ -701,7 +705,13 @@ button.table-row {
 }
 
 .contact-row {
-  grid-template-columns: minmax(140px, 1fr) minmax(120px, 1fr) minmax(140px, 0.9fr) auto;
+  grid-template-columns: minmax(140px, 1fr) minmax(120px, 1fr) minmax(140px, 0.9fr) auto auto;
+}
+
+.row-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
 }
 
 .empty-row {

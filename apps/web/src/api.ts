@@ -1,6 +1,7 @@
 import type {
   AdminOverviewResponse,
   AgentDeskResponse,
+  CampaignContactListItem,
   CampaignContactsResponse,
   CreateCampaignRequest,
   CreateContactRequest,
@@ -11,7 +12,8 @@ import type {
   ImportCsvResponse,
   ManualDialValidationResponse,
   MutationResponse,
-  PublicUser
+  PublicUser,
+  SuppressContactRequest
 } from "./types";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "/api";
@@ -133,6 +135,22 @@ export async function createSuppression(
   return apiFetch<MutationResponse<AdminOverviewResponse["suppression"][number]>>("/admin/suppression", {
     method: "POST",
     body: JSON.stringify(input)
+  });
+}
+
+export async function suppressContact(
+  contactId: string,
+  input: SuppressContactRequest = {}
+): Promise<MutationResponse<CampaignContactListItem>> {
+  return apiFetch<MutationResponse<CampaignContactListItem>>(`/admin/contacts/${contactId}/suppress`, {
+    method: "POST",
+    body: JSON.stringify(input)
+  });
+}
+
+export async function completeContact(contactId: string): Promise<MutationResponse<CampaignContactListItem>> {
+  return apiFetch<MutationResponse<CampaignContactListItem>>(`/admin/contacts/${contactId}/complete`, {
+    method: "POST"
   });
 }
 

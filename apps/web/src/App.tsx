@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import {
   clearStoredToken,
+  completeContact,
   createCampaign,
   createContact,
   createSuppression,
@@ -38,11 +39,13 @@ import {
   importCampaignCsvFile,
   login,
   setStoredToken,
+  suppressContact,
   validateManualDial
 } from "./api";
 import type {
   AdminOverviewResponse,
   AgentDeskResponse,
+  CampaignContactListItem,
   CampaignContactsResponse,
   CsvImportDetailResponse,
   CsvImportSummary,
@@ -70,6 +73,7 @@ export function App() {
   const [csvImports, setCsvImports] = useState<CsvImportSummary[]>([]);
   const [view, setView] = useState<View>("desk");
   const [error, setError] = useState<string | null>(null);
+  const [manualDialNumber, setManualDialNumber] = useState("");
 
   useEffect(() => {
     const token = getStoredToken();
@@ -164,9 +168,21 @@ export function App() {
 
       <main className="workspace">
         <TopBar desk={desk} user={user} onLogout={handleLogout} />
-        {view === "desk" && <AgentDesk desk={desk} />}
+        {view === "desk" && (
+          <AgentDesk desk={desk} manualDialNumber={manualDialNumber} onManualDialNumberChange={setManualDialNumber} />
+        )}
         {view !== "desk" && (
-          <AdminView admin={admin} csvImports={csvImports} onChanged={hydrateSession} view={view} user={user} />
+          <AdminView
+            admin={admin}
+            csvImports={csvImports}
+            onChanged={hydrateSession}
+            onManualDial={(phoneNumber) => {
+              setManualDialNumber(phoneNumber);
+              setView("desk");
+            }}
+            view={view}
+            user={user}
+          />
         )}
       </main>
     </div>
@@ -276,12 +292,20 @@ function TopBar({
   );
 }
 
-function AgentDesk({ desk }: { desk: AgentDeskResponse }) {
+function AgentDesk({
+  desk,
+  manualDialNumber,
+  onManualDialNumberChange
+}: {
+  desk: AgentDeskResponse;
+  manualDialNumber: string;
+  onManualDialNumberChange: (phoneNumber: string) => void;
+}) {
   return (
     <section className="agent-grid">
       <LeadQueue leads={desk.leads} />
       <ActiveCall desk={desk} />
-      <SoftphonePanel desk={desk} />
+      <SoftphonePanel desk={desk} manualDialNumber={manualDialNumber} onManualDialNumberChange={onManualDialNumberChange} />
     </section>
   );
 }
@@ -361,7 +385,15 @@ function ActiveCall({ desk }: { desk: AgentDeskResponse }) {
   );
 }
 
-function SoftphonePanel({ desk }: { desk: AgentDeskResponse }) {
+function SoftphonePanel({
+  desk,
+  manualDialNumber,
+  onManualDialNumberChange
+}: {
+  desk: AgentDeskResponse;
+  manualDialNumber: string;
+  onManualDialNumberChange: (phoneNumber: string) => void;
+}) {
   return (
     <aside className="softphone-stack">
       <article className="panel">
@@ -381,7 +413,7 @@ function SoftphonePanel({ desk }: { desk: AgentDeskResponse }) {
           <button type="button">#</button>
         </div>
       </article>
-      <ManualDial />
+      <ManualDial phoneNumber={manualDialNumber} onPhoneNumberChange={onManualDialNumberChange} />
       <article className="metric-grid">
         <Metric label="Today calls" value={desk.metrics.todayCalls} icon={PhoneForwarded} />
         <Metric label="VM dropped" value={desk.metrics.voicemailsDropped} icon={Voicemail} />
@@ -391,10 +423,19 @@ function SoftphonePanel({ desk }: { desk: AgentDeskResponse }) {
   );
 }
 
-function ManualDial() {
-  const [phoneNumber, setPhoneNumber] = useState("");
+function ManualDial({
+  onPhoneNumberChange,
+  phoneNumber
+}: {
+  onPhoneNumberChange: (phoneNumber: string) => void;
+  phoneNumber: string;
+}) {
   const [result, setResult] = useState<ManualDialValidationResponse | null>(null);
   const [pending, setPending] = useState(false);
+
+  useEffect(() => {
+    setResult(null);
+  }, [phoneNumber]);
 
   async function validate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -411,7 +452,7 @@ function ManualDial() {
       <PanelHeader icon={Phone} title="Manual dialing" meta="Preview" />
       <form className="manual-form" onSubmit={validate}>
         <input
-          onChange={(event) => setPhoneNumber(event.target.value)}
+          onChange={(event) => onPhoneNumberChange(event.target.value)}
           placeholder="+1 415 555 0199"
           value={phoneNumber}
         />
@@ -433,12 +474,14 @@ function AdminView({
   admin,
   csvImports,
   onChanged,
+  onManualDial,
   user,
   view
 }: {
   admin: AdminOverviewResponse | null;
   csvImports: CsvImportSummary[];
   onChanged: () => Promise<void>;
+  onManualDial: (phoneNumber: string) => void;
   user: PublicUser;
   view: View;
 }) {
@@ -456,7 +499,7 @@ function AdminView({
   }
 
   const content = {
-    campaigns: <Campaigns admin={admin} csvImports={csvImports} onChanged={onChanged} />,
+    campaigns: <Campaigns admin={admin} csvImports={csvImports} onChanged={onChanged} onManualDial={onManualDial} />,
     recordings: <Recordings admin={admin} />,
     history: <HistoryView admin={admin} />,
     settings: <SettingsView admin={admin} onChanged={onChanged} />,
@@ -469,11 +512,13 @@ function AdminView({
 function Campaigns({
   admin,
   csvImports,
-  onChanged
+  onChanged,
+  onManualDial
 }: {
   admin: AdminOverviewResponse;
   csvImports: CsvImportSummary[];
   onChanged: () => Promise<void>;
+  onManualDial: (phoneNumber: string) => void;
 }) {
   return (
     <>
@@ -496,18 +541,28 @@ function Campaigns({
           </article>
         ))}
       </div>
-      <CampaignContacts campaigns={admin.campaigns} />
+      <CampaignContacts campaigns={admin.campaigns} onChanged={onChanged} onManualDial={onManualDial} />
     </>
   );
 }
 
-function CampaignContacts({ campaigns }: { campaigns: AdminOverviewResponse["campaigns"] }) {
+function CampaignContacts({
+  campaigns,
+  onChanged,
+  onManualDial
+}: {
+  campaigns: AdminOverviewResponse["campaigns"];
+  onChanged: () => Promise<void>;
+  onManualDial: (phoneNumber: string) => void;
+}) {
   const [campaignId, setCampaignId] = useState(campaigns[0]?.id ?? "");
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState<"all" | "ready" | "suppressed" | "completed">("all");
   const [contacts, setContacts] = useState<CampaignContactsResponse | null>(null);
   const [pending, setPending] = useState(false);
+  const [actionId, setActionId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     if (!campaignId && campaigns[0]?.id) {
@@ -533,7 +588,24 @@ function CampaignContacts({ campaigns }: { campaigns: AdminOverviewResponse["cam
     }, 180);
 
     return () => window.clearTimeout(timeout);
-  }, [campaignId, query, status]);
+  }, [campaignId, query, reloadKey, status]);
+
+  async function runContactAction(
+    contact: CampaignContactListItem,
+    action: (contact: CampaignContactListItem) => Promise<unknown>
+  ) {
+    setActionId(contact.id);
+    setError(null);
+    try {
+      await action(contact);
+      setReloadKey((current) => current + 1);
+      await onChanged();
+    } catch (actionError) {
+      setError(actionError instanceof Error ? actionError.message : "Could not update contact");
+    } finally {
+      setActionId(null);
+    }
+  }
 
   return (
     <article className="panel wide-panel contact-browser">
@@ -576,6 +648,38 @@ function CampaignContacts({ campaigns }: { campaigns: AdminOverviewResponse["cam
             <span>{contact.company}</span>
             <span>{contact.phoneNumber}</span>
             <b>{contact.status}</b>
+            <div className="row-actions">
+              <button
+                className="icon-button"
+                onClick={() => onManualDial(contact.phoneNumber)}
+                title="Send to manual dial"
+                type="button"
+              >
+                <PhoneCall size={16} />
+              </button>
+              <button
+                className="icon-button"
+                disabled={actionId === contact.id || contact.status === "completed"}
+                onClick={() => runContactAction(contact, (item) => completeContact(item.id))}
+                title="Mark completed"
+                type="button"
+              >
+                <CheckCircle2 size={16} />
+              </button>
+              <button
+                className="icon-button danger-icon"
+                disabled={actionId === contact.id || contact.status === "suppressed"}
+                onClick={() =>
+                  runContactAction(contact, (item) =>
+                    suppressContact(item.id, { reason: "Suppressed from campaign contact list" })
+                  )
+                }
+                title="Suppress"
+                type="button"
+              >
+                <Ban size={16} />
+              </button>
+            </div>
           </div>
         ))}
       </div>

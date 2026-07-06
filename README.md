@@ -98,6 +98,8 @@ GET /admin/csv-imports/:importId
 GET /admin/campaigns/:campaignId/contacts
 POST /admin/campaigns
 POST /admin/contacts
+POST /admin/contacts/:contactId/complete
+POST /admin/contacts/:contactId/suppress
 POST /admin/campaigns/:campaignId/import-csv
 POST /admin/campaigns/:campaignId/import-csv-file
 POST /admin/suppression

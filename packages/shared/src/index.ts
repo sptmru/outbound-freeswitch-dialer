@@ -220,6 +220,10 @@ export interface CampaignContactsResponse {
   total: number;
 }
 
+export interface SuppressContactRequest {
+  reason?: string;
+}
+
 export interface MutationResponse<T> {
   item: T;
 }

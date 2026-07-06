@@ -5,6 +5,7 @@ import type {
   AgentDeskResponse,
   CallOutcome,
   CallState,
+  CampaignContactListItem,
   CampaignContactsResponse,
   CreateCampaignRequest,
   CreateContactRequest,
@@ -17,7 +18,8 @@ import type {
   LeadSummary,
   ManualDialValidationResponse,
   MutationResponse,
-  PublicUser
+  PublicUser,
+  SuppressContactRequest
 } from "@outbound-dialer/shared";
 import { z } from "zod";
 import { requireUser } from "../auth/routes.js";
@@ -47,6 +49,10 @@ const createSuppressionSchema = z.object({
   phoneNumber: z.string().min(3).max(64),
   reason: z.string().max(240).optional()
 }) satisfies z.ZodType<CreateSuppressionRequest>;
+
+const suppressContactSchema = z.object({
+  reason: z.string().max(240).optional()
+}) satisfies z.ZodType<SuppressContactRequest>;
 
 const importCsvSchema = z.object({
   filename: z.string().min(1).max(240),
@@ -245,6 +251,80 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
           }))
         }
       });
+    }
+  );
+
+  app.post(
+    "/admin/contacts/:contactId/suppress",
+    async (request, reply): Promise<MutationResponse<CampaignContactListItem> | void> => {
+      const user = await requireAdmin(request, reply, config, pool);
+      if (!user) {
+        return;
+      }
+
+      const params = z.object({ contactId: z.string().uuid() }).parse(request.params);
+      const input = suppressContactSchema.parse(request.body ?? {});
+      const contact = await pool.query<{
+        phone_number: string;
+        normalized_phone_number: string;
+      }>(
+        `
+          select phone_number, normalized_phone_number
+          from contacts
+          where id = $1
+        `,
+        [params.contactId]
+      );
+      const row = contact.rows[0];
+      if (!row) {
+        return reply.code(404).send({ message: "Contact not found" });
+      }
+
+      await pool.query(
+        `
+          insert into suppression_entries (phone_number, normalized_phone_number, reason, created_by_user_id)
+          values ($1, $2, $3, $4)
+          on conflict (normalized_phone_number)
+          do update set reason = excluded.reason
+        `,
+        [row.phone_number, row.normalized_phone_number, input.reason ?? "Suppressed from campaign contact list", user.id]
+      );
+
+      const item = await getContactListItem(pool, params.contactId);
+      if (!item) {
+        return reply.code(404).send({ message: "Contact not found" });
+      }
+      return { item };
+    }
+  );
+
+  app.post(
+    "/admin/contacts/:contactId/complete",
+    async (request, reply): Promise<MutationResponse<CampaignContactListItem> | void> => {
+      const user = await requireAdmin(request, reply, config, pool);
+      if (!user) {
+        return;
+      }
+
+      const params = z.object({ contactId: z.string().uuid() }).parse(request.params);
+      const result = await pool.query(
+        `
+          update contacts
+          set status = 'completed',
+              updated_at = now()
+          where id = $1
+        `,
+        [params.contactId]
+      );
+      if (!result.rowCount) {
+        return reply.code(404).send({ message: "Contact not found" });
+      }
+
+      const item = await getContactListItem(pool, params.contactId);
+      if (!item) {
+        return reply.code(404).send({ message: "Contact not found" });
+      }
+      return { item };
     }
   );
 
@@ -1116,6 +1196,56 @@ async function getCsvImportFailures(pool: pg.Pool, importId: string): Promise<Cs
     reason: row.reason,
     row: row.row_json
   }));
+}
+
+async function getContactListItem(pool: pg.Pool, contactId: string): Promise<CampaignContactListItem | null> {
+  const result = await pool.query<{
+    id: string;
+    display_name: string | null;
+    phone_number: string;
+    mapped_fields_json: Record<string, unknown>;
+    company: string | null;
+    contact_status: CampaignContactListItem["status"];
+    created_at: Date;
+  }>(
+    `
+      select
+        contacts.id,
+        contacts.display_name,
+        contacts.phone_number,
+        contacts.mapped_fields_json,
+        contacts.created_at,
+        coalesce(contacts.mapped_fields_json ->> 'Company', contacts.mapped_fields_json ->> 'company') as company,
+        case
+          when suppression_entries.id is not null then 'suppressed'
+          when contacts.status in ('completed', 'suppressed') then contacts.status
+          else 'ready'
+        end as contact_status
+      from contacts
+      left join suppression_entries
+        on suppression_entries.normalized_phone_number = contacts.normalized_phone_number
+      where contacts.id = $1
+      limit 1
+    `,
+    [contactId]
+  );
+
+  const row = result.rows[0];
+  if (!row) {
+    return null;
+  }
+
+  return {
+    id: row.id,
+    name: row.display_name ?? "Unknown contact",
+    company: row.company ?? "Unmapped company",
+    phoneNumber: row.phone_number,
+    status: row.contact_status,
+    createdAt: row.created_at.toISOString(),
+    fields: Object.entries(row.mapped_fields_json ?? {})
+      .slice(0, 8)
+      .map(([label, value]) => ({ label, value: String(value) }))
+  };
 }
 
 async function getCampaignContacts(
