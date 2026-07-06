@@ -37,7 +37,7 @@ The first backend slice is now scaffolded:
 - `apps/api` - Fastify + TypeScript API with `/health`.
 - `packages/shared` - shared call state, outcome, role, and health contracts.
 - `apps/api/db/migrations` - initial PostgreSQL schema for users, agents, campaigns, contacts, calls, call events, recordings, suppression, settings, and VM/beep signal events.
-- `infra/docker/docker-compose.yml` - PostgreSQL, API, and FreeSWITCH services.
+- `infra/docker/docker-compose.yml` - PostgreSQL, API, and FreeSWITCH services. FreeSWITCH runs with `network_mode: host` so SIP, WSS, and RTP bind directly on the deployment host.
 - `scripts/deploy.sh` - Docker deployment entrypoint using `.env`.
 
 ## Local Setup
@@ -68,6 +68,9 @@ Fill the required values in `.env`, especially:
 - `POSTGRES_PASSWORD`
 - `DATABASE_URL`
 - `FREESWITCH_ESL_PASSWORD`
+- `JWT_SECRET`
+- `BOOTSTRAP_ADMIN_EMAIL`
+- `BOOTSTRAP_ADMIN_PASSWORD`
 - `PUBLIC_APP_URL`
 - `FREESWITCH_DOMAIN`
 - Maxo trunk values once the provider details are available.
@@ -85,3 +88,15 @@ GET /health
 ```
 
 Health output includes PostgreSQL and FreeSWITCH ESL connectivity. The ESL check can be temporarily disabled with `FREESWITCH_ESL_ENABLED=false` while FreeSWITCH runtime configuration is still being finalized.
+
+FreeSWITCH is started in host network mode. Keep `FREESWITCH_ESL_HOST=host.docker.internal` for the API container unless the API is also moved to host networking.
+
+Auth endpoints:
+
+```text
+POST /auth/login
+GET /auth/me
+POST /admin/users
+```
+
+`BOOTSTRAP_ADMIN_EMAIL` and `BOOTSTRAP_ADMIN_PASSWORD` create the first admin account on startup if it does not already exist. Creating a user with `role: "agent"` automatically creates SIP credentials and returns the SIP password once in the response.

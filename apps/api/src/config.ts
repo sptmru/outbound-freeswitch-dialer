@@ -15,7 +15,13 @@ const envSchema = z.object({
     .optional()
     .transform((value) => value !== "false"),
   CORS_ORIGINS: z.string().default("http://localhost:5173,http://localhost:3000"),
-  LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"]).default("info")
+  LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"]).default("info"),
+  JWT_SECRET: z.string().min(32),
+  JWT_EXPIRES_SECONDS: z.coerce.number().int().positive().default(86400),
+  BOOTSTRAP_ADMIN_EMAIL: z.string().email().optional(),
+  BOOTSTRAP_ADMIN_PASSWORD: z.string().min(12).optional(),
+  BOOTSTRAP_ADMIN_NAME: z.string().default("Admin"),
+  SIP_USERNAME_PREFIX: z.string().regex(/^[a-zA-Z0-9_-]+$/).default("agent")
 });
 
 export type AppConfig = z.infer<typeof envSchema> & {

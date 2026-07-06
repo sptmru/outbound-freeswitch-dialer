@@ -26,6 +26,8 @@ services:
         condition: service_healthy
       freeswitch:
         condition: service_started
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "${API_PUBLIC_PORT:-3000}:3000"
     healthcheck:
@@ -37,8 +39,7 @@ services:
   freeswitch:
     image: ${FREESWITCH_IMAGE:-safarov/freeswitch:latest}
     restart: unless-stopped
-    env_file:
-      - ${APP_ENV_FILE:-../../.env}
+    network_mode: host
     environment:
       FREESWITCH_ESL_PASSWORD: ${FREESWITCH_ESL_PASSWORD}
       FREESWITCH_DOMAIN: ${FREESWITCH_DOMAIN}
@@ -51,11 +52,6 @@ services:
       MAXO_USERNAME: ${MAXO_USERNAME}
       MAXO_PASSWORD: ${MAXO_PASSWORD}
       MAXO_CALLER_ID: ${MAXO_CALLER_ID}
-    ports:
-      - "${SIP_PORT:-5060}:5060/udp"
-      - "${SIP_PORT:-5060}:5060/tcp"
-      - "${WSS_PORT:-7443}:7443/tcp"
-      - "${FREESWITCH_RTP_START_PORT:-16384}-${FREESWITCH_RTP_END_PORT:-16484}:${FREESWITCH_RTP_START_PORT:-16384}-${FREESWITCH_RTP_END_PORT:-16484}/udp"
     volumes:
       - ../freeswitch/conf:/etc/freeswitch/dialer:ro
       - ../freeswitch/recordings:/var/lib/freeswitch/storage/recordings
