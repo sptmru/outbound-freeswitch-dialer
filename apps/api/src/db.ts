@@ -27,7 +27,11 @@ export async function runMigrations(pool: pg.Pool): Promise<void> {
   `);
 
   const migrationsDir = fileURLToPath(new URL("../db/migrations", import.meta.url));
-  const migrationFiles = ["001_initial_schema.sql", "002_agent_sip_secret.sql"];
+  const migrationFiles = [
+    "001_initial_schema.sql",
+    "002_agent_sip_secret.sql",
+    "003_csv_import_failures_and_contact_dedupe.sql"
+  ];
 
   for (const filename of migrationFiles) {
     const applied = await pool.query("select 1 from schema_migrations where filename = $1", [filename]);

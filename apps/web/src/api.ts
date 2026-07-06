@@ -4,6 +4,7 @@ import type {
   CreateCampaignRequest,
   CreateContactRequest,
   CreateSuppressionRequest,
+  CsvImportDetailResponse,
   CsvImportHistoryResponse,
   ImportCsvRequest,
   ImportCsvResponse,
@@ -79,6 +80,10 @@ export async function fetchAdminOverview(): Promise<AdminOverviewResponse> {
 
 export async function fetchCsvImports(): Promise<CsvImportHistoryResponse> {
   return apiFetch<CsvImportHistoryResponse>("/admin/csv-imports");
+}
+
+export async function fetchCsvImportDetail(importId: string): Promise<CsvImportDetailResponse> {
+  return apiFetch<CsvImportDetailResponse>(`/admin/csv-imports/${importId}`);
 }
 
 export async function validateManualDial(

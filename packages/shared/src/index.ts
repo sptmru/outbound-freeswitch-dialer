@@ -169,6 +169,7 @@ export interface ImportCsvResponse {
   totalRows: number;
   importedRows: number;
   failedRows: number;
+  duplicateRows: number;
   detectedColumns: string[];
 }
 
@@ -181,12 +182,25 @@ export interface CsvImportSummary {
   totalRows: number;
   importedRows: number;
   failedRows: number;
+  duplicateRows: number;
   createdAt: string;
   completedAt?: string;
 }
 
 export interface CsvImportHistoryResponse {
   imports: CsvImportSummary[];
+}
+
+export interface CsvImportFailure {
+  id: string;
+  rowNumber: number;
+  reason: string;
+  row: Record<string, string>;
+}
+
+export interface CsvImportDetailResponse {
+  import: CsvImportSummary;
+  failures: CsvImportFailure[];
 }
 
 export interface MutationResponse<T> {

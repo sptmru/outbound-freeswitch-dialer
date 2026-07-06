@@ -94,6 +94,7 @@ GET /agent/desk
 POST /agent/manual-dial/validate
 GET /admin/overview
 GET /admin/csv-imports
+GET /admin/csv-imports/:importId
 POST /admin/campaigns
 POST /admin/contacts
 POST /admin/campaigns/:campaignId/import-csv

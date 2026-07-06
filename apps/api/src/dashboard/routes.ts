@@ -8,6 +8,8 @@ import type {
   CreateCampaignRequest,
   CreateContactRequest,
   CreateSuppressionRequest,
+  CsvImportDetailResponse,
+  CsvImportFailure,
   CsvImportHistoryResponse,
   ImportCsvRequest,
   ImportCsvResponse,
@@ -81,6 +83,20 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
     return {
       imports: await getCsvImports(pool)
     };
+  });
+
+  app.get("/admin/csv-imports/:importId", async (request, reply): Promise<CsvImportDetailResponse | void> => {
+    const user = await requireAdmin(request, reply, config, pool);
+    if (!user) {
+      return;
+    }
+
+    const params = z.object({ importId: z.string().uuid() }).parse(request.params);
+    const detail = await getCsvImportDetail(pool, params.importId);
+    if (!detail) {
+      return reply.code(404).send({ message: "CSV import not found" });
+    }
+    return detail;
   });
 
   app.post("/agent/manual-dial/validate", async (request, reply): Promise<ManualDialValidationResponse | void> => {
@@ -382,18 +398,22 @@ async function importContactsFromCsv(
     const importId = importInsert.rows[0].id;
     let importedRows = 0;
     let failedRows = 0;
+    let duplicateRows = 0;
 
-    for (const row of parsed.rows) {
+    for (const [rowIndex, row] of parsed.rows.entries()) {
+      const rowNumber = rowIndex + 2;
       const phoneNumber = (row[phoneIndex] ?? "").trim();
       const normalizedNumber = normalizePhoneNumber(phoneNumber);
+      const mappedFields = Object.fromEntries(
+        parsed.headers.map((header, index) => [header, (row[index] ?? "").trim()])
+      );
+
       if (normalizedNumber.length < 12) {
+        await insertCsvImportFailure(client, importId, rowNumber, "Invalid or missing phone number", mappedFields);
         failedRows += 1;
         continue;
       }
 
-      const mappedFields = Object.fromEntries(
-        parsed.headers.map((header, index) => [header, (row[index] ?? "").trim()])
-      );
       const displayName =
         nameIndex >= 0 && row[nameIndex]?.trim()
           ? row[nameIndex].trim()
@@ -401,7 +421,7 @@ async function importContactsFromCsv(
             ? row[companyIndex].trim()
             : phoneNumber;
 
-      await client.query(
+      const insertResult = await client.query(
         `
           insert into contacts (
             campaign_id,
@@ -413,6 +433,8 @@ async function importContactsFromCsv(
             status
           )
           values ($1, $2, $3, $4, $5::jsonb, $6::jsonb, 'new')
+          on conflict (campaign_id, normalized_phone_number) do nothing
+          returning id
         `,
         [
           campaignId,
@@ -423,7 +445,14 @@ async function importContactsFromCsv(
           JSON.stringify(mappedFields)
         ]
       );
-      importedRows += 1;
+
+      if (insertResult.rowCount) {
+        importedRows += 1;
+      } else {
+        await insertCsvImportFailure(client, importId, rowNumber, "Duplicate phone number in this campaign", mappedFields);
+        duplicateRows += 1;
+        failedRows += 1;
+      }
     }
 
     await client.query(
@@ -432,10 +461,11 @@ async function importContactsFromCsv(
         set status = 'completed',
             imported_rows = $2,
             failed_rows = $3,
+            field_mapping_json = field_mapping_json || $4::jsonb,
             completed_at = now()
         where id = $1
       `,
-      [importId, importedRows, failedRows]
+      [importId, importedRows, failedRows, JSON.stringify({ duplicateRows })]
     );
     await client.query("commit");
 
@@ -445,6 +475,7 @@ async function importContactsFromCsv(
       totalRows: parsed.rows.length,
       importedRows,
       failedRows,
+      duplicateRows,
       detectedColumns: parsed.headers
     };
   } catch (error) {
@@ -453,6 +484,22 @@ async function importContactsFromCsv(
   } finally {
     client.release();
   }
+}
+
+async function insertCsvImportFailure(
+  client: pg.PoolClient,
+  importId: string,
+  rowNumber: number,
+  reason: string,
+  row: Record<string, string>
+): Promise<void> {
+  await client.query(
+    `
+      insert into csv_import_failures (import_id, row_number, reason, row_json)
+      values ($1, $2, $3, $4::jsonb)
+    `,
+    [importId, rowNumber, reason, JSON.stringify(row)]
+  );
 }
 
 function parseCsv(input: string): ParsedCsv {
@@ -932,6 +979,7 @@ async function getCsvImports(pool: pg.Pool): Promise<CsvImportHistoryResponse["i
     total_rows: number;
     imported_rows: number;
     failed_rows: number;
+    field_mapping_json: { duplicateRows?: number } | null;
     created_at: Date;
     completed_at: Date | null;
   }>(`
@@ -944,6 +992,7 @@ async function getCsvImports(pool: pg.Pool): Promise<CsvImportHistoryResponse["i
       csv_imports.total_rows,
       csv_imports.imported_rows,
       csv_imports.failed_rows,
+      csv_imports.field_mapping_json,
       csv_imports.created_at,
       csv_imports.completed_at
     from csv_imports
@@ -961,8 +1010,91 @@ async function getCsvImports(pool: pg.Pool): Promise<CsvImportHistoryResponse["i
     totalRows: Number(row.total_rows),
     importedRows: Number(row.imported_rows),
     failedRows: Number(row.failed_rows),
+    duplicateRows: Number(row.field_mapping_json?.duplicateRows ?? 0),
     createdAt: row.created_at.toISOString(),
     completedAt: row.completed_at?.toISOString()
+  }));
+}
+
+async function getCsvImportDetail(pool: pg.Pool, importId: string): Promise<CsvImportDetailResponse | null> {
+  const imports = await pool.query<{
+    id: string;
+    campaign_id: string;
+    campaign_name: string | null;
+    filename: string;
+    status: string;
+    total_rows: number;
+    imported_rows: number;
+    failed_rows: number;
+    field_mapping_json: { duplicateRows?: number } | null;
+    created_at: Date;
+    completed_at: Date | null;
+  }>(
+    `
+      select
+        csv_imports.id,
+        csv_imports.campaign_id,
+        campaigns.name as campaign_name,
+        csv_imports.filename,
+        csv_imports.status,
+        csv_imports.total_rows,
+        csv_imports.imported_rows,
+        csv_imports.failed_rows,
+        csv_imports.field_mapping_json,
+        csv_imports.created_at,
+        csv_imports.completed_at
+      from csv_imports
+      left join campaigns on campaigns.id = csv_imports.campaign_id
+      where csv_imports.id = $1
+    `,
+    [importId]
+  );
+
+  const row = imports.rows[0];
+  if (!row) {
+    return null;
+  }
+
+  return {
+    import: {
+      id: row.id,
+      campaignId: row.campaign_id,
+      campaignName: row.campaign_name ?? "Deleted campaign",
+      filename: row.filename,
+      status: row.status,
+      totalRows: Number(row.total_rows),
+      importedRows: Number(row.imported_rows),
+      failedRows: Number(row.failed_rows),
+      duplicateRows: Number(row.field_mapping_json?.duplicateRows ?? 0),
+      createdAt: row.created_at.toISOString(),
+      completedAt: row.completed_at?.toISOString()
+    },
+    failures: await getCsvImportFailures(pool, importId)
+  };
+}
+
+async function getCsvImportFailures(pool: pg.Pool, importId: string): Promise<CsvImportFailure[]> {
+  const result = await pool.query<{
+    id: string;
+    row_number: number;
+    reason: string;
+    row_json: Record<string, string>;
+  }>(
+    `
+      select id, row_number, reason, row_json
+      from csv_import_failures
+      where import_id = $1
+      order by row_number asc
+      limit 50
+    `,
+    [importId]
+  );
+
+  return result.rows.map((row) => ({
+    id: row.id,
+    rowNumber: Number(row.row_number),
+    reason: row.reason,
+    row: row.row_json
   }));
 }
 

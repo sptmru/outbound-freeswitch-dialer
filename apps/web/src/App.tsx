@@ -29,6 +29,7 @@ import {
   createSuppression,
   fetchAdminOverview,
   fetchCsvImports,
+  fetchCsvImportDetail,
   fetchAgentDesk,
   fetchMe,
   getStoredToken,
@@ -41,6 +42,7 @@ import {
 import type {
   AdminOverviewResponse,
   AgentDeskResponse,
+  CsvImportDetailResponse,
   CsvImportSummary,
   ImportCsvResponse,
   LeadSummary,
@@ -612,22 +614,59 @@ function CsvImportForm({
 }
 
 function CsvImportHistory({ imports }: { imports: CsvImportSummary[] }) {
+  const [selected, setSelected] = useState<CsvImportDetailResponse | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [pendingId, setPendingId] = useState<string | null>(null);
+
+  async function selectImport(importId: string) {
+    setPendingId(importId);
+    setError(null);
+    try {
+      setSelected(await fetchCsvImportDetail(importId));
+    } catch (detailError) {
+      setError(detailError instanceof Error ? detailError.message : "Could not load import detail");
+    } finally {
+      setPendingId(null);
+    }
+  }
+
   return (
     <article className="panel">
       <PanelHeader icon={History} title="Recent imports" meta={`${imports.length} runs`} />
       <div className="table-list">
         {imports.length === 0 && <div className="empty-row">No imports yet</div>}
         {imports.map((item) => (
-          <div className="table-row import-row" key={item.id}>
+          <button className="table-row import-row clickable-row" key={item.id} onClick={() => selectImport(item.id)} type="button">
             <strong>{item.filename}</strong>
             <span>{item.campaignName}</span>
             <span>
               {item.importedRows}/{item.totalRows}
             </span>
-            <b>{item.status}</b>
-          </div>
+            <b>{pendingId === item.id ? "loading" : item.status}</b>
+          </button>
         ))}
       </div>
+      {error && <p className="form-error">{error}</p>}
+      {selected && (
+        <div className="import-detail">
+          <div className="import-result">
+            <strong>{selected.import.importedRows} imported</strong>
+            <span>
+              {selected.import.failedRows} failed, {selected.import.duplicateRows} duplicates
+            </span>
+          </div>
+          <div className="table-list">
+            {selected.failures.length === 0 && <div className="empty-row">No failed rows</div>}
+            {selected.failures.map((failure) => (
+              <div className="table-row failure-row" key={failure.id}>
+                <strong>Row {failure.rowNumber}</strong>
+                <span>{failure.reason}</span>
+                <span>{Object.values(failure.row).filter(Boolean).slice(0, 3).join(" | ")}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </article>
   );
 }

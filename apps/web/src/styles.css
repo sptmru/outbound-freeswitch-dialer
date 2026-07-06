@@ -659,12 +659,34 @@ input[type="checkbox"] {
   grid-template-columns: minmax(140px, 1fr) minmax(120px, 1fr) auto;
 }
 
+button.table-row {
+  background: #ffffff;
+  color: inherit;
+  text-align: left;
+  width: 100%;
+}
+
+.clickable-row:hover {
+  border-color: #b9c7d8;
+  box-shadow: inset 3px 0 0 #246bfe;
+}
+
 .history-row {
   grid-template-columns: minmax(140px, 1fr) minmax(120px, 1fr) 80px auto;
 }
 
 .import-row {
   grid-template-columns: minmax(120px, 1fr) minmax(120px, 1fr) 70px auto;
+}
+
+.failure-row {
+  grid-template-columns: 72px minmax(120px, 0.9fr) minmax(160px, 1.1fr);
+}
+
+.import-detail {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
 }
 
 .empty-row {
@@ -771,6 +793,7 @@ input[type="checkbox"] {
   .table-row,
   .history-row,
   .import-row,
+  .failure-row,
   .inline-fields {
     grid-template-columns: 1fr;
   }
