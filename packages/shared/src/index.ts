@@ -158,6 +158,20 @@ export interface CreateSuppressionRequest {
   reason?: string;
 }
 
+export interface ImportCsvRequest {
+  filename: string;
+  csvText: string;
+}
+
+export interface ImportCsvResponse {
+  importId: string;
+  filename: string;
+  totalRows: number;
+  importedRows: number;
+  failedRows: number;
+  detectedColumns: string[];
+}
+
 export interface MutationResponse<T> {
   item: T;
 }

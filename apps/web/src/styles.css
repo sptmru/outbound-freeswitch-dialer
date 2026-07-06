@@ -18,7 +18,8 @@ body {
 
 button,
 input,
-select {
+select,
+textarea {
   font: inherit;
 }
 
@@ -69,7 +70,8 @@ label {
 }
 
 input,
-select {
+select,
+textarea {
   background: #ffffff;
   border: 1px solid #ccd6e1;
   border-radius: 8px;
@@ -79,12 +81,20 @@ select {
   width: 100%;
 }
 
+textarea {
+  line-height: 1.5;
+  min-height: 132px;
+  padding: 10px 12px;
+  resize: vertical;
+}
+
 input:focus {
   border-color: #246bfe;
   outline: 2px solid rgba(36, 107, 254, 0.14);
 }
 
-select:focus {
+select:focus,
+textarea:focus {
   border-color: #246bfe;
   outline: 2px solid rgba(36, 107, 254, 0.14);
 }
@@ -590,6 +600,12 @@ input[type="checkbox"] {
   gap: 12px;
 }
 
+.inline-fields {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .toggle-row {
   display: flex;
   flex-wrap: wrap;
@@ -602,6 +618,21 @@ input[type="checkbox"] {
   display: inline-flex;
   flex-direction: row;
   font-weight: 800;
+}
+
+.import-result {
+  background: #eaf8f1;
+  border: 1px solid #bde8d2;
+  border-radius: 8px;
+  color: #187045;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  padding: 10px 12px;
+}
+
+.import-result span {
+  color: #405166;
 }
 
 .operations-grid {
@@ -721,7 +752,8 @@ input[type="checkbox"] {
   }
 
   .table-row,
-  .history-row {
+  .history-row,
+  .inline-fields {
     grid-template-columns: 1fr;
   }
 }

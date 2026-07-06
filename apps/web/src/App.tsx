@@ -31,6 +31,7 @@ import {
   fetchAgentDesk,
   fetchMe,
   getStoredToken,
+  importCampaignCsv,
   login,
   setStoredToken,
   validateManualDial
@@ -38,6 +39,7 @@ import {
 import type {
   AdminOverviewResponse,
   AgentDeskResponse,
+  ImportCsvResponse,
   LeadSummary,
   ManualDialValidationResponse,
   PublicUser
@@ -455,6 +457,7 @@ function Campaigns({ admin, onChanged }: { admin: AdminOverviewResponse; onChang
         <CreateCampaignForm onChanged={onChanged} />
         <CreateContactForm campaigns={admin.campaigns} onChanged={onChanged} />
       </div>
+      <CsvImportForm campaigns={admin.campaigns} onChanged={onChanged} />
       <div className="operations-grid">
         {admin.campaigns.map((campaign) => (
           <article className="panel" key={campaign.id}>
@@ -467,6 +470,88 @@ function Campaigns({ admin, onChanged }: { admin: AdminOverviewResponse; onChang
         ))}
       </div>
     </>
+  );
+}
+
+function CsvImportForm({
+  campaigns,
+  onChanged
+}: {
+  campaigns: AdminOverviewResponse["campaigns"];
+  onChanged: () => Promise<void>;
+}) {
+  const [campaignId, setCampaignId] = useState(campaigns[0]?.id ?? "");
+  const [filename, setFilename] = useState("leads.csv");
+  const [csvText, setCsvText] = useState("name,phone,company\nAvery Johnson,+1 415 555 0148,North Bay Solar");
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<ImportCsvResponse | null>(null);
+
+  useEffect(() => {
+    if (!campaignId && campaigns[0]?.id) {
+      setCampaignId(campaigns[0].id);
+    }
+  }, [campaignId, campaigns]);
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setPending(true);
+    setError(null);
+    try {
+      const importResult = await importCampaignCsv(campaignId, { filename, csvText });
+      setResult(importResult);
+      await onChanged();
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : "Could not import CSV");
+    } finally {
+      setPending(false);
+    }
+  }
+
+  return (
+    <article className="panel form-panel">
+      <PanelHeader icon={Upload} title="CSV import" meta="Bulk" />
+      <form className="stack-form" onSubmit={submit}>
+        <div className="inline-fields">
+          <label>
+            Campaign
+            <select
+              disabled={!campaigns.length}
+              onChange={(event) => setCampaignId(event.target.value)}
+              required
+              value={campaignId}
+            >
+              {campaigns.map((campaign) => (
+                <option key={campaign.id} value={campaign.id}>
+                  {campaign.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Filename
+            <input onChange={(event) => setFilename(event.target.value)} required value={filename} />
+          </label>
+        </div>
+        <label>
+          CSV
+          <textarea onChange={(event) => setCsvText(event.target.value)} required rows={7} value={csvText} />
+        </label>
+        {error && <p className="form-error">{error}</p>}
+        {result && (
+          <div className="import-result">
+            <strong>{result.importedRows} imported</strong>
+            <span>
+              {result.failedRows} failed from {result.totalRows} rows
+            </span>
+          </div>
+        )}
+        <button className="primary-action" disabled={pending || !campaigns.length} type="submit">
+          <Upload size={17} />
+          {pending ? "Importing" : "Import CSV"}
+        </button>
+      </form>
+    </article>
   );
 }
 

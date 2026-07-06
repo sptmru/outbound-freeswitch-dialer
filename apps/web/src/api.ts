@@ -4,6 +4,8 @@ import type {
   CreateCampaignRequest,
   CreateContactRequest,
   CreateSuppressionRequest,
+  ImportCsvRequest,
+  ImportCsvResponse,
   ManualDialValidationResponse,
   MutationResponse,
   PublicUser
@@ -102,6 +104,16 @@ export async function createSuppression(
   input: CreateSuppressionRequest
 ): Promise<MutationResponse<AdminOverviewResponse["suppression"][number]>> {
   return apiFetch<MutationResponse<AdminOverviewResponse["suppression"][number]>>("/admin/suppression", {
+    method: "POST",
+    body: JSON.stringify(input)
+  });
+}
+
+export async function importCampaignCsv(
+  campaignId: string,
+  input: ImportCsvRequest
+): Promise<ImportCsvResponse> {
+  return apiFetch<ImportCsvResponse>(`/admin/campaigns/${campaignId}/import-csv`, {
     method: "POST",
     body: JSON.stringify(input)
   });

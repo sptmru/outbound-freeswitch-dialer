@@ -93,6 +93,10 @@ GET /auth/me
 GET /agent/desk
 POST /agent/manual-dial/validate
 GET /admin/overview
+POST /admin/campaigns
+POST /admin/contacts
+POST /admin/campaigns/:campaignId/import-csv
+POST /admin/suppression
 ```
 
 The Web UI is served by the `web` container and published through the `proxy`

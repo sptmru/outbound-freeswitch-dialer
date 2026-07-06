@@ -4,6 +4,8 @@ export type {
   CreateCampaignRequest,
   CreateContactRequest,
   CreateSuppressionRequest,
+  ImportCsvRequest,
+  ImportCsvResponse,
   LeadSummary,
   ManualDialValidationResponse,
   MutationResponse,
