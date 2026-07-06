@@ -203,6 +203,23 @@ export interface CsvImportDetailResponse {
   failures: CsvImportFailure[];
 }
 
+export type CampaignContactStatus = "ready" | "suppressed" | "completed";
+
+export interface CampaignContactListItem {
+  id: string;
+  name: string;
+  company: string;
+  phoneNumber: string;
+  status: CampaignContactStatus;
+  createdAt: string;
+  fields: Array<{ label: string; value: string }>;
+}
+
+export interface CampaignContactsResponse {
+  contacts: CampaignContactListItem[];
+  total: number;
+}
+
 export interface MutationResponse<T> {
   item: T;
 }

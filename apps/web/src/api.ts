@@ -1,6 +1,7 @@
 import type {
   AdminOverviewResponse,
   AgentDeskResponse,
+  CampaignContactsResponse,
   CreateCampaignRequest,
   CreateContactRequest,
   CreateSuppressionRequest,
@@ -84,6 +85,21 @@ export async function fetchCsvImports(): Promise<CsvImportHistoryResponse> {
 
 export async function fetchCsvImportDetail(importId: string): Promise<CsvImportDetailResponse> {
   return apiFetch<CsvImportDetailResponse>(`/admin/csv-imports/${importId}`);
+}
+
+export async function fetchCampaignContacts(
+  campaignId: string,
+  filters: { q?: string; status?: "all" | "ready" | "suppressed" | "completed" } = {}
+): Promise<CampaignContactsResponse> {
+  const params = new URLSearchParams();
+  if (filters.q) {
+    params.set("q", filters.q);
+  }
+  if (filters.status && filters.status !== "all") {
+    params.set("status", filters.status);
+  }
+  const query = params.toString();
+  return apiFetch<CampaignContactsResponse>(`/admin/campaigns/${campaignId}/contacts${query ? `?${query}` : ""}`);
 }
 
 export async function validateManualDial(

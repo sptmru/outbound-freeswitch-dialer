@@ -689,6 +689,21 @@ button.table-row {
   margin-top: 12px;
 }
 
+.contact-browser {
+  max-width: none;
+}
+
+.contact-toolbar {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(180px, 1fr) minmax(220px, 1.2fr) minmax(140px, 0.6fr);
+  margin-bottom: 12px;
+}
+
+.contact-row {
+  grid-template-columns: minmax(140px, 1fr) minmax(120px, 1fr) minmax(140px, 0.9fr) auto;
+}
+
 .empty-row {
   border: 1px dashed #ccd6e1;
   border-radius: 8px;
@@ -794,6 +809,8 @@ button.table-row {
   .history-row,
   .import-row,
   .failure-row,
+  .contact-row,
+  .contact-toolbar,
   .inline-fields {
     grid-template-columns: 1fr;
   }

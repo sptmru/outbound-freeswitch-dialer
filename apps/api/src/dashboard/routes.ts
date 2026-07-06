@@ -5,6 +5,7 @@ import type {
   AgentDeskResponse,
   CallOutcome,
   CallState,
+  CampaignContactsResponse,
   CreateCampaignRequest,
   CreateContactRequest,
   CreateSuppressionRequest,
@@ -52,6 +53,11 @@ const importCsvSchema = z.object({
   csvText: z.string().min(1).max(2_000_000)
 }) satisfies z.ZodType<ImportCsvRequest>;
 
+const contactsQuerySchema = z.object({
+  q: z.string().default(""),
+  status: z.enum(["all", "ready", "suppressed", "completed"]).default("all")
+});
+
 export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig, pool: pg.Pool): void {
   app.get("/agent/desk", async (request, reply): Promise<AgentDeskResponse | void> => {
     const user = await requireUser(request, config, pool);
@@ -98,6 +104,20 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
     }
     return detail;
   });
+
+  app.get(
+    "/admin/campaigns/:campaignId/contacts",
+    async (request, reply): Promise<CampaignContactsResponse | void> => {
+      const user = await requireAdmin(request, reply, config, pool);
+      if (!user) {
+        return;
+      }
+
+      const params = z.object({ campaignId: z.string().uuid() }).parse(request.params);
+      const query = contactsQuerySchema.parse(request.query);
+      return getCampaignContacts(pool, params.campaignId, query);
+    }
+  );
 
   app.post("/agent/manual-dial/validate", async (request, reply): Promise<ManualDialValidationResponse | void> => {
     const user = await requireUser(request, config, pool);
@@ -1096,6 +1116,71 @@ async function getCsvImportFailures(pool: pg.Pool, importId: string): Promise<Cs
     reason: row.reason,
     row: row.row_json
   }));
+}
+
+async function getCampaignContacts(
+  pool: pg.Pool,
+  campaignId: string,
+  query: { q: string; status: "all" | "ready" | "suppressed" | "completed" }
+): Promise<CampaignContactsResponse> {
+  const search = query.q.trim();
+  const result = await pool.query<{
+    id: string;
+    display_name: string | null;
+    phone_number: string;
+    mapped_fields_json: Record<string, unknown>;
+    company: string | null;
+    contact_status: "ready" | "suppressed" | "completed";
+    created_at: Date;
+    total_count: string;
+  }>(
+    `
+      with contact_rows as (
+        select
+          contacts.id,
+          contacts.display_name,
+          contacts.phone_number,
+          contacts.mapped_fields_json,
+          contacts.created_at,
+          coalesce(contacts.mapped_fields_json ->> 'Company', contacts.mapped_fields_json ->> 'company') as company,
+          case
+            when suppression_entries.id is not null then 'suppressed'
+            when contacts.status in ('completed', 'suppressed') then contacts.status
+            else 'ready'
+          end as contact_status
+        from contacts
+        left join suppression_entries
+          on suppression_entries.normalized_phone_number = contacts.normalized_phone_number
+        where contacts.campaign_id = $1
+      ),
+      filtered as (
+        select *
+        from contact_rows
+        where ($2 = '' or concat_ws(' ', display_name, phone_number, company, mapped_fields_json::text) ilike '%' || $2 || '%')
+          and ($3 = 'all' or contact_status = $3)
+      )
+      select *, count(*) over() as total_count
+      from filtered
+      order by created_at desc
+      limit 50
+    `,
+    [campaignId, search, query.status]
+  );
+
+  return {
+    total: Number(result.rows[0]?.total_count ?? 0),
+    contacts: result.rows.map((row) => ({
+      id: row.id,
+      name: row.display_name ?? "Unknown contact",
+      company: row.company ?? "Unmapped company",
+      phoneNumber: row.phone_number,
+      status: row.contact_status,
+      createdAt: row.created_at.toISOString(),
+      fields: Object.entries(row.mapped_fields_json ?? {})
+        .slice(0, 8)
+        .map(([label, value]) => ({ label, value: String(value) }))
+    }))
+  };
 }
 
 function buildDemoAgentDeskResponse(user: PublicUser): AgentDeskResponse {

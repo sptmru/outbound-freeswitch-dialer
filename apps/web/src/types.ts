@@ -1,6 +1,7 @@
 export type {
   AdminOverviewResponse,
   AgentDeskResponse,
+  CampaignContactsResponse,
   CreateCampaignRequest,
   CreateContactRequest,
   CreateSuppressionRequest,

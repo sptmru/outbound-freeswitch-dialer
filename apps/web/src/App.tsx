@@ -28,6 +28,7 @@ import {
   createContact,
   createSuppression,
   fetchAdminOverview,
+  fetchCampaignContacts,
   fetchCsvImports,
   fetchCsvImportDetail,
   fetchAgentDesk,
@@ -42,6 +43,7 @@ import {
 import type {
   AdminOverviewResponse,
   AgentDeskResponse,
+  CampaignContactsResponse,
   CsvImportDetailResponse,
   CsvImportSummary,
   ImportCsvResponse,
@@ -494,7 +496,90 @@ function Campaigns({
           </article>
         ))}
       </div>
+      <CampaignContacts campaigns={admin.campaigns} />
     </>
+  );
+}
+
+function CampaignContacts({ campaigns }: { campaigns: AdminOverviewResponse["campaigns"] }) {
+  const [campaignId, setCampaignId] = useState(campaigns[0]?.id ?? "");
+  const [query, setQuery] = useState("");
+  const [status, setStatus] = useState<"all" | "ready" | "suppressed" | "completed">("all");
+  const [contacts, setContacts] = useState<CampaignContactsResponse | null>(null);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!campaignId && campaigns[0]?.id) {
+      setCampaignId(campaigns[0].id);
+    }
+  }, [campaignId, campaigns]);
+
+  useEffect(() => {
+    if (!campaignId) {
+      setContacts(null);
+      return;
+    }
+
+    const timeout = window.setTimeout(() => {
+      setPending(true);
+      setError(null);
+      fetchCampaignContacts(campaignId, { q: query, status })
+        .then(setContacts)
+        .catch((loadError: unknown) => {
+          setError(loadError instanceof Error ? loadError.message : "Could not load contacts");
+        })
+        .finally(() => setPending(false));
+    }, 180);
+
+    return () => window.clearTimeout(timeout);
+  }, [campaignId, query, status]);
+
+  return (
+    <article className="panel wide-panel contact-browser">
+      <PanelHeader icon={Users} title="Campaign contacts" meta={pending ? "loading" : `${contacts?.total ?? 0} found`} />
+      <div className="contact-toolbar">
+        <label>
+          Campaign
+          <select
+            disabled={!campaigns.length}
+            onChange={(event) => setCampaignId(event.target.value)}
+            value={campaignId}
+          >
+            {campaigns.map((campaign) => (
+              <option key={campaign.id} value={campaign.id}>
+                {campaign.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Search
+          <input onChange={(event) => setQuery(event.target.value)} placeholder="Name, phone, company" value={query} />
+        </label>
+        <label>
+          Status
+          <select onChange={(event) => setStatus(event.target.value as typeof status)} value={status}>
+            <option value="all">all</option>
+            <option value="ready">ready</option>
+            <option value="suppressed">suppressed</option>
+            <option value="completed">completed</option>
+          </select>
+        </label>
+      </div>
+      {error && <p className="form-error">{error}</p>}
+      <div className="table-list">
+        {contacts?.contacts.length === 0 && <div className="empty-row">No contacts match this filter</div>}
+        {contacts?.contacts.map((contact) => (
+          <div className="table-row contact-row" key={contact.id}>
+            <strong>{contact.name}</strong>
+            <span>{contact.company}</span>
+            <span>{contact.phoneNumber}</span>
+            <b>{contact.status}</b>
+          </div>
+        ))}
+      </div>
+    </article>
   );
 }
 
