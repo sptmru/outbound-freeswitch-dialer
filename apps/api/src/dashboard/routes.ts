@@ -8,6 +8,7 @@ import type {
   CreateCampaignRequest,
   CreateContactRequest,
   CreateSuppressionRequest,
+  CsvImportHistoryResponse,
   ImportCsvRequest,
   ImportCsvResponse,
   LeadSummary,
@@ -69,6 +70,17 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
     }
 
     return buildAdminOverviewResponse(pool, toPublicUser(user));
+  });
+
+  app.get("/admin/csv-imports", async (request, reply): Promise<CsvImportHistoryResponse | void> => {
+    const user = await requireAdmin(request, reply, config, pool);
+    if (!user) {
+      return;
+    }
+
+    return {
+      imports: await getCsvImports(pool)
+    };
   });
 
   app.post("/agent/manual-dial/validate", async (request, reply): Promise<ManualDialValidationResponse | void> => {
@@ -217,6 +229,41 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
 
       try {
         const importResult = await importContactsFromCsv(pool, params.campaignId, input.filename, parsed);
+        return reply.code(201).send(importResult);
+      } catch (error) {
+        if (error instanceof CsvImportError) {
+          return reply.code(400).send({ message: error.message });
+        }
+        throw error;
+      }
+    }
+  );
+
+  app.post(
+    "/admin/campaigns/:campaignId/import-csv-file",
+    async (request, reply): Promise<ImportCsvResponse | void> => {
+      const user = await requireAdmin(request, reply, config, pool);
+      if (!user) {
+        return;
+      }
+
+      const params = z.object({ campaignId: z.string().uuid() }).parse(request.params);
+      const file = await request.file();
+      if (!file) {
+        return reply.code(400).send({ message: "CSV file is required" });
+      }
+      if (!isCsvFilename(file.filename)) {
+        return reply.code(400).send({ message: "Only .csv files are supported" });
+      }
+
+      const csvText = (await file.toBuffer()).toString("utf8");
+      const parsed = parseCsv(csvText);
+      if (parsed.rows.length === 0) {
+        return reply.code(400).send({ message: "CSV has no data rows" });
+      }
+
+      try {
+        const importResult = await importContactsFromCsv(pool, params.campaignId, file.filename, parsed);
         return reply.code(201).send(importResult);
       } catch (error) {
         if (error instanceof CsvImportError) {
@@ -474,6 +521,10 @@ function findColumn(headers: string[], candidates: string[]): number {
 
 function normalizeHeader(value: string): string {
   return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+}
+
+function isCsvFilename(filename: string): boolean {
+  return filename.toLowerCase().endsWith(".csv");
 }
 
 async function buildAgentDeskResponse(pool: pg.Pool, user: PublicUser): Promise<AgentDeskResponse> {
@@ -868,6 +919,50 @@ async function getSuppression(pool: pg.Pool): Promise<AdminOverviewResponse["sup
     id: row.id,
     phoneNumber: row.phone_number,
     reason: row.reason ?? "Suppressed"
+  }));
+}
+
+async function getCsvImports(pool: pg.Pool): Promise<CsvImportHistoryResponse["imports"]> {
+  const result = await pool.query<{
+    id: string;
+    campaign_id: string;
+    campaign_name: string | null;
+    filename: string;
+    status: string;
+    total_rows: number;
+    imported_rows: number;
+    failed_rows: number;
+    created_at: Date;
+    completed_at: Date | null;
+  }>(`
+    select
+      csv_imports.id,
+      csv_imports.campaign_id,
+      campaigns.name as campaign_name,
+      csv_imports.filename,
+      csv_imports.status,
+      csv_imports.total_rows,
+      csv_imports.imported_rows,
+      csv_imports.failed_rows,
+      csv_imports.created_at,
+      csv_imports.completed_at
+    from csv_imports
+    left join campaigns on campaigns.id = csv_imports.campaign_id
+    order by csv_imports.created_at desc
+    limit 20
+  `);
+
+  return result.rows.map((row) => ({
+    id: row.id,
+    campaignId: row.campaign_id,
+    campaignName: row.campaign_name ?? "Deleted campaign",
+    filename: row.filename,
+    status: row.status,
+    totalRows: Number(row.total_rows),
+    importedRows: Number(row.imported_rows),
+    failedRows: Number(row.failed_rows),
+    createdAt: row.created_at.toISOString(),
+    completedAt: row.completed_at?.toISOString()
   }));
 }
 

@@ -1,4 +1,5 @@
 import cors from "@fastify/cors";
+import multipart from "@fastify/multipart";
 import Fastify from "fastify";
 import { ZodError } from "zod";
 import { registerAuthRoutes } from "./auth/routes.js";
@@ -43,6 +44,12 @@ function isPostgresError(error: unknown, code: string): error is { code: string 
 
 await app.register(cors, {
   origin: config.corsOrigins
+});
+await app.register(multipart, {
+  limits: {
+    fileSize: 2_000_000,
+    files: 1
+  }
 });
 
 registerHealthRoutes(app, config, pool);

@@ -4,6 +4,7 @@ import type {
   CreateCampaignRequest,
   CreateContactRequest,
   CreateSuppressionRequest,
+  CsvImportHistoryResponse,
   ImportCsvRequest,
   ImportCsvResponse,
   ManualDialValidationResponse,
@@ -33,10 +34,11 @@ export function clearStoredToken(): void {
 
 async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> {
   const token = getStoredToken();
+  const isFormData = options.body instanceof FormData;
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...options,
     headers: {
-      "Content-Type": "application/json",
+      ...(isFormData ? {} : { "Content-Type": "application/json" }),
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...options.headers
     }
@@ -73,6 +75,10 @@ export async function fetchAgentDesk(): Promise<AgentDeskResponse> {
 
 export async function fetchAdminOverview(): Promise<AdminOverviewResponse> {
   return apiFetch<AdminOverviewResponse>("/admin/overview");
+}
+
+export async function fetchCsvImports(): Promise<CsvImportHistoryResponse> {
+  return apiFetch<CsvImportHistoryResponse>("/admin/csv-imports");
 }
 
 export async function validateManualDial(
@@ -116,5 +122,14 @@ export async function importCampaignCsv(
   return apiFetch<ImportCsvResponse>(`/admin/campaigns/${campaignId}/import-csv`, {
     method: "POST",
     body: JSON.stringify(input)
+  });
+}
+
+export async function importCampaignCsvFile(campaignId: string, file: File): Promise<ImportCsvResponse> {
+  const formData = new FormData();
+  formData.append("file", file);
+  return apiFetch<ImportCsvResponse>(`/admin/campaigns/${campaignId}/import-csv-file`, {
+    method: "POST",
+    body: formData
   });
 }

@@ -172,6 +172,23 @@ export interface ImportCsvResponse {
   detectedColumns: string[];
 }
 
+export interface CsvImportSummary {
+  id: string;
+  campaignId: string;
+  campaignName: string;
+  filename: string;
+  status: string;
+  totalRows: number;
+  importedRows: number;
+  failedRows: number;
+  createdAt: string;
+  completedAt?: string;
+}
+
+export interface CsvImportHistoryResponse {
+  imports: CsvImportSummary[];
+}
+
 export interface MutationResponse<T> {
   item: T;
 }

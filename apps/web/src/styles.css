@@ -420,6 +420,7 @@ input[type="checkbox"] {
 
 .primary-action,
 .danger-action,
+.secondary-action,
 .icon-button {
   align-items: center;
   border: 0;
@@ -446,6 +447,11 @@ input[type="checkbox"] {
 .danger-action {
   background: #fff0ee;
   color: #9d2518;
+}
+
+.secondary-action {
+  background: #edf3fb;
+  color: #1b2633;
 }
 
 .icon-button {
@@ -657,6 +663,17 @@ input[type="checkbox"] {
   grid-template-columns: minmax(140px, 1fr) minmax(120px, 1fr) 80px auto;
 }
 
+.import-row {
+  grid-template-columns: minmax(120px, 1fr) minmax(120px, 1fr) 70px auto;
+}
+
+.empty-row {
+  border: 1px dashed #ccd6e1;
+  border-radius: 8px;
+  color: #607086;
+  padding: 14px;
+}
+
 .locked-view {
   align-items: center;
   background: #ffffff;
@@ -753,6 +770,7 @@ input[type="checkbox"] {
 
   .table-row,
   .history-row,
+  .import-row,
   .inline-fields {
     grid-template-columns: 1fr;
   }

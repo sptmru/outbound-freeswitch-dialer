@@ -28,10 +28,12 @@ import {
   createContact,
   createSuppression,
   fetchAdminOverview,
+  fetchCsvImports,
   fetchAgentDesk,
   fetchMe,
   getStoredToken,
   importCampaignCsv,
+  importCampaignCsvFile,
   login,
   setStoredToken,
   validateManualDial
@@ -39,6 +41,7 @@ import {
 import type {
   AdminOverviewResponse,
   AgentDeskResponse,
+  CsvImportSummary,
   ImportCsvResponse,
   LeadSummary,
   ManualDialValidationResponse,
@@ -60,6 +63,7 @@ export function App() {
   const [user, setUser] = useState<PublicUser | null>(null);
   const [desk, setDesk] = useState<AgentDeskResponse | null>(null);
   const [admin, setAdmin] = useState<AdminOverviewResponse | null>(null);
+  const [csvImports, setCsvImports] = useState<CsvImportSummary[]>([]);
   const [view, setView] = useState<View>("desk");
   const [error, setError] = useState<string | null>(null);
 
@@ -79,13 +83,16 @@ export function App() {
       setUser(nextUser);
       setDesk(nextDesk);
       if (nextUser.role === "admin") {
-        setAdmin(await fetchAdminOverview());
+        const [nextAdmin, nextImports] = await Promise.all([fetchAdminOverview(), fetchCsvImports()]);
+        setAdmin(nextAdmin);
+        setCsvImports(nextImports.imports);
       }
     } catch (sessionError) {
       clearStoredToken();
       setUser(null);
       setDesk(null);
       setAdmin(null);
+      setCsvImports([]);
       setError(sessionError instanceof Error ? sessionError.message : "Session expired");
     } finally {
       setTokenReady(true);
@@ -104,6 +111,7 @@ export function App() {
     setUser(null);
     setDesk(null);
     setAdmin(null);
+    setCsvImports([]);
     setView("desk");
   }
 
@@ -153,7 +161,9 @@ export function App() {
       <main className="workspace">
         <TopBar desk={desk} user={user} onLogout={handleLogout} />
         {view === "desk" && <AgentDesk desk={desk} />}
-        {view !== "desk" && <AdminView admin={admin} onChanged={hydrateSession} view={view} user={user} />}
+        {view !== "desk" && (
+          <AdminView admin={admin} csvImports={csvImports} onChanged={hydrateSession} view={view} user={user} />
+        )}
       </main>
     </div>
   );
@@ -417,11 +427,13 @@ function ManualDial() {
 
 function AdminView({
   admin,
+  csvImports,
   onChanged,
   user,
   view
 }: {
   admin: AdminOverviewResponse | null;
+  csvImports: CsvImportSummary[];
   onChanged: () => Promise<void>;
   user: PublicUser;
   view: View;
@@ -440,7 +452,7 @@ function AdminView({
   }
 
   const content = {
-    campaigns: <Campaigns admin={admin} onChanged={onChanged} />,
+    campaigns: <Campaigns admin={admin} csvImports={csvImports} onChanged={onChanged} />,
     recordings: <Recordings admin={admin} />,
     history: <HistoryView admin={admin} />,
     settings: <SettingsView admin={admin} onChanged={onChanged} />,
@@ -450,14 +462,25 @@ function AdminView({
   return <section className="operations-view">{content}</section>;
 }
 
-function Campaigns({ admin, onChanged }: { admin: AdminOverviewResponse; onChanged: () => Promise<void> }) {
+function Campaigns({
+  admin,
+  csvImports,
+  onChanged
+}: {
+  admin: AdminOverviewResponse;
+  csvImports: CsvImportSummary[];
+  onChanged: () => Promise<void>;
+}) {
   return (
     <>
       <div className="operations-grid two">
         <CreateCampaignForm onChanged={onChanged} />
         <CreateContactForm campaigns={admin.campaigns} onChanged={onChanged} />
       </div>
-      <CsvImportForm campaigns={admin.campaigns} onChanged={onChanged} />
+      <div className="operations-grid two">
+        <CsvImportForm campaigns={admin.campaigns} onChanged={onChanged} />
+        <CsvImportHistory imports={csvImports} />
+      </div>
       <div className="operations-grid">
         {admin.campaigns.map((campaign) => (
           <article className="panel" key={campaign.id}>
@@ -483,6 +506,7 @@ function CsvImportForm({
   const [campaignId, setCampaignId] = useState(campaigns[0]?.id ?? "");
   const [filename, setFilename] = useState("leads.csv");
   const [csvText, setCsvText] = useState("name,phone,company\nAvery Johnson,+1 415 555 0148,North Bay Solar");
+  const [file, setFile] = useState<File | null>(null);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ImportCsvResponse | null>(null);
@@ -503,6 +527,26 @@ function CsvImportForm({
       await onChanged();
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : "Could not import CSV");
+    } finally {
+      setPending(false);
+    }
+  }
+
+  async function submitFile() {
+    if (!file) {
+      setError("Choose a CSV file first");
+      return;
+    }
+
+    setPending(true);
+    setError(null);
+    try {
+      const importResult = await importCampaignCsvFile(campaignId, file);
+      setResult(importResult);
+      setFile(null);
+      await onChanged();
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : "Could not upload CSV");
     } finally {
       setPending(false);
     }
@@ -534,6 +578,18 @@ function CsvImportForm({
           </label>
         </div>
         <label>
+          Upload file
+          <input
+            accept=".csv,text/csv"
+            onChange={(event) => setFile(event.target.files?.[0] ?? null)}
+            type="file"
+          />
+        </label>
+        <button className="secondary-action" disabled={pending || !campaigns.length || !file} onClick={submitFile} type="button">
+          <Upload size={17} />
+          {pending ? "Uploading" : "Upload CSV file"}
+        </button>
+        <label>
           CSV
           <textarea onChange={(event) => setCsvText(event.target.value)} required rows={7} value={csvText} />
         </label>
@@ -551,6 +607,27 @@ function CsvImportForm({
           {pending ? "Importing" : "Import CSV"}
         </button>
       </form>
+    </article>
+  );
+}
+
+function CsvImportHistory({ imports }: { imports: CsvImportSummary[] }) {
+  return (
+    <article className="panel">
+      <PanelHeader icon={History} title="Recent imports" meta={`${imports.length} runs`} />
+      <div className="table-list">
+        {imports.length === 0 && <div className="empty-row">No imports yet</div>}
+        {imports.map((item) => (
+          <div className="table-row import-row" key={item.id}>
+            <strong>{item.filename}</strong>
+            <span>{item.campaignName}</span>
+            <span>
+              {item.importedRows}/{item.totalRows}
+            </span>
+            <b>{item.status}</b>
+          </div>
+        ))}
+      </div>
     </article>
   );
 }

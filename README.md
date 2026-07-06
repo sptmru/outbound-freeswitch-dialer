@@ -93,9 +93,11 @@ GET /auth/me
 GET /agent/desk
 POST /agent/manual-dial/validate
 GET /admin/overview
+GET /admin/csv-imports
 POST /admin/campaigns
 POST /admin/contacts
 POST /admin/campaigns/:campaignId/import-csv
+POST /admin/campaigns/:campaignId/import-csv-file
 POST /admin/suppression
 ```
 

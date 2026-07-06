@@ -4,6 +4,8 @@ export type {
   CreateCampaignRequest,
   CreateContactRequest,
   CreateSuppressionRequest,
+  CsvImportHistoryResponse,
+  CsvImportSummary,
   ImportCsvRequest,
   ImportCsvResponse,
   LeadSummary,
