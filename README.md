@@ -7,11 +7,13 @@ The product target is an agent dashboard that supports click-to-call, live call 
 ## Planning Documents
 
 - [Implementation plan](docs/implementation-plan.md) - end-to-end delivery plan from discovery to production handover.
+- [Requirements](docs/requirements.md) - confirmed product and deployment decisions.
 - [Architecture](docs/architecture.md) - proposed system architecture, call-control model, and call flows.
 - [Design plan](docs/design-plan.md) - Figma-first product design workflow and UI scope.
 - [AI development workflow](docs/ai-development-workflow.md) - how AI-assisted implementation should be run safely and repeatably.
-- [Open questions](docs/open-questions.md) - decisions and inputs needed before or during implementation.
+- [Open questions](docs/open-questions.md) - remaining unknowns after the first scope clarification.
 - [ADR 0001](docs/adr/0001-initial-architecture.md) - initial architecture decision record.
+- [ADR 0002](docs/adr/0002-product-scope-decisions.md) - first product-scope decisions after requirement clarification.
 
 ## Proposed Repository Shape
 

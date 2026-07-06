@@ -12,6 +12,7 @@ Browser Web UI
   - Admin screens
   - WebRTC softphone using SIP over WSS
   - API client plus live call-state subscription
+  - Campaign, lead, recording, suppression, and call-history workflows
 
 Node.js TypeScript API
   - Auth and authorization
@@ -19,25 +20,42 @@ Node.js TypeScript API
   - Live call-state WebSocket/SSE
   - ESL adapter
   - Call-state machine
-  - Recording and user management
+  - Campaign, CSV import, recording, suppression, call-recording, and user management
 
 FreeSWITCH
   - WebRTC SIP profile for agent softphones
-  - Maxo SIP gateway/profile for PSTN calls
+  - Maxo SIP gateway/profile for PSTN calls, supporting registration and IP-auth modes
   - Dialplan for bridge and voicemail-drop flows
+  - Optional call recording and VM/beep signal experiments
   - ESL event source and command target
 
 PostgreSQL
   - Users and agents
+  - Campaigns and contacts/leads
+  - CSV imports and field mappings
   - Calls and legs
   - Call events
   - Recordings
-  - Suppression entries if in scope
+  - Call recording metadata
+  - Suppression entries
+  - System settings
 
 Maxo
   - SIP trunk or compatible telephony setup
   - PSTN termination
 ```
+
+## Product Assumptions
+
+- Single-tenant for the first version.
+- Local username/password auth with `agent` and `admin` roles.
+- Agents get SIP credentials automatically when they are created.
+- Campaigns and CSV lead import are in scope.
+- CSV imports require field mapping.
+- DNCR/suppression checks are mandatory before customer-leg origination.
+- Agents may type arbitrary numbers only when an admin setting enables manual dialing.
+- Call recording must be supported and can be enabled or disabled.
+- Call logs are retained for one week by default.
 
 ## Security Model
 
@@ -46,6 +64,7 @@ Maxo
 - Browser softphone registers only as an agent endpoint.
 - Click-to-call requests go to the backend.
 - Backend validates agent identity, contact/campaign permissions, suppression rules, and call state.
+- Backend validates manual dialing settings before accepting arbitrary destination numbers.
 - Backend sends ESL commands to FreeSWITCH.
 - Backend records every call-control command and related ESL event.
 
@@ -63,6 +82,8 @@ Use a backend-owned two-leg call:
 
 This model keeps the agent available before the customer is dialed and prevents the browser from directly originating external calls.
 
+Before step 5, the backend must normalize the destination number and enforce suppression checks. If the call target is an arbitrary manually typed number, the backend must also verify that manual dialing is enabled.
+
 ## Manual Voicemail Drop Flow
 
 1. Agent is in an active bridged call.
@@ -78,8 +99,23 @@ This model keeps the agent available before the customer is dialed and prevents 
 7. Backend releases the agent leg once playback starts.
 8. Backend records playback completion or interruption.
 9. Backend sets final call outcome.
+10. Customer leg hangs up automatically after voicemail playback completes.
 
 FreeSWITCH implementation details should be validated in the first telephony spike. The likely approach is to transfer the customer leg to a controlled dialplan context that plays the recording and then hangs up or completes according to product rules, while the agent leg is released separately.
+
+## VM/Beep Detection Signal Flow
+
+Manual voicemail drop remains the MVP control path. VM/beep detection should be implemented as an observable signal, not an automatic action, until reliability is proven.
+
+Expected behavior:
+
+1. FreeSWITCH or an integrated detection mechanism emits a detection event or confidence signal.
+2. Backend stores the event with the call timeline.
+3. Backend streams the signal to the active agent UI.
+4. UI shows the signal in the active call panel.
+5. Agent still decides whether to click "Drop Voicemail".
+
+Detection data should preserve raw event details so future automation decisions can be based on actual call evidence.
 
 ## Call State Machine
 
@@ -91,6 +127,7 @@ Initial states:
 - `customer_dialing`
 - `customer_ringing`
 - `bridged`
+- `voicemail_signal_detected`
 - `voicemail_drop_requested`
 - `voicemail_playback_started`
 - `agent_released`
@@ -116,6 +153,22 @@ Every transition should include:
 - Reason code.
 - Raw diagnostic fields needed for troubleshooting.
 
+## Dispositions
+
+Agent/admin-facing outcomes:
+
+- `answered`
+- `not_answered`
+- `busy`
+- `failed`
+- `voicemail_detected`
+- `voicemail_dropped`
+- `agent_canceled`
+- `customer_hung_up`
+- `suppressed`
+
+Technical reason codes should be stored separately from the user-facing outcome.
+
 ## Data Model Draft
 
 ### users
@@ -124,6 +177,7 @@ Every transition should include:
 - `email`
 - `name`
 - `role`
+- `password_hash`
 - `created_at`
 - `updated_at`
 
@@ -132,21 +186,65 @@ Every transition should include:
 - `id`
 - `user_id`
 - `sip_username`
+- `sip_password_hash` or encrypted SIP secret reference
 - `display_name`
 - `status`
 - `last_registered_at`
 - `created_at`
 - `updated_at`
 
+### campaigns
+
+- `id`
+- `name`
+- `status`
+- `manual_dialing_enabled`
+- `call_recording_enabled`
+- `created_at`
+- `updated_at`
+
+### contacts
+
+- `id`
+- `campaign_id`
+- `phone_number`
+- `normalized_phone_number`
+- `display_name`
+- `source_row_json`
+- `mapped_fields_json`
+- `status`
+- `created_at`
+- `updated_at`
+
+### csv_imports
+
+- `id`
+- `campaign_id`
+- `filename`
+- `status`
+- `field_mapping_json`
+- `total_rows`
+- `imported_rows`
+- `failed_rows`
+- `created_at`
+- `completed_at`
+
 ### calls
 
 - `id`
 - `agent_id`
+- `campaign_id`
+- `contact_id`
 - `destination_number`
+- `normalized_destination_number`
 - `caller_id`
 - `state`
 - `outcome`
 - `recording_id`
+- `manual_dial`
+- `call_recording_enabled`
+- `call_recording_path`
+- `voicemail_signal_status`
 - `started_at`
 - `answered_at`
 - `ended_at`
@@ -184,6 +282,9 @@ Every transition should include:
 - `storage_path`
 - `duration_ms`
 - `codec`
+- `source_format`
+- `transcoded_path`
+- `is_default`
 - `status`
 - `created_by`
 - `created_at`
@@ -196,6 +297,13 @@ Every transition should include:
 - `reason`
 - `source`
 - `created_at`
+
+### system_settings
+
+- `id`
+- `key`
+- `value_json`
+- `updated_at`
 
 ## Runtime Configuration Draft
 
@@ -211,12 +319,21 @@ Every transition should include:
 - `FREESWITCH_RTP_START_PORT`
 - `FREESWITCH_RTP_END_PORT`
 - `MAXO_SIP_MODE`
+- `MAXO_SIP_REGISTRATION_ENABLED`
 - `MAXO_SIP_PROXY`
+- `MAXO_SIP_REALM`
+- `MAXO_SIP_OUTBOUND_PROXY`
 - `MAXO_SIP_USERNAME`
 - `MAXO_SIP_PASSWORD`
 - `MAXO_SIP_FROM_DOMAIN`
 - `MAXO_OUTBOUND_CALLER_ID`
 - `RECORDINGS_PATH`
+- `CALL_RECORDINGS_PATH`
+- `DEFAULT_CALL_RECORDING_ENABLED`
+- `MANUAL_DIALING_ENABLED`
+- `CALL_LOG_RETENTION_DAYS`
+- `LETSENCRYPT_EMAIL`
+- `PUBLIC_WSS_DOMAIN`
 
 ## Observability
 
@@ -228,15 +345,22 @@ Every transition should include:
   - Calls bridged.
   - Calls failed by reason.
   - Voicemail drops requested.
+  - VM/beep signals detected.
   - Voicemail playback started/completed/interrupted.
+  - Suppression hits.
+  - Call recordings started/stopped/failed.
   - ESL reconnects.
   - SIP registration state changes.
+
+For support, production docs must include how to collect PCAP files and correlate them with API logs, FreeSWITCH logs, ESL events, and database call IDs.
 
 ## Key Risks
 
 - NAT, RTP, and WebRTC media path issues.
+- AWS NAT and advertised SIP/RTP IP mismatches.
 - Maxo trunk requirements that differ between local and production.
 - FreeSWITCH bridge behavior when one leg is released.
+- VM/beep detection reliability.
 - Race conditions around voicemail drop and customer hangup.
 - Browser microphone permission and autoplay behavior.
 - Operational access to production logs and SIP traces.

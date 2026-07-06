@@ -8,7 +8,12 @@ Build a production-ready outbound dialer where agents use a browser softphone fo
 - Manual "Drop Voicemail" action during an active call.
 - Agent release from the call once voicemail playback starts.
 - Prerecorded voicemail audio played into the active customer leg.
-- Call state tracking, audit logging, and outcome tracking.
+- Campaigns with CSV lead import and field mapping.
+- DNCR/suppression checks before dialing.
+- Optional manual number entry controlled by admin settings.
+- Optional call recording controlled by configuration/admin settings.
+- VM/beep detection signals visible to agents when available, while manual voicemail drop remains the MVP control path.
+- Call state tracking, call-control/event logging, and outcome tracking.
 - Maxo integration through SIP trunking or a compatible telephony setup.
 - Secure call control owned by the backend, not by browser extensions or frontend-originated PSTN calls.
 
@@ -20,31 +25,34 @@ Build a production-ready outbound dialer where agents use a browser softphone fo
 - Store every call-control action and telephony event needed to debug a call later.
 - Document operational setup while building it, not after the fact.
 - Keep implementation choices reversible until validated with a real Maxo trunk.
+- Keep provider-specific trunk details out of the Web UI for the first version; configure them through deployment/runtime configuration.
 
 ## Phase 0 - Discovery And Scope Lock
 
 ### Tasks
 
 - Confirm Maxo SIP trunk details:
-  - Registration mode or IP-auth mode.
+  - Registration mode or IP-auth mode from the provider, while implementation supports both.
   - SIP proxy, realm, outbound proxy, codec requirements, caller ID policy, allowed IPs.
-  - TLS/SRTP requirements if any.
+  - No Maxo TLS/SRTP requirement is assumed, but WebRTC WSS remains required for browser media.
 - Confirm production host constraints:
-  - Public IP, firewall, NAT, TLS certificate strategy, DNS, deploy access.
+  - Ubuntu 24, current Docker, public IP/firewall/NAT shape, TLS certificate strategy, DNS, deploy access.
   - Required ports for SIP, RTP, ESL, API, WebSocket, and WebRTC WSS.
 - Confirm product boundaries:
-  - Manual voicemail drop only, or automatic voicemail/beep detection too.
-  - Single prerecorded voicemail per account, per campaign, per agent, or per call.
-  - Admin roles and user management source.
-  - DNCR/suppression-list requirements and legal ownership.
+  - Manual voicemail drop is MVP behavior; VM/beep detection is displayed as a signal for future automation evaluation.
+  - Global recordings with one default recording.
+  - Local username/password auth with `agent` and `admin` roles.
+  - DNCR/suppression-list checks are in MVP; broader compliance ownership is out of scope.
 - Confirm data inputs:
-  - Where contacts/leads come from.
-  - Whether campaigns are in scope for the first build.
+  - Contacts/leads come from CSV import.
+  - Campaigns are in scope.
+  - CSV field mapping is required for different source formats.
   - Required call outcomes and dispositions.
 
 ### Deliverables
 
 - Updated [open questions](open-questions.md).
+- Updated [requirements](requirements.md).
 - Maxo trunk checklist.
 - Confirmed MVP acceptance criteria.
 
@@ -75,8 +83,20 @@ Build a production-ready outbound dialer where agents use a browser softphone fo
   - Calls.
   - Call legs.
   - Call events.
+  - Campaigns.
+  - Contacts/leads.
+  - CSV import jobs.
+  - CSV field mappings.
   - Recordings.
-  - Suppression entries if in scope.
+  - Call recording settings and metadata.
+  - Suppression entries.
+  - System settings.
+  - VM/beep detection events.
+- Add local auth:
+  - Password hashing.
+  - Session/JWT handling.
+  - `agent` and `admin` roles.
+  - Automatic SIP credential generation for agents.
 
 ### Deliverables
 
@@ -96,8 +116,12 @@ Build a production-ready outbound dialer where agents use a browser softphone fo
 - Configure FreeSWITCH SIP profiles:
   - Internal WebRTC profile for browser SIP over WSS.
   - External gateway/profile for Maxo trunk.
+  - Support both registration-based and IP-authenticated Maxo trunk configuration.
   - RTP port range and NAT configuration.
   - TLS certificate mount for WSS where needed.
+- Configure codec strategy:
+  - Prefer Opus for WebRTC browser media where practical.
+  - Support PSTN-compatible fallback/transcoding for Maxo, likely PCMU/PCMA depending on provider behavior.
 - Select and integrate browser SIP client:
   - Recommended first option: SIP.js with FreeSWITCH SIP over WebSocket.
   - Keep the browser limited to agent registration and answering backend-originated internal calls.
@@ -129,6 +153,11 @@ Build a production-ready outbound dialer where agents use a browser softphone fo
   - `POST /calls` to request click-to-call.
   - `GET /calls/:id` for current call state.
   - WebSocket or Server-Sent Events for live call updates.
+- Implement campaign/contact APIs:
+  - CSV upload.
+  - Field mapping preview.
+  - Campaign contact list.
+  - Campaign activation/pausing.
 - Implement ESL call orchestration:
   - Originate an agent leg to the authenticated agent's registered WebRTC endpoint.
   - After the agent answers, originate the customer leg through Maxo.
@@ -136,8 +165,13 @@ Build a production-ready outbound dialer where agents use a browser softphone fo
   - Persist call, leg, bridge, answer, hangup, and failure events.
 - Add authorization rules:
   - Agent can start calls only for allowed contacts/campaigns.
+  - Agent can type arbitrary numbers only when admin settings allow manual dialing.
   - Agent can only control calls assigned to them.
   - Admin can inspect all calls.
+- Add suppression rules:
+  - Normalize destination numbers before dialing.
+  - Check suppression list before originating the customer leg.
+  - Log suppressed attempts without sending them to FreeSWITCH/Maxo.
 - Add failure handling:
   - Agent unavailable.
   - Agent rejects or misses the internal call.
@@ -164,7 +198,10 @@ Build a production-ready outbound dialer where agents use a browser softphone fo
 - Add recording management foundation:
   - Store metadata in PostgreSQL.
   - Mount audio files into FreeSWITCH.
+  - Accept WAV/MP3 uploads from admins.
+  - Transcode uploads to the runtime format required by FreeSWITCH.
   - Validate file format, codec, duration, and safe filename.
+  - Support a global default recording.
 - Implement API:
   - `POST /calls/:id/drop-voicemail`.
   - Request includes selected recording ID.
@@ -174,7 +211,11 @@ Build a production-ready outbound dialer where agents use a browser softphone fo
   - Transfer or park the customer leg into a voicemail-drop dialplan/app.
   - Play the prerecorded audio into the customer leg.
   - Release the agent leg immediately after playback starts.
-  - Hang up or mark the customer leg complete after playback ends, based on selected behavior.
+  - Hang up the customer leg automatically after playback completes.
+- Add VM/beep signal handling:
+  - Capture detection events or inferred signals where FreeSWITCH/provider behavior allows it.
+  - Show VM/beep status to the agent without automatically triggering voicemail drop in MVP.
+  - Persist detection events for later reliability analysis.
 - Persist call outcome:
   - `voicemail_drop_requested`.
   - `voicemail_playback_started`.
@@ -208,39 +249,56 @@ Build a production-ready outbound dialer where agents use a browser softphone fo
   - Admin call log.
   - Per-call timeline with ESL/API events.
 - Implement dispositions/outcomes:
-  - Completed.
-  - No answer.
+  - Answered.
+  - Not answered.
   - Busy.
   - Failed.
+  - Voicemail detected.
   - Voicemail dropped.
   - Agent canceled.
   - Customer hung up.
+  - Suppressed.
 - Implement admin recording controls:
   - Upload/update/delete recordings.
   - Activate/deactivate recordings.
+  - Set global default recording.
   - Preview playback.
-  - Restrict recordings by tenant/account/campaign if needed.
 - Implement user controls:
-  - Basic admin-created users for MVP, unless an external identity provider is required.
+  - Local username/password users.
+  - Automatic agent SIP credential generation.
   - Agent permissions.
   - Admin permissions.
-- Implement suppression/DNCR if in scope:
+- Implement campaign and CSV controls:
+  - Campaign create/edit/pause/archive.
+  - CSV upload.
+  - Field mapping.
+  - Import validation.
+  - Lead list and import error review.
+- Implement suppression/DNCR:
   - Import list.
   - Manual add/remove.
   - Enforce check before `POST /calls` originates any call.
   - Log suppression hits.
+- Implement call recording controls:
+  - Global or campaign-level toggle, pending final setting choice.
+  - Store recording metadata with calls.
+  - Show recording state where relevant.
+- Implement retention:
+  - Default one-week retention for call logs unless configured otherwise.
+  - Clarify whether retention applies to all metadata or detailed event payloads only.
 
 ### Deliverables
 
 - Admin can manage recordings and users.
+- Admin can manage campaigns, CSV imports, and suppression list.
 - Agents and admins can inspect call outcomes.
-- Suppression handling is either implemented or documented as out of scope.
+- Suppression handling prevents outbound calls before origination.
 
 ### Acceptance Criteria
 
 - Every call has a final outcome.
 - Every voicemail drop has an associated recording ID and event timeline.
-- Admin actions are audit logged.
+- Call recording status is visible in call detail.
 
 ## Phase 6 - UI Design And Product Polish
 
@@ -251,9 +309,15 @@ Build a production-ready outbound dialer where agents use a browser softphone fo
   - Embedded softphone states.
   - Active call controls.
   - Drop voicemail confirmation/selection.
+  - Lead detail panel with all available imported fields.
+  - VM/beep detection signal display.
+  - Campaign list and campaign workspace.
+  - CSV upload and field mapping.
   - Call history.
   - Admin recordings.
   - Admin users.
+  - Admin suppression list.
+  - Admin system settings for manual dialing and call recording.
   - Empty, loading, error, and permission states.
 - Implement the UI from design:
   - React TypeScript app.
@@ -264,6 +328,7 @@ Build a production-ready outbound dialer where agents use a browser softphone fo
   - Registration status.
   - Call progress.
   - Active bridge state.
+  - VM/beep detection signal state.
   - Voicemail playback state.
   - Failure messages that map to backend reasons.
 
@@ -293,6 +358,10 @@ Build a production-ready outbound dialer where agents use a browser softphone fo
   - Customer no-answer.
   - Customer hangs up during voicemail drop.
   - Agent clicks drop voicemail twice.
+  - Suppressed number blocks before customer leg origination.
+  - CSV import with alternate field names.
+  - Manual dialing disabled blocks arbitrary number entry.
+  - VM/beep detection event appears in call timeline.
   - ESL reconnect during active call.
   - Maxo trunk returns failure.
 - Add load and soak tests:
@@ -326,8 +395,13 @@ Build a production-ready outbound dialer where agents use a browser softphone fo
   - Docker runtime.
   - Firewall rules.
   - DNS.
-  - TLS certificates.
+  - Automated Let's Encrypt TLS certificates.
   - Persistent volumes for PostgreSQL, FreeSWITCH config, recordings, and logs.
+- Prepare AWS/NAT deployment details:
+  - Public signaling endpoints.
+  - RTP port exposure.
+  - SIP advertised host/IP settings.
+  - WebRTC WSS domain configuration.
 - Deploy services:
   - API.
   - Web app.
@@ -335,7 +409,7 @@ Build a production-ready outbound dialer where agents use a browser softphone fo
   - FreeSWITCH.
   - Reverse proxy for HTTPS/WSS.
 - Configure Maxo trunk:
-  - SIP gateway.
+  - SIP gateway in registration or IP-auth mode.
   - Caller ID.
   - Codecs.
   - NAT/RTP.
@@ -353,6 +427,7 @@ Build a production-ready outbound dialer where agents use a browser softphone fo
 - Production deployment running on the target server.
 - Deployment docs with exact commands and environment variables.
 - Troubleshooting docs for SIP, WebRTC, RTP, ESL, and Maxo failures.
+- PCAP capture procedure for failed-call investigation.
 
 ### Acceptance Criteria
 
@@ -404,7 +479,10 @@ Build a production-ready outbound dialer where agents use a browser softphone fo
 6. Full bridge: agent leg plus customer leg.
 7. Manual voicemail drop with agent release.
 8. Call logging and timeline.
-9. Admin recording management.
-10. Production deployment and handover.
+9. Campaign CSV import and suppression enforcement.
+10. Admin recording management with default voicemail recording.
+11. Optional call recording controls.
+12. VM/beep signal display.
+13. Production deployment and handover.
 
 This sequence gives us a demoable system early and keeps the highest-risk telephony behavior visible from the start.
