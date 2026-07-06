@@ -25,6 +25,7 @@ import type {
   ManualDialValidationResponse,
   MutationResponse,
   PublicUser,
+  StartNextCallRequest,
   StartManualCallRequest,
   SuppressContactRequest
 } from "@outbound-dialer/shared";
@@ -42,11 +43,17 @@ import {
 import { ensureAgentForUser, toPublicUser } from "../users.js";
 
 const manualDialValidationSchema = z.object({
-  phoneNumber: z.string().min(3)
+  phoneNumber: z.string().min(3),
+  campaignId: z.string().uuid().optional()
 }) satisfies z.ZodType<StartManualCallRequest>;
 
+const startNextCallSchema = z.object({
+  campaignId: z.string().uuid().optional()
+}) satisfies z.ZodType<StartNextCallRequest>;
+
 const endCallSchema = z.object({
-  outcome: z.enum(callOutcomes).optional()
+  outcome: z.enum(callOutcomes).optional(),
+  campaignId: z.string().uuid().optional()
 }) satisfies z.ZodType<EndCallRequest>;
 
 const createCampaignSchema = z.object({
@@ -91,6 +98,10 @@ const suppressionParamsSchema = z.object({
   suppressionId: z.string().uuid()
 });
 
+const agentDeskQuerySchema = z.object({
+  campaignId: z.string().uuid().optional()
+});
+
 export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig, pool: pg.Pool): void {
   app.get("/agent/desk", async (request, reply): Promise<AgentDeskResponse | void> => {
     const user = await requireUser(request, config, pool);
@@ -98,7 +109,8 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
       return reply.code(401).send({ message: "Unauthorized" });
     }
 
-    return buildAgentDeskResponse(pool, toPublicUser(user));
+    const query = agentDeskQuerySchema.parse(request.query);
+    return buildAgentDeskResponse(pool, toPublicUser(user), query.campaignId);
   });
 
   app.get("/admin/overview", async (request, reply): Promise<AdminOverviewResponse | void> => {
@@ -196,7 +208,7 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
       return reply.code(400).send({ message: validation.reason });
     }
 
-    const campaign = await getActiveCampaign(pool);
+    const campaign = await getAgentCampaign(pool, input.campaignId);
     if (!campaign) {
       return reply.code(409).send({ message: "No campaign is available" });
     }
@@ -221,7 +233,7 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
       eventType: "manual_dial_started"
     });
 
-    return buildAgentDeskResponse(pool, publicUser);
+    return buildAgentDeskResponse(pool, publicUser, campaign.id);
   });
 
   app.post("/agent/call-next", async (request, reply): Promise<AgentDeskResponse | void> => {
@@ -230,13 +242,14 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
       return reply.code(401).send({ message: "Unauthorized" });
     }
 
+    const input = startNextCallSchema.parse(request.body ?? {});
     const publicUser = toPublicUser(user);
     const activeCall = await getActiveCall(pool, publicUser.id);
     if (activeCall) {
       return reply.code(409).send({ message: "An active call is already in progress" });
     }
 
-    const campaign = await getActiveCampaign(pool);
+    const campaign = await getAgentCampaign(pool, input.campaignId);
     if (!campaign) {
       return reply.code(409).send({ message: "No campaign is available" });
     }
@@ -258,7 +271,7 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
       eventType: "call_next_started"
     });
 
-    return buildAgentDeskResponse(pool, publicUser);
+    return buildAgentDeskResponse(pool, publicUser, campaign.id);
   });
 
   app.post("/agent/leads/:contactId/call", async (request, reply): Promise<AgentDeskResponse | void> => {
@@ -291,7 +304,7 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
       eventType: "lead_call_started"
     });
 
-    return buildAgentDeskResponse(pool, publicUser);
+    return buildAgentDeskResponse(pool, publicUser, contact.campaignId);
   });
 
   app.post("/agent/calls/:callId/end", async (request, reply): Promise<AgentDeskResponse | void> => {
@@ -308,7 +321,7 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
       return reply.code(404).send({ message: "Active call not found" });
     }
 
-    return buildAgentDeskResponse(pool, publicUser);
+    return buildAgentDeskResponse(pool, publicUser, input.campaignId);
   });
 
   app.post(
@@ -1562,8 +1575,15 @@ function isCsvFilename(filename: string): boolean {
   return filename.toLowerCase().endsWith(".csv");
 }
 
-async function buildAgentDeskResponse(pool: pg.Pool, user: PublicUser): Promise<AgentDeskResponse> {
-  const campaign = await getActiveCampaign(pool);
+async function buildAgentDeskResponse(
+  pool: pg.Pool,
+  user: PublicUser,
+  selectedCampaignId?: string
+): Promise<AgentDeskResponse> {
+  const [campaign, availableCampaigns] = await Promise.all([
+    getAgentCampaign(pool, selectedCampaignId),
+    getAgentCampaigns(pool)
+  ]);
   if (!campaign) {
     return buildDemoAgentDeskResponse(user);
   }
@@ -1584,6 +1604,7 @@ async function buildAgentDeskResponse(pool: pg.Pool, user: PublicUser): Promise<
       manualDialingEnabled: campaign.manual_dialing_enabled,
       callRecordingEnabled: campaign.call_recording_enabled
     },
+    availableCampaigns,
     softphone: {
       registered: Boolean(campaign.agent_registered),
       microphoneAllowed: true,
@@ -1616,7 +1637,10 @@ async function buildAdminOverviewResponse(pool: pg.Pool, user: PublicUser): Prom
   };
 }
 
-async function getActiveCampaign(pool: pg.Pool): Promise<{
+async function getAgentCampaign(
+  pool: pg.Pool,
+  selectedCampaignId?: string
+): Promise<{
   id: string;
   name: string;
   status: "active" | "paused" | "draft";
@@ -1652,18 +1676,46 @@ async function getActiveCampaign(pool: pg.Pool): Promise<{
     from campaigns
     left join contacts on contacts.campaign_id = campaigns.id
     left join suppression_entries on suppression_entries.normalized_phone_number = contacts.normalized_phone_number
+    where campaigns.status = 'active'
     group by campaigns.id
     order by
-      case campaigns.status
-        when 'active' then 0
-        when 'paused' then 1
-        else 2
-      end,
+      case when campaigns.id = $1 then 0 else 1 end,
       campaigns.created_at desc
     limit 1
-  `);
+  `, [selectedCampaignId ?? null]);
 
   return result.rows[0] ?? null;
+}
+
+async function getAgentCampaigns(pool: pg.Pool): Promise<AgentDeskResponse["availableCampaigns"]> {
+  const result = await pool.query<{
+    id: string;
+    name: string;
+    status: "active" | "paused" | "draft";
+    callable: string;
+  }>(`
+    select
+      campaigns.id,
+      campaigns.name,
+      campaigns.status,
+      count(contacts.id) filter (
+        where contacts.status not in ('completed', 'suppressed')
+          and suppression_entries.id is null
+      ) as callable
+    from campaigns
+    left join contacts on contacts.campaign_id = campaigns.id
+    left join suppression_entries on suppression_entries.normalized_phone_number = contacts.normalized_phone_number
+    where campaigns.status = 'active'
+    group by campaigns.id
+    order by campaigns.created_at desc
+  `);
+
+  return result.rows.map((row) => ({
+    id: row.id,
+    name: row.name,
+    status: row.status,
+    callableLeads: Number(row.callable)
+  }));
 }
 
 async function getLeadQueue(pool: pg.Pool, campaignId: string): Promise<LeadSummary[]> {
@@ -2203,16 +2255,19 @@ async function getCampaignContacts(
 }
 
 function buildDemoAgentDeskResponse(user: PublicUser): AgentDeskResponse {
+  const campaign = {
+    id: "campaign_demo_solar_followup",
+    name: "Solar Follow-up",
+    status: "active" as const,
+    callableLeads: 248,
+    manualDialingEnabled: true,
+    callRecordingEnabled: true
+  };
+
   return {
     user,
-    campaign: {
-      id: "campaign_demo_solar_followup",
-      name: "Solar Follow-up",
-      status: "active",
-      callableLeads: 248,
-      manualDialingEnabled: true,
-      callRecordingEnabled: true
-    },
+    campaign,
+    availableCampaigns: [campaign],
     softphone: {
       registered: true,
       microphoneAllowed: true,

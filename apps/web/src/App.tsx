@@ -86,6 +86,7 @@ export function App() {
   const [desk, setDesk] = useState<AgentDeskResponse | null>(null);
   const [admin, setAdmin] = useState<AdminOverviewResponse | null>(null);
   const [csvImports, setCsvImports] = useState<CsvImportSummary[]>([]);
+  const [selectedCampaignId, setSelectedCampaignId] = useState<string | null>(null);
   const [view, setView] = useState<View>("desk");
   const [error, setError] = useState<string | null>(null);
   const [manualDialNumber, setManualDialNumber] = useState("");
@@ -102,9 +103,10 @@ export function App() {
 
   async function hydrateSession() {
     try {
-      const [{ user: nextUser }, nextDesk] = await Promise.all([fetchMe(), fetchAgentDesk()]);
+      const [{ user: nextUser }, nextDesk] = await Promise.all([fetchMe(), fetchAgentDesk(selectedCampaignId ?? undefined)]);
       setUser(nextUser);
       setDesk(nextDesk);
+      setSelectedCampaignId(nextDesk.campaign.id);
       if (nextUser.role === "admin") {
         const [nextAdmin, nextImports] = await Promise.all([fetchAdminOverview(), fetchCsvImports()]);
         setAdmin(nextAdmin);
@@ -116,6 +118,7 @@ export function App() {
       setDesk(null);
       setAdmin(null);
       setCsvImports([]);
+      setSelectedCampaignId(null);
       setError(sessionError instanceof Error ? sessionError.message : "Session expired");
     } finally {
       setTokenReady(true);
@@ -135,7 +138,13 @@ export function App() {
     setDesk(null);
     setAdmin(null);
     setCsvImports([]);
+    setSelectedCampaignId(null);
     setView("desk");
+  }
+
+  async function handleCampaignChange(campaignId: string) {
+    setSelectedCampaignId(campaignId);
+    setDesk(await fetchAgentDesk(campaignId));
   }
 
   if (!tokenReady) {
@@ -192,6 +201,7 @@ export function App() {
           <AgentDesk
             desk={desk}
             manualDialNumber={manualDialNumber}
+            onCampaignChange={handleCampaignChange}
             onDeskChanged={setDesk}
             onManualDialNumberChange={setManualDialNumber}
           />
@@ -320,11 +330,13 @@ function TopBar({
 function AgentDesk({
   desk,
   manualDialNumber,
+  onCampaignChange,
   onDeskChanged,
   onManualDialNumberChange
 }: {
   desk: AgentDeskResponse;
   manualDialNumber: string;
+  onCampaignChange: (campaignId: string) => Promise<void>;
   onDeskChanged: (desk: AgentDeskResponse) => void;
   onManualDialNumberChange: (phoneNumber: string) => void;
 }) {
@@ -344,7 +356,7 @@ function AgentDesk({
     setCallNextPending(true);
     setCallNextError(null);
     try {
-      onDeskChanged(await startNextCall());
+      onDeskChanged(await startNextCall({ campaignId: desk.campaign.id }));
     } catch (error) {
       setCallNextError(error instanceof Error ? error.message : "Could not start next call");
     } finally {
@@ -368,7 +380,7 @@ function AgentDesk({
     setEndCallPending(true);
     setEndCallError(null);
     try {
-      onDeskChanged(await endCall(callId, { outcome: "agent_canceled" }));
+      onDeskChanged(await endCall(callId, { campaignId: desk.campaign.id, outcome: "agent_canceled" }));
     } catch (error) {
       setEndCallError(error instanceof Error ? error.message : "Could not end call");
     } finally {
@@ -387,7 +399,12 @@ function AgentDesk({
           pending={callNextPending}
         />
         <ActiveCall desk={desk} error={endCallError} onHangUp={hangUp} pending={endCallPending} />
-        <AgentStatusPanel desk={desk} mode="active" onOpenManual={() => setDeskMode("manual")} />
+        <AgentStatusPanel
+          desk={desk}
+          mode="active"
+          onCampaignChange={onCampaignChange}
+          onOpenManual={() => setDeskMode("manual")}
+        />
       </section>
     );
   }
@@ -413,7 +430,12 @@ function AgentDesk({
         onCallNext={callNext}
         pending={callNextPending}
       />
-      <AgentStatusPanel desk={desk} mode="ready" onOpenManual={() => setDeskMode("manual")} />
+      <AgentStatusPanel
+        desk={desk}
+        mode="ready"
+        onCampaignChange={onCampaignChange}
+        onOpenManual={() => setDeskMode("manual")}
+      />
     </section>
   );
 }
@@ -482,17 +504,49 @@ function LeadQueue({
 function AgentStatusPanel({
   desk,
   mode,
+  onCampaignChange,
   onOpenManual
 }: {
   desk: AgentDeskResponse;
   mode: "ready" | "active";
+  onCampaignChange: (campaignId: string) => Promise<void>;
   onOpenManual: () => void;
 }) {
+  const [campaignPending, setCampaignPending] = useState(false);
+  const [campaignError, setCampaignError] = useState<string | null>(null);
+
+  async function changeCampaign(campaignId: string) {
+    setCampaignPending(true);
+    setCampaignError(null);
+    try {
+      await onCampaignChange(campaignId);
+    } catch (error) {
+      setCampaignError(error instanceof Error ? error.message : "Could not switch campaign");
+    } finally {
+      setCampaignPending(false);
+    }
+  }
+
   return (
     <article className="panel agent-status-panel">
       <div className="surface-heading">
         <h2>Agent status</h2>
       </div>
+      <label className="campaign-selector">
+        Campaign
+        <select
+          disabled={campaignPending || mode === "active" || desk.availableCampaigns.length <= 1}
+          onChange={(event) => void changeCampaign(event.target.value)}
+          value={desk.campaign.id}
+        >
+          {desk.availableCampaigns.map((campaign) => (
+            <option key={campaign.id} value={campaign.id}>
+              {campaign.name} ({campaign.callableLeads})
+            </option>
+          ))}
+        </select>
+      </label>
+      {campaignError && <p className="form-error">{campaignError}</p>}
       <div className="status-stack">
         <StatusBadge label={mode === "active" ? "In call" : "Ready"} tone="good" />
         <StatusBadge
@@ -562,7 +616,7 @@ function ManualDialSurface({
     setStartPending(true);
     setError(null);
     try {
-      onDeskChanged(await startManualCall({ phoneNumber }));
+      onDeskChanged(await startManualCall({ campaignId: desk.campaign.id, phoneNumber }));
     } catch (startError) {
       setError(startError instanceof Error ? startError.message : "Could not start call");
     } finally {
@@ -777,6 +831,7 @@ function SoftphonePanel({
         </div>
       </article>
       <ManualDial
+        campaignId={desk.campaign.id}
         onDeskChanged={onDeskChanged}
         phoneNumber={manualDialNumber}
         onPhoneNumberChange={onManualDialNumberChange}
@@ -791,10 +846,12 @@ function SoftphonePanel({
 }
 
 function ManualDial({
+  campaignId,
   onDeskChanged,
   onPhoneNumberChange,
   phoneNumber
 }: {
+  campaignId: string;
   onDeskChanged: (desk: AgentDeskResponse) => void;
   onPhoneNumberChange: (phoneNumber: string) => void;
   phoneNumber: string;
@@ -826,7 +883,7 @@ function ManualDial({
     setStartPending(true);
     setError(null);
     try {
-      onDeskChanged(await startManualCall({ phoneNumber }));
+      onDeskChanged(await startManualCall({ campaignId, phoneNumber }));
     } catch (startError) {
       setError(startError instanceof Error ? startError.message : "Could not start call");
     } finally {

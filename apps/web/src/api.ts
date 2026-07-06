@@ -19,6 +19,7 @@ import type {
   ManualDialValidationResponse,
   MutationResponse,
   PublicUser,
+  StartNextCallRequest,
   StartManualCallRequest,
   SuppressContactRequest
 } from "./types";
@@ -81,8 +82,9 @@ export async function fetchMe(): Promise<{ user: PublicUser }> {
   return apiFetch<{ user: PublicUser }>("/auth/me");
 }
 
-export async function fetchAgentDesk(): Promise<AgentDeskResponse> {
-  return apiFetch<AgentDeskResponse>("/agent/desk");
+export async function fetchAgentDesk(campaignId?: string): Promise<AgentDeskResponse> {
+  const query = campaignId ? `?campaignId=${encodeURIComponent(campaignId)}` : "";
+  return apiFetch<AgentDeskResponse>(`/agent/desk${query}`);
 }
 
 export async function fetchAdminOverview(): Promise<AdminOverviewResponse> {
@@ -138,9 +140,10 @@ export async function startManualCall(input: StartManualCallRequest): Promise<Ag
   });
 }
 
-export async function startNextCall(): Promise<AgentDeskResponse> {
+export async function startNextCall(input: StartNextCallRequest = {}): Promise<AgentDeskResponse> {
   return apiFetch<AgentDeskResponse>("/agent/call-next", {
-    method: "POST"
+    method: "POST",
+    body: JSON.stringify(input)
   });
 }
 

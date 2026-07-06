@@ -76,6 +76,12 @@ export interface AgentDeskResponse {
     manualDialingEnabled: boolean;
     callRecordingEnabled: boolean;
   };
+  availableCampaigns: Array<{
+    id: string;
+    name: string;
+    status: "active" | "paused" | "draft";
+    callableLeads: number;
+  }>;
   softphone: {
     registered: boolean;
     microphoneAllowed: boolean;
@@ -241,10 +247,16 @@ export interface SuppressContactRequest {
 
 export interface StartManualCallRequest {
   phoneNumber: string;
+  campaignId?: string;
+}
+
+export interface StartNextCallRequest {
+  campaignId?: string;
 }
 
 export interface EndCallRequest {
   outcome?: CallOutcome;
+  campaignId?: string;
 }
 
 export interface MutationResponse<T> {

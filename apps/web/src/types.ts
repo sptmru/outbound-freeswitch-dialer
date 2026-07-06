@@ -21,6 +21,7 @@ export type {
   ManualDialValidationResponse,
   MutationResponse,
   PublicUser,
+  StartNextCallRequest,
   StartManualCallRequest,
   SuppressContactRequest
 } from "@outbound-dialer/shared";

@@ -468,6 +468,10 @@ input[type="checkbox"] {
   align-content: start;
 }
 
+.campaign-selector {
+  max-width: 280px;
+}
+
 .status-stack {
   display: flex;
   flex-wrap: wrap;
