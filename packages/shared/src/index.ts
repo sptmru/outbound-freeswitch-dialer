@@ -246,3 +246,43 @@ export interface ManualDialValidationResponse {
     detail: string;
   }>;
 }
+
+export type FreeSwitchTrunkStatus =
+  | "ready"
+  | "not_configured"
+  | "registration_failed"
+  | "dns_error"
+  | "error"
+  | "unknown";
+
+export interface FreeSwitchDiagnosticsResponse {
+  checkedAt: string;
+  esl: HealthCheck;
+  trunk: {
+    mode: "registration" | "ip_auth";
+    configured: boolean;
+    status: FreeSwitchTrunkStatus;
+    summary: string;
+    gatewayName?: string;
+    proxyConfigured: boolean;
+    usernameConfigured: boolean;
+    callerIdConfigured: boolean;
+    raw?: string;
+  };
+  controlPlane: {
+    safeTestAvailable: boolean;
+    listenerEnabled: boolean;
+    lastSafeTestAt?: string;
+  };
+}
+
+export interface FreeSwitchSafeTestResponse {
+  ok: boolean;
+  checkedAt: string;
+  uuidCreated: boolean;
+  apiStatusOk: boolean;
+  bgapiStatusQueued: boolean;
+  generatedUuid?: string;
+  jobUuid?: string;
+  message: string;
+}

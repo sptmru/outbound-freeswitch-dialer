@@ -9,6 +9,8 @@ import type {
   CsvImportDetailResponse,
   CsvImportHistoryResponse,
   EndCallRequest,
+  FreeSwitchDiagnosticsResponse,
+  FreeSwitchSafeTestResponse,
   ImportCsvRequest,
   ImportCsvResponse,
   ManualDialValidationResponse,
@@ -81,6 +83,16 @@ export async function fetchAgentDesk(): Promise<AgentDeskResponse> {
 
 export async function fetchAdminOverview(): Promise<AdminOverviewResponse> {
   return apiFetch<AdminOverviewResponse>("/admin/overview");
+}
+
+export async function fetchFreeSwitchDiagnostics(): Promise<FreeSwitchDiagnosticsResponse> {
+  return apiFetch<FreeSwitchDiagnosticsResponse>("/admin/freeswitch/diagnostics");
+}
+
+export async function runFreeSwitchSafeTest(): Promise<FreeSwitchSafeTestResponse> {
+  return apiFetch<FreeSwitchSafeTestResponse>("/admin/freeswitch/safe-test", {
+    method: "POST"
+  });
 }
 
 export async function fetchCsvImports(): Promise<CsvImportHistoryResponse> {

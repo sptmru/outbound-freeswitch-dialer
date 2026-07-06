@@ -23,7 +23,11 @@ const envSchema = z.object({
   BOOTSTRAP_ADMIN_NAME: z.string().default("Admin"),
   SIP_USERNAME_PREFIX: z.string().regex(/^[a-zA-Z0-9_-]+$/).default("agent"),
   FREESWITCH_GENERATED_CONFIG_DIR: z.string().default("/var/lib/outbound-dialer/freeswitch"),
-  FREESWITCH_DOMAIN: z.string().default("localhost")
+  FREESWITCH_DOMAIN: z.string().default("localhost"),
+  MAXO_TRUNK_MODE: z.enum(["registration", "ip_auth"]).default("registration"),
+  MAXO_SIP_PROXY: z.string().optional(),
+  MAXO_USERNAME: z.string().optional(),
+  MAXO_CALLER_ID: z.string().optional()
 });
 
 export type AppConfig = z.infer<typeof envSchema> & {

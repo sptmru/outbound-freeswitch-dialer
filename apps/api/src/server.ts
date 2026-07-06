@@ -6,6 +6,7 @@ import { registerAuthRoutes } from "./auth/routes.js";
 import { loadConfig } from "./config.js";
 import { registerDashboardRoutes } from "./dashboard/routes.js";
 import { createPool, runMigrations } from "./db.js";
+import { startFreeSwitchEventListener } from "./esl-events.js";
 import { provisionAllAgentDirectories } from "./freeswitch/provisioning.js";
 import { registerHealthRoutes } from "./health.js";
 import { bootstrapAdmin } from "./users.js";
@@ -17,6 +18,7 @@ const app = Fastify({
   }
 });
 const pool = createPool(config);
+let stopFreeSwitchEventListener: (() => void) | null = null;
 
 app.setErrorHandler((error, _request, reply) => {
   if (error instanceof ZodError) {
@@ -73,10 +75,12 @@ async function start() {
     host: config.API_HOST,
     port: config.API_PORT
   });
+  stopFreeSwitchEventListener = startFreeSwitchEventListener(config, pool, app.log);
 }
 
 const shutdown = async () => {
   app.log.info("shutting down");
+  stopFreeSwitchEventListener?.();
   await app.close();
   await pool.end();
 };

@@ -15,6 +15,9 @@ import type {
   CsvImportFailure,
   CsvImportHistoryResponse,
   EndCallRequest,
+  FreeSwitchDiagnosticsResponse,
+  FreeSwitchSafeTestResponse,
+  FreeSwitchTrunkStatus,
   ImportCsvRequest,
   ImportCsvResponse,
   LeadSummary,
@@ -27,6 +30,14 @@ import type {
 import { z } from "zod";
 import { requireUser } from "../auth/routes.js";
 import type { AppConfig } from "../config.js";
+import {
+  canOriginateCustomerLeg,
+  checkFreeSwitchEsl,
+  createFreeSwitchUuid,
+  originateCustomerLeg,
+  sendFreeSwitchApiCommand,
+  sendFreeSwitchBgapiCommand
+} from "../esl.js";
 import { ensureAgentForUser, toPublicUser } from "../users.js";
 
 const manualDialValidationSchema = z.object({
@@ -91,6 +102,27 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
     }
 
     return buildAdminOverviewResponse(pool, toPublicUser(user));
+  });
+
+  app.get(
+    "/admin/freeswitch/diagnostics",
+    async (request, reply): Promise<FreeSwitchDiagnosticsResponse | void> => {
+      const user = await requireAdmin(request, reply, config, pool);
+      if (!user) {
+        return;
+      }
+
+      return buildFreeSwitchDiagnostics(pool, config);
+    }
+  );
+
+  app.post("/admin/freeswitch/safe-test", async (request, reply): Promise<FreeSwitchSafeTestResponse | void> => {
+    const user = await requireAdmin(request, reply, config, pool);
+    if (!user) {
+      return;
+    }
+
+    return runFreeSwitchSafeTest(pool, config);
   });
 
   app.get("/admin/csv-imports", async (request, reply): Promise<CsvImportHistoryResponse | void> => {
@@ -169,7 +201,7 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
     }
 
     const agent = await ensureAgentForUser(pool, config, publicUser);
-    await createDialerCall(pool, {
+    await createDialerCall(pool, config, {
       agentId: agent.id,
       campaignId: campaign.id,
       contactId: null,
@@ -206,7 +238,7 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
       return reply.code(409).send({ message: "No callable contacts are available" });
     }
 
-    await createDialerCall(pool, {
+    await createDialerCall(pool, config, {
       agentId: agent.id,
       campaignId: campaign.id,
       contactId: contact.id,
@@ -239,7 +271,7 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
     }
 
     const agent = await ensureAgentForUser(pool, config, publicUser);
-    await createDialerCall(pool, {
+    await createDialerCall(pool, config, {
       agentId: agent.id,
       campaignId: contact.campaignId,
       contactId: contact.id,
@@ -262,7 +294,7 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
     const publicUser = toPublicUser(user);
     const params = z.object({ callId: z.string().uuid() }).parse(request.params);
     const input = endCallSchema.parse(request.body ?? {});
-    const ended = await endDialerCall(pool, publicUser.id, params.callId, input.outcome ?? "agent_canceled");
+    const ended = await endDialerCall(pool, config, publicUser.id, params.callId, input.outcome ?? "agent_canceled");
     if (!ended) {
       return reply.code(404).send({ message: "Active call not found" });
     }
@@ -550,6 +582,185 @@ async function requireAdmin(
   return toPublicUser(user);
 }
 
+async function buildFreeSwitchDiagnostics(
+  pool: pg.Pool,
+  config: AppConfig
+): Promise<FreeSwitchDiagnosticsResponse> {
+  const checkedAt = new Date().toISOString();
+  const lastSafeTest = await pool.query<{ updated_at: Date }>(
+    "select updated_at from system_settings where key = 'freeswitch.safe_test.last'"
+  );
+  const esl = await checkEslHealth(config);
+  const trunk = await checkTrunkStatus(config);
+
+  return {
+    checkedAt,
+    esl,
+    trunk,
+    controlPlane: {
+      safeTestAvailable: config.FREESWITCH_ESL_ENABLED,
+      listenerEnabled: config.FREESWITCH_ESL_ENABLED,
+      lastSafeTestAt: lastSafeTest.rows[0]?.updated_at.toISOString()
+    }
+  };
+}
+
+async function runFreeSwitchSafeTest(pool: pg.Pool, config: AppConfig): Promise<FreeSwitchSafeTestResponse> {
+  const checkedAt = new Date().toISOString();
+  let generatedUuid: string | undefined;
+  let jobUuid: string | undefined;
+  let uuidCreated = false;
+  let apiStatusOk = false;
+  let bgapiStatusQueued = false;
+  let message = "FreeSWITCH control plane test passed";
+
+  try {
+    generatedUuid = await createFreeSwitchUuid(config);
+    uuidCreated = Boolean(generatedUuid);
+    await sendFreeSwitchApiCommand(config, "status");
+    apiStatusOk = true;
+    const bgapi = await sendFreeSwitchBgapiCommand(config, "status");
+    jobUuid = parseBgapiJobUuid(bgapi.body);
+    bgapiStatusQueued = Boolean(jobUuid || bgapi.body.includes("+OK") || bgapi.headers["reply-text"]?.includes("+OK"));
+  } catch (error) {
+    message = error instanceof Error ? error.message : "FreeSWITCH control plane test failed";
+  }
+
+  const result: FreeSwitchSafeTestResponse = {
+    ok: uuidCreated && apiStatusOk && bgapiStatusQueued,
+    checkedAt,
+    uuidCreated,
+    apiStatusOk,
+    bgapiStatusQueued,
+    generatedUuid,
+    jobUuid,
+    message
+  };
+
+  await pool.query(
+    `
+      insert into system_settings (key, value_json, updated_at)
+      values ('freeswitch.safe_test.last', $1::jsonb, now())
+      on conflict (key)
+      do update set value_json = excluded.value_json,
+                    updated_at = now()
+    `,
+    [JSON.stringify(result)]
+  );
+
+  return result;
+}
+
+async function checkEslHealth(config: AppConfig): Promise<FreeSwitchDiagnosticsResponse["esl"]> {
+  if (!config.FREESWITCH_ESL_ENABLED) {
+    return {
+      status: "skipped",
+      message: "Disabled by FREESWITCH_ESL_ENABLED=false"
+    };
+  }
+
+  try {
+    return {
+      status: "ok",
+      message: await checkFreeSwitchEsl(config)
+    };
+  } catch (error) {
+    return {
+      status: "error",
+      message: error instanceof Error ? error.message : "FreeSWITCH ESL check failed"
+    };
+  }
+}
+
+async function checkTrunkStatus(config: AppConfig): Promise<FreeSwitchDiagnosticsResponse["trunk"]> {
+  const base = {
+    mode: config.MAXO_TRUNK_MODE,
+    configured: canOriginateCustomerLeg(config),
+    gatewayName: config.MAXO_TRUNK_MODE === "registration" ? "maxo" : undefined,
+    proxyConfigured: Boolean(config.MAXO_SIP_PROXY),
+    usernameConfigured: Boolean(config.MAXO_USERNAME),
+    callerIdConfigured: Boolean(config.MAXO_CALLER_ID)
+  };
+
+  if (!base.configured) {
+    return {
+      ...base,
+      status: "not_configured",
+      summary:
+        config.MAXO_TRUNK_MODE === "ip_auth"
+          ? "MAXO_SIP_PROXY is required before outbound calls can be originated."
+          : "MAXO_SIP_PROXY and MAXO_USERNAME are required before outbound calls can be originated."
+    };
+  }
+
+  if (config.MAXO_TRUNK_MODE === "ip_auth") {
+    return {
+      ...base,
+      status: "ready",
+      summary: "IP-auth trunk variables are present; provider registration is not expected in this mode."
+    };
+  }
+
+  try {
+    const gateway = await sendFreeSwitchApiCommand(config, "sofia status gateway maxo");
+    const status = parseGatewayStatus(gateway.body || gateway.raw);
+    return {
+      ...base,
+      status,
+      summary: summarizeGatewayStatus(status),
+      raw: redactDiagnosticText(gateway.body || gateway.raw)
+    };
+  } catch (error) {
+    return {
+      ...base,
+      status: "error",
+      summary: error instanceof Error ? error.message : "Could not read Maxo gateway status"
+    };
+  }
+}
+
+function parseGatewayStatus(raw: string): FreeSwitchTrunkStatus {
+  const normalized = raw.toLowerCase();
+  if (normalized.includes("dns error")) {
+    return "dns_error";
+  }
+  if (/\breged\b/.test(normalized) || normalized.includes("state") && normalized.includes("reged")) {
+    return "ready";
+  }
+  if (normalized.includes("failed") || normalized.includes("fail_wait") || normalized.includes("unreged")) {
+    return "registration_failed";
+  }
+  return "unknown";
+}
+
+function summarizeGatewayStatus(status: FreeSwitchTrunkStatus): string {
+  if (status === "ready") {
+    return "Maxo gateway is registered and ready for live originate tests.";
+  }
+  if (status === "dns_error") {
+    return "FreeSWITCH cannot resolve the configured Maxo SIP proxy.";
+  }
+  if (status === "registration_failed") {
+    return "Maxo gateway is configured but not registered.";
+  }
+  if (status === "error") {
+    return "Could not read Maxo gateway status.";
+  }
+  return "Maxo gateway status is not conclusive yet.";
+}
+
+function parseBgapiJobUuid(body: string): string | undefined {
+  return body.match(/Job-UUID:\s*([^\s]+)/i)?.[1];
+}
+
+function redactDiagnosticText(value: string): string {
+  return value
+    .split(/\r?\n/)
+    .filter((line) => !/password|authorization|auth/i.test(line))
+    .join("\n")
+    .slice(0, 3000);
+}
+
 async function findSuppression(pool: pg.Pool, normalizedNumber: string): Promise<{ reason: string | null } | null> {
   const result = await pool.query<{ reason: string | null }>(
     "select reason from suppression_entries where normalized_phone_number = $1",
@@ -692,6 +903,7 @@ async function getDefaultRecordingId(client: pg.Pool | pg.PoolClient): Promise<s
 
 async function createDialerCall(
   pool: pg.Pool,
+  config: AppConfig,
   input: {
     agentId: string;
     campaignId: string;
@@ -704,6 +916,7 @@ async function createDialerCall(
   }
 ): Promise<string> {
   const client = await pool.connect();
+  let callId: string;
   try {
     await client.query("begin");
     const recordingId = await getDefaultRecordingId(client);
@@ -735,7 +948,7 @@ async function createDialerCall(
         input.callRecordingEnabled
       ]
     );
-    const callId = call.rows[0].id;
+    callId = call.rows[0].id;
 
     await client.query(
       `
@@ -764,17 +977,196 @@ async function createDialerCall(
       await client.query("update contacts set status = 'calling', updated_at = now() where id = $1", [input.contactId]);
     }
     await client.query("commit");
-    return callId;
   } catch (error) {
     await client.query("rollback");
     throw error;
   } finally {
     client.release();
   }
+
+  await syncFreeSwitchOriginate(pool, config, {
+    agentId: input.agentId,
+    callId,
+    destinationNumber: input.destinationNumber
+  });
+  return callId;
+}
+
+async function syncFreeSwitchOriginate(
+  pool: pg.Pool,
+  config: AppConfig,
+  input: { agentId: string; callId: string; destinationNumber: string }
+): Promise<void> {
+  if (!canOriginateCustomerLeg(config)) {
+    await insertCallEvent(pool, {
+      agentId: input.agentId,
+      callId: input.callId,
+      eventType: "freeswitch_originate_skipped",
+      state: "customer_dialing",
+      raw: {
+        reason: "Maxo trunk is not configured",
+        destinationNumber: input.destinationNumber
+      }
+    });
+    return;
+  }
+
+  try {
+    const legUuid = await createFreeSwitchUuid(config);
+    const originate = await originateCustomerLeg(config, {
+      callId: input.callId,
+      destinationNumber: input.destinationNumber,
+      legUuid
+    });
+    await pool.query(
+      `
+        update call_legs
+        set freeswitch_uuid = $2,
+            state = 'started',
+            started_at = coalesce(started_at, now())
+        where call_id = $1
+          and type = 'customer'
+      `,
+      [input.callId, originate.legUuid]
+    );
+    await insertCallEvent(pool, {
+      agentId: input.agentId,
+      callId: input.callId,
+      eventType: "freeswitch_originate_queued",
+      state: "customer_dialing",
+      apiCommandName: "bgapi originate",
+      customerLegUuid: originate.legUuid,
+      raw: {
+        command: originate.command,
+        jobUuid: originate.jobUuid
+      }
+    });
+  } catch (error) {
+    await pool.query(
+      `
+        update calls
+        set state = 'failed',
+            outcome = 'failed',
+            ended_at = now(),
+            updated_at = now()
+        where id = $1
+      `,
+      [input.callId]
+    );
+    await pool.query(
+      `
+        update agents
+        set status = 'ready',
+            updated_at = now()
+        where id = $1
+      `,
+      [input.agentId]
+    );
+    await pool.query(
+      `
+        update contacts
+        set status = 'new',
+            updated_at = now()
+        where id = (
+          select contact_id
+          from calls
+          where id = $1
+        )
+          and status = 'calling'
+      `,
+      [input.callId]
+    );
+    await insertCallEvent(pool, {
+      agentId: input.agentId,
+      callId: input.callId,
+      eventType: "freeswitch_originate_failed",
+      state: "failed",
+      apiCommandName: "bgapi originate",
+      raw: {
+        message: error instanceof Error ? error.message : "FreeSWITCH originate failed"
+      }
+    });
+  }
+}
+
+async function killFreeSwitchLeg(
+  pool: pg.Pool,
+  config: AppConfig,
+  callId: string,
+  agentId: string,
+  customerLegUuid: string | null
+): Promise<void> {
+  if (!customerLegUuid || !config.FREESWITCH_ESL_ENABLED) {
+    return;
+  }
+
+  try {
+    await sendFreeSwitchApiCommand(config, `uuid_kill ${customerLegUuid}`);
+    await insertCallEvent(pool, {
+      agentId,
+      callId,
+      eventType: "freeswitch_uuid_kill_sent",
+      state: "completed",
+      apiCommandName: "uuid_kill",
+      customerLegUuid,
+      raw: { customerLegUuid }
+    });
+  } catch (error) {
+    await insertCallEvent(pool, {
+      agentId,
+      callId,
+      eventType: "freeswitch_uuid_kill_failed",
+      state: "completed",
+      apiCommandName: "uuid_kill",
+      customerLegUuid,
+      raw: {
+        customerLegUuid,
+        message: error instanceof Error ? error.message : "FreeSWITCH uuid_kill failed"
+      }
+    });
+  }
+}
+
+async function insertCallEvent(
+  pool: pg.Pool,
+  input: {
+    agentId: string;
+    callId: string;
+    eventType: string;
+    state: string;
+    apiCommandName?: string;
+    customerLegUuid?: string;
+    raw: Record<string, unknown>;
+  }
+): Promise<void> {
+  await pool.query(
+    `
+      insert into call_events (
+        call_id,
+        agent_id,
+        event_type,
+        state,
+        api_command_name,
+        customer_leg_uuid,
+        raw_json
+      )
+      values ($1, $2, $3, $4, $5, $6, $7::jsonb)
+    `,
+    [
+      input.callId,
+      input.agentId,
+      input.eventType,
+      input.state,
+      input.apiCommandName ?? null,
+      input.customerLegUuid ?? null,
+      JSON.stringify(input.raw)
+    ]
+  );
 }
 
 async function endDialerCall(
   pool: pg.Pool,
+  config: AppConfig,
   userId: string,
   callId: string,
   outcome: CallOutcome
@@ -786,11 +1178,13 @@ async function endDialerCall(
       id: string;
       agent_id: string;
       contact_id: string | null;
+      customer_leg_uuid: string | null;
     }>(
       `
-        select calls.id, calls.agent_id, calls.contact_id
+        select calls.id, calls.agent_id, calls.contact_id, call_legs.freeswitch_uuid as customer_leg_uuid
         from calls
         join agents on agents.id = calls.agent_id
+        left join call_legs on call_legs.call_id = calls.id and call_legs.type = 'customer'
         where calls.id = $1
           and agents.user_id = $2
           and calls.ended_at is null
@@ -856,6 +1250,7 @@ async function endDialerCall(
       [row.agent_id]
     );
     await client.query("commit");
+    await killFreeSwitchLeg(pool, config, callId, row.agent_id, row.customer_leg_uuid);
     return true;
   } catch (error) {
     await client.query("rollback");

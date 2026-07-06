@@ -10,6 +10,8 @@ export type {
   CsvImportHistoryResponse,
   EndCallRequest,
   CsvImportSummary,
+  FreeSwitchDiagnosticsResponse,
+  FreeSwitchSafeTestResponse,
   ImportCsvRequest,
   ImportCsvResponse,
   LeadSummary,
