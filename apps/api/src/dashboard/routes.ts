@@ -14,6 +14,7 @@ import type {
   CsvImportDetailResponse,
   CsvImportFailure,
   CsvImportHistoryResponse,
+  DeleteResponse,
   EndCallRequest,
   FreeSwitchDiagnosticsResponse,
   FreeSwitchSafeTestResponse,
@@ -80,6 +81,14 @@ const importCsvSchema = z.object({
 const contactsQuerySchema = z.object({
   q: z.string().default(""),
   status: z.enum(["all", "ready", "suppressed", "completed"]).default("all")
+});
+
+const campaignParamsSchema = z.object({
+  campaignId: z.string().uuid()
+});
+
+const suppressionParamsSchema = z.object({
+  suppressionId: z.string().uuid()
 });
 
 export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig, pool: pg.Pool): void {
@@ -337,6 +346,23 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
     }
   );
 
+  app.delete("/admin/campaigns/:campaignId", async (request, reply): Promise<DeleteResponse | void> => {
+    const user = await requireAdmin(request, reply, config, pool);
+    if (!user) {
+      return;
+    }
+
+    const params = campaignParamsSchema.parse(request.params);
+    const deleted = await deleteCampaign(pool, params.campaignId);
+    if (deleted === "not_found") {
+      return reply.code(404).send({ message: "Campaign not found" });
+    }
+    if (deleted === "active_call") {
+      return reply.code(409).send({ message: "Campaign has an active call" });
+    }
+    return { ok: true };
+  });
+
   app.post(
     "/admin/contacts",
     async (request, reply): Promise<MutationResponse<LeadSummary> | void> => {
@@ -562,6 +588,20 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
       });
     }
   );
+
+  app.delete("/admin/suppression/:suppressionId", async (request, reply): Promise<DeleteResponse | void> => {
+    const user = await requireAdmin(request, reply, config, pool);
+    if (!user) {
+      return;
+    }
+
+    const params = suppressionParamsSchema.parse(request.params);
+    const result = await pool.query("delete from suppression_entries where id = $1", [params.suppressionId]);
+    if (!result.rowCount) {
+      return reply.code(404).send({ message: "Suppression entry not found" });
+    }
+    return { ok: true };
+  });
 }
 
 async function requireAdmin(
@@ -767,6 +807,47 @@ async function findSuppression(pool: pg.Pool, normalizedNumber: string): Promise
     [normalizedNumber]
   );
   return result.rows[0] ?? null;
+}
+
+async function deleteCampaign(pool: pg.Pool, campaignId: string): Promise<"deleted" | "not_found" | "active_call"> {
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const campaign = await client.query("select id from campaigns where id = $1 for update", [campaignId]);
+    if (!campaign.rowCount) {
+      await client.query("rollback");
+      return "not_found";
+    }
+
+    const activeCalls = await client.query(
+      `
+        select 1
+        from calls
+        where campaign_id = $1
+          and ended_at is null
+          and state not in ('completed', 'failed', 'canceled')
+        limit 1
+      `,
+      [campaignId]
+    );
+    if (activeCalls.rowCount) {
+      await client.query("rollback");
+      return "active_call";
+    }
+
+    await client.query("update calls set contact_id = null where contact_id in (select id from contacts where campaign_id = $1)", [
+      campaignId
+    ]);
+    await client.query("update calls set campaign_id = null where campaign_id = $1", [campaignId]);
+    await client.query("delete from campaigns where id = $1", [campaignId]);
+    await client.query("commit");
+    return "deleted";
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 async function validateDialableNumber(pool: pg.Pool, phoneNumber: string): Promise<ManualDialValidationResponse> {

@@ -158,6 +158,21 @@ export interface CreateSuppressionRequest {
   reason?: string;
 }
 
+export interface CreateUserRequest {
+  email: string;
+  name: string;
+  role: UserRole;
+  password: string;
+}
+
+export interface CreateUserResponse {
+  user: PublicUser;
+  agentCredentials?: {
+    sipUsername: string;
+    sipPassword: string;
+  };
+}
+
 export interface ImportCsvRequest {
   filename: string;
   csvText: string;
@@ -234,6 +249,10 @@ export interface EndCallRequest {
 
 export interface MutationResponse<T> {
   item: T;
+}
+
+export interface DeleteResponse {
+  ok: true;
 }
 
 export interface ManualDialValidationResponse {

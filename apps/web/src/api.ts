@@ -6,6 +6,9 @@ import type {
   CreateCampaignRequest,
   CreateContactRequest,
   CreateSuppressionRequest,
+  CreateUserRequest,
+  CreateUserResponse,
+  DeleteResponse,
   CsvImportDetailResponse,
   CsvImportHistoryResponse,
   EndCallRequest,
@@ -43,10 +46,11 @@ export function clearStoredToken(): void {
 async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> {
   const token = getStoredToken();
   const isFormData = options.body instanceof FormData;
+  const hasBody = options.body !== undefined && options.body !== null;
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...options,
     headers: {
-      ...(isFormData ? {} : { "Content-Type": "application/json" }),
+      ...(hasBody && !isFormData ? { "Content-Type": "application/json" } : {}),
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...options.headers
     }
@@ -162,6 +166,25 @@ export async function createCampaign(
   });
 }
 
+export async function deleteCampaign(campaignId: string): Promise<DeleteResponse> {
+  return apiFetch<DeleteResponse>(`/admin/campaigns/${campaignId}`, {
+    method: "DELETE"
+  });
+}
+
+export async function createUser(input: CreateUserRequest): Promise<CreateUserResponse> {
+  return apiFetch<CreateUserResponse>("/admin/users", {
+    method: "POST",
+    body: JSON.stringify(input)
+  });
+}
+
+export async function deleteUser(userId: string): Promise<DeleteResponse> {
+  return apiFetch<DeleteResponse>(`/admin/users/${userId}`, {
+    method: "DELETE"
+  });
+}
+
 export async function createContact(input: CreateContactRequest): Promise<MutationResponse<AgentDeskResponse["leads"][number]>> {
   return apiFetch<MutationResponse<AgentDeskResponse["leads"][number]>>("/admin/contacts", {
     method: "POST",
@@ -175,6 +198,12 @@ export async function createSuppression(
   return apiFetch<MutationResponse<AdminOverviewResponse["suppression"][number]>>("/admin/suppression", {
     method: "POST",
     body: JSON.stringify(input)
+  });
+}
+
+export async function deleteSuppression(suppressionId: string): Promise<DeleteResponse> {
+  return apiFetch<DeleteResponse>(`/admin/suppression/${suppressionId}`, {
+    method: "DELETE"
   });
 }
 

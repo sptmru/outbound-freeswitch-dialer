@@ -18,7 +18,9 @@ import {
   PhoneOff,
   Radio,
   Shield,
+  Trash2,
   Upload,
+  UserPlus,
   Users,
   Voicemail,
   XCircle
@@ -29,6 +31,10 @@ import {
   createCampaign,
   createContact,
   createSuppression,
+  createUser,
+  deleteCampaign,
+  deleteSuppression,
+  deleteUser,
   endCall,
   fetchAdminOverview,
   fetchCampaignContacts,
@@ -918,17 +924,58 @@ function Campaigns({
       </div>
       <div className="operations-grid">
         {admin.campaigns.map((campaign) => (
-          <article className="panel" key={campaign.id}>
-            <PanelHeader icon={Upload} title={campaign.name} meta={campaign.status} />
-            <div className="stat-row">
-              <Metric label="Loaded" value={campaign.loaded} icon={Users} />
-              <Metric label="Callable" value={campaign.callable} icon={PhoneCall} />
-            </div>
-          </article>
+          <CampaignCard campaign={campaign} key={campaign.id} onChanged={onChanged} />
         ))}
       </div>
       <CampaignContacts campaigns={admin.campaigns} onChanged={onChanged} onManualDial={onManualDial} />
     </>
+  );
+}
+
+function CampaignCard({
+  campaign,
+  onChanged
+}: {
+  campaign: AdminOverviewResponse["campaigns"][number];
+  onChanged: () => Promise<void>;
+}) {
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function remove() {
+    if (!window.confirm(`Delete campaign "${campaign.name}"?`)) {
+      return;
+    }
+    setPending(true);
+    setError(null);
+    try {
+      await deleteCampaign(campaign.id);
+      await onChanged();
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : "Could not delete campaign");
+    } finally {
+      setPending(false);
+    }
+  }
+
+  return (
+    <article className="panel">
+      <div className="panel-header action-header">
+        <div>
+          <Upload size={18} />
+          <h2>{campaign.name}</h2>
+        </div>
+        <button className="icon-button danger-icon" disabled={pending} onClick={remove} title="Delete campaign" type="button">
+          <Trash2 size={16} />
+        </button>
+      </div>
+      <StatusBadge label={campaign.status} tone="neutral" />
+      <div className="stat-row campaign-stat-row">
+        <Metric label="Loaded" value={campaign.loaded} icon={Users} />
+        <Metric label="Callable" value={campaign.callable} icon={PhoneCall} />
+      </div>
+      {error && <p className="form-error">{error}</p>}
+    </article>
   );
 }
 
@@ -1399,32 +1446,141 @@ function CreateContactForm({
 
 function Recordings({ admin }: { admin: AdminOverviewResponse }) {
   return (
-    <div className="operations-grid two">
-      <article className="panel">
-        <PanelHeader icon={FileAudio} title="Recordings" meta={`${admin.recordings.length} files`} />
-        <div className="table-list">
-          {admin.recordings.map((recording) => (
-            <div className="table-row" key={recording.id}>
-              <strong>{recording.name}</strong>
-              <span>{recording.durationSeconds}s</span>
-              <b>{recording.status}</b>
-            </div>
-          ))}
+    <article className="panel wide-panel">
+      <PanelHeader icon={FileAudio} title="Recordings" meta={`${admin.recordings.length} files`} />
+      <div className="table-list">
+        {admin.recordings.map((recording) => (
+          <div className="table-row" key={recording.id}>
+            <strong>{recording.name}</strong>
+            <span>{recording.durationSeconds}s</span>
+            <b>{recording.status}</b>
+          </div>
+        ))}
+      </div>
+    </article>
+  );
+}
+
+function UsersPanel({ onChanged, users }: { onChanged: () => Promise<void>; users: PublicUser[] }) {
+  return (
+    <article className="panel users-panel">
+      <PanelHeader icon={Users} title="Users" meta={`${users.length} seats`} />
+      <CreateUserForm onChanged={onChanged} />
+      <UserList onChanged={onChanged} users={users} />
+    </article>
+  );
+}
+
+function UserList({ onChanged, users }: { onChanged: () => Promise<void>; users: PublicUser[] }) {
+  const [pendingId, setPendingId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function remove(user: PublicUser) {
+    if (!window.confirm(`Delete ${user.name}?`)) {
+      return;
+    }
+    setPendingId(user.id);
+    setError(null);
+    try {
+      await deleteUser(user.id);
+      await onChanged();
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : "Could not delete user");
+    } finally {
+      setPendingId(null);
+    }
+  }
+
+  return (
+    <div className="table-list">
+      {error && <p className="form-error">{error}</p>}
+      {users.map((user) => (
+        <div className="table-row user-row" key={user.id}>
+          <strong>{user.name}</strong>
+          <span>{user.email}</span>
+          <b>{user.role}</b>
+          <button
+            className="icon-button danger-icon"
+            disabled={pendingId === user.id}
+            onClick={() => remove(user)}
+            title="Delete user"
+            type="button"
+          >
+            <Trash2 size={16} />
+          </button>
         </div>
-      </article>
-      <article className="panel">
-        <PanelHeader icon={Users} title="Users" meta={`${admin.users.length} seats`} />
-        <div className="table-list">
-          {admin.users.map((agent) => (
-            <div className="table-row" key={agent.id}>
-              <strong>{agent.name}</strong>
-              <span>{agent.email}</span>
-              <b>{agent.role}</b>
-            </div>
-          ))}
-        </div>
-      </article>
+      ))}
     </div>
+  );
+}
+
+function CreateUserForm({ onChanged }: { onChanged: () => Promise<void> }) {
+  const [email, setEmail] = useState("");
+  const [name, setName] = useState("");
+  const [role, setRole] = useState<"agent" | "admin">("agent");
+  const [password, setPassword] = useState("");
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [credentials, setCredentials] = useState<string | null>(null);
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setPending(true);
+    setError(null);
+    setCredentials(null);
+    try {
+      const created = await createUser({ email, name, role, password });
+      if (created.agentCredentials) {
+        setCredentials(`${created.agentCredentials.sipUsername} / ${created.agentCredentials.sipPassword}`);
+      }
+      setEmail("");
+      setName("");
+      setPassword("");
+      await onChanged();
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : "Could not create user");
+    } finally {
+      setPending(false);
+    }
+  }
+
+  return (
+    <form className="stack-form user-create-form" onSubmit={submit}>
+      <div className="inline-fields">
+        <label>
+          Name
+          <input onChange={(event) => setName(event.target.value)} placeholder="Agent name" required value={name} />
+        </label>
+        <label>
+          Role
+          <select onChange={(event) => setRole(event.target.value as typeof role)} value={role}>
+            <option value="agent">agent</option>
+            <option value="admin">admin</option>
+          </select>
+        </label>
+      </div>
+      <label>
+        Email
+        <input onChange={(event) => setEmail(event.target.value)} placeholder="agent@example.com" required type="email" value={email} />
+      </label>
+      <label>
+        Password
+        <input
+          minLength={12}
+          onChange={(event) => setPassword(event.target.value)}
+          placeholder="At least 12 characters"
+          required
+          type="password"
+          value={password}
+        />
+      </label>
+      {error && <p className="form-error">{error}</p>}
+      {credentials && <p className="copy-note">SIP: {credentials}</p>}
+      <button className="primary-action" disabled={pending} type="submit">
+        <UserPlus size={17} />
+        {pending ? "Creating" : "Create user"}
+      </button>
+    </form>
   );
 }
 
@@ -1454,11 +1610,9 @@ function SettingsView({ admin, onChanged }: { admin: AdminOverviewResponse; onCh
         <PanelHeader icon={Ban} title="Suppression" meta={`${admin.suppression.length} entries`} />
         <div className="table-list">
           {admin.suppression.map((item) => (
-            <div className="table-row" key={item.id}>
-              <strong>{item.phoneNumber}</strong>
-              <span>{item.reason}</span>
-            </div>
+            <SuppressionRow item={item} key={item.id} onChanged={onChanged} />
           ))}
+          {admin.suppression.length === 0 && <div className="empty-row">No suppressed numbers</div>}
         </div>
       </article>
       <CreateSuppressionForm onChanged={onChanged} />
@@ -1469,7 +1623,45 @@ function SettingsView({ admin, onChanged }: { admin: AdminOverviewResponse; onCh
           <Metric label="Live calls" value={admin.stats.liveCalls} icon={PhoneCall} />
         </div>
       </article>
+      <UsersPanel onChanged={onChanged} users={admin.users} />
     </div>
+  );
+}
+
+function SuppressionRow({
+  item,
+  onChanged
+}: {
+  item: AdminOverviewResponse["suppression"][number];
+  onChanged: () => Promise<void>;
+}) {
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function remove() {
+    setPending(true);
+    setError(null);
+    try {
+      await deleteSuppression(item.id);
+      await onChanged();
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : "Could not delete suppression entry");
+    } finally {
+      setPending(false);
+    }
+  }
+
+  return (
+    <>
+      <div className="table-row suppression-row">
+        <strong>{item.phoneNumber}</strong>
+        <span>{item.reason}</span>
+        <button className="icon-button danger-icon" disabled={pending} onClick={remove} title="Remove suppression" type="button">
+          <Trash2 size={16} />
+        </button>
+      </div>
+      {error && <p className="form-error">{error}</p>}
+    </>
   );
 }
 
