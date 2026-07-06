@@ -263,10 +263,33 @@ input[type="checkbox"] {
   color: #9d2518;
 }
 
+.status-badge.neutral {
+  background: #f8fafc;
+  color: #607086;
+}
+
 .agent-grid {
   display: grid;
   gap: 16px;
   grid-template-columns: minmax(280px, 0.85fr) minmax(360px, 1.25fr) minmax(280px, 0.85fr);
+}
+
+.active-agent-grid {
+  grid-template-columns: minmax(320px, 0.9fr) minmax(380px, 1.1fr) minmax(280px, 0.75fr);
+}
+
+.ready-desk-grid,
+.manual-dial-grid {
+  display: grid;
+  gap: 18px;
+}
+
+.ready-desk-grid {
+  grid-template-columns: minmax(520px, 1.2fr) minmax(360px, 0.9fr);
+}
+
+.manual-dial-grid {
+  grid-template-columns: minmax(420px, 0.9fr) minmax(460px, 1fr);
 }
 
 .panel {
@@ -318,6 +341,159 @@ input[type="checkbox"] {
 
 .queue-action {
   width: 100%;
+}
+
+.surface-heading {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.surface-heading h2,
+.surface-heading h3 {
+  color: #17202a;
+  font-size: 24px;
+  letter-spacing: 0;
+  line-height: 1.25;
+  margin: 0;
+}
+
+.surface-heading p {
+  color: #667789;
+  font-size: 13px;
+  line-height: 1.45;
+  margin: 0;
+}
+
+.next-leads-panel,
+.agent-status-panel,
+.manual-dial-panel,
+.pre-call-panel {
+  min-height: 640px;
+}
+
+.lead-table {
+  display: grid;
+  gap: 8px;
+}
+
+.lead-table-row {
+  align-items: center;
+  border: 1px solid #e7ecf2;
+  border-radius: 8px;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(140px, 1.15fr) minmax(130px, 0.95fr) minmax(92px, 0.7fr) 72px;
+  min-height: 42px;
+  padding: 0 10px;
+}
+
+.lead-table-head {
+  background: #f8f8f8;
+  color: #667789;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.lead-table-row strong {
+  color: #17202a;
+  font-size: 13px;
+}
+
+.lead-table-row span {
+  color: #17202a;
+  font-size: 12px;
+}
+
+.pill-action {
+  background: #ffffff;
+  border: 1px solid #0f766e;
+  border-radius: 999px;
+  color: #0f766e;
+  font-size: 11px;
+  font-weight: 800;
+  min-height: 26px;
+  padding: 0 12px;
+}
+
+.pill-action:disabled {
+  border-color: #ccd6e1;
+  color: #8da0b4;
+  cursor: not-allowed;
+}
+
+.recommended-call {
+  background: #ddf7f2;
+  border: 1px solid #0f766e;
+  border-radius: 8px;
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+  min-height: 196px;
+  padding: 14px;
+}
+
+.recommended-call h3,
+.empty-call-panel h3 {
+  color: #17202a;
+  font-size: 20px;
+  letter-spacing: 0;
+  margin: 0;
+}
+
+.recommended-call p,
+.empty-call-panel p {
+  color: #667789;
+  font-size: 13px;
+  line-height: 1.45;
+  margin: 0;
+}
+
+.teal-action {
+  background: #0f766e;
+  box-shadow: 0 6px 16px -6px rgba(15, 118, 110, 0.24);
+}
+
+.agent-status-panel {
+  display: grid;
+  gap: 14px;
+  align-content: start;
+}
+
+.status-stack {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.manual-open-action {
+  justify-self: start;
+}
+
+.status-metric-list {
+  display: grid;
+  gap: 12px;
+  max-width: 180px;
+}
+
+.status-metric-list .metric-card {
+  background: #f8fafc;
+  min-height: 72px;
+}
+
+.status-metric-list .metric-card strong {
+  color: #0f766e;
+  font-size: 22px;
+}
+
+.empty-call-panel {
+  background: #f8fafc;
+  border: 1px solid #e7ecf2;
+  border-radius: 8px;
+  display: grid;
+  gap: 10px;
+  min-height: 220px;
+  padding: 14px;
 }
 
 .lead-row {
@@ -552,6 +728,132 @@ input[type="checkbox"] {
   grid-template-columns: minmax(0, 1fr) 38px 38px;
 }
 
+.manual-dial-panel,
+.pre-call-panel {
+  align-content: start;
+  display: grid;
+  gap: 16px;
+}
+
+.manual-dial-form {
+  display: grid;
+  gap: 16px;
+  max-width: 520px;
+}
+
+.manual-dial-form label {
+  max-width: 360px;
+}
+
+.large-keypad {
+  border: 1px solid #e7ecf2;
+  border-radius: 8px;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  max-width: 320px;
+  padding: 12px;
+}
+
+.large-keypad button {
+  background: #ffffff;
+  border: 1px solid #e7ecf2;
+  border-radius: 8px;
+  color: #17202a;
+  font-size: 16px;
+  font-weight: 800;
+  min-height: 44px;
+}
+
+.large-keypad button:hover {
+  border-color: #0f766e;
+}
+
+.manual-dial-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-start;
+}
+
+.check-list {
+  display: grid;
+  gap: 12px;
+}
+
+.check-row {
+  align-items: center;
+  border: 1px solid #e7ecf2;
+  border-radius: 8px;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(150px, 0.55fr) minmax(180px, 1fr);
+  min-height: 52px;
+  padding: 10px 12px;
+}
+
+.check-badge {
+  border-radius: 999px;
+  color: #ffffff;
+  display: inline-flex;
+  font-size: 11px;
+  font-weight: 800;
+  min-height: 26px;
+  padding: 6px 10px;
+}
+
+.check-badge.pass {
+  background: #16a34a;
+}
+
+.check-badge.warn {
+  background: #f97316;
+}
+
+.check-badge.fail {
+  background: #c2413a;
+}
+
+.check-row strong,
+.check-row small {
+  display: block;
+}
+
+.check-row strong {
+  color: #17202a;
+  font-size: 13px;
+}
+
+.check-row small {
+  color: #667789;
+  font-size: 12px;
+  margin-top: 3px;
+}
+
+.manual-warning {
+  align-items: flex-start;
+  background: #fef3c7;
+  border: 1px solid #f59e0b;
+  border-radius: 8px;
+  color: #92400e;
+  display: flex;
+  gap: 12px;
+  padding: 14px;
+}
+
+.manual-warning strong {
+  display: block;
+  font-size: 15px;
+  margin-bottom: 4px;
+}
+
+.manual-warning p {
+  font-size: 13px;
+  line-height: 1.45;
+  margin: 0;
+}
+
 .validation-result {
   align-items: center;
   border-radius: 8px;
@@ -744,7 +1046,9 @@ button.table-row {
 }
 
 @media (max-width: 1180px) {
-  .agent-grid {
+  .agent-grid,
+  .ready-desk-grid,
+  .manual-dial-grid {
     grid-template-columns: minmax(280px, 0.9fr) minmax(360px, 1.1fr);
   }
 
@@ -800,6 +1104,8 @@ button.table-row {
   }
 
   .agent-grid,
+  .ready-desk-grid,
+  .manual-dial-grid,
   .softphone-stack,
   .operations-grid,
   .operations-grid.two {
@@ -820,12 +1126,28 @@ button.table-row {
   }
 
   .table-row,
+  .lead-table-row,
   .history-row,
   .import-row,
   .failure-row,
   .contact-row,
+  .check-row,
   .contact-toolbar,
   .inline-fields {
     grid-template-columns: 1fr;
+  }
+
+  .next-leads-panel,
+  .agent-status-panel,
+  .manual-dial-panel,
+  .pre-call-panel {
+    min-height: auto;
+  }
+
+  .status-metric-list,
+  .manual-dial-form,
+  .manual-dial-form label,
+  .large-keypad {
+    max-width: none;
   }
 }

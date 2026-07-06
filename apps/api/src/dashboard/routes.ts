@@ -220,6 +220,39 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
     return buildAgentDeskResponse(pool, publicUser);
   });
 
+  app.post("/agent/leads/:contactId/call", async (request, reply): Promise<AgentDeskResponse | void> => {
+    const user = await requireUser(request, config, pool);
+    if (!user) {
+      return reply.code(401).send({ message: "Unauthorized" });
+    }
+
+    const publicUser = toPublicUser(user);
+    const activeCall = await getActiveCall(pool, publicUser.id);
+    if (activeCall) {
+      return reply.code(409).send({ message: "An active call is already in progress" });
+    }
+
+    const params = z.object({ contactId: z.string().uuid() }).parse(request.params);
+    const contact = await getCallableContact(pool, params.contactId);
+    if (!contact) {
+      return reply.code(409).send({ message: "Lead is not callable" });
+    }
+
+    const agent = await ensureAgentForUser(pool, config, publicUser);
+    await createDialerCall(pool, {
+      agentId: agent.id,
+      campaignId: contact.campaignId,
+      contactId: contact.id,
+      destinationNumber: contact.phoneNumber,
+      normalizedDestinationNumber: contact.normalizedPhoneNumber,
+      manualDial: false,
+      callRecordingEnabled: contact.callRecordingEnabled,
+      eventType: "lead_call_started"
+    });
+
+    return buildAgentDeskResponse(pool, publicUser);
+  });
+
   app.post("/agent/calls/:callId/end", async (request, reply): Promise<AgentDeskResponse | void> => {
     const user = await requireUser(request, config, pool);
     if (!user) {
@@ -591,6 +624,56 @@ async function getNextCallableContact(
     id: row.id,
     phoneNumber: row.phone_number,
     normalizedPhoneNumber: row.normalized_phone_number
+  };
+}
+
+async function getCallableContact(
+  pool: pg.Pool,
+  contactId: string
+): Promise<{
+  id: string;
+  campaignId: string;
+  phoneNumber: string;
+  normalizedPhoneNumber: string;
+  callRecordingEnabled: boolean;
+} | null> {
+  const result = await pool.query<{
+    id: string;
+    campaign_id: string;
+    phone_number: string;
+    normalized_phone_number: string;
+    call_recording_enabled: boolean;
+  }>(
+    `
+      select
+        contacts.id,
+        contacts.campaign_id,
+        contacts.phone_number,
+        contacts.normalized_phone_number,
+        campaigns.call_recording_enabled
+      from contacts
+      join campaigns on campaigns.id = contacts.campaign_id
+      left join suppression_entries
+        on suppression_entries.normalized_phone_number = contacts.normalized_phone_number
+      where contacts.id = $1
+        and contacts.status not in ('calling', 'completed', 'suppressed')
+        and suppression_entries.id is null
+      limit 1
+    `,
+    [contactId]
+  );
+
+  const row = result.rows[0];
+  if (!row) {
+    return null;
+  }
+
+  return {
+    id: row.id,
+    campaignId: row.campaign_id,
+    phoneNumber: row.phone_number,
+    normalizedPhoneNumber: row.normalized_phone_number,
+    callRecordingEnabled: row.call_recording_enabled
   };
 }
 

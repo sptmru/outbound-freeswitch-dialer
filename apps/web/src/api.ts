@@ -128,6 +128,12 @@ export async function startNextCall(): Promise<AgentDeskResponse> {
   });
 }
 
+export async function startLeadCall(contactId: string): Promise<AgentDeskResponse> {
+  return apiFetch<AgentDeskResponse>(`/agent/leads/${contactId}/call`, {
+    method: "POST"
+  });
+}
+
 export async function endCall(callId: string, input: EndCallRequest = {}): Promise<AgentDeskResponse> {
   return apiFetch<AgentDeskResponse>(`/agent/calls/${callId}/end`, {
     method: "POST",

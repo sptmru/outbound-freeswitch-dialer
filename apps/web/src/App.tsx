@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import {
   Activity,
+  AlertTriangle,
   Ban,
   BarChart3,
   CheckCircle2,
@@ -40,6 +41,7 @@ import {
   importCampaignCsvFile,
   login,
   setStoredToken,
+  startLeadCall,
   startManualCall,
   startNextCall,
   suppressContact,
@@ -311,10 +313,17 @@ function AgentDesk({
   onDeskChanged: (desk: AgentDeskResponse) => void;
   onManualDialNumberChange: (phoneNumber: string) => void;
 }) {
+  const [deskMode, setDeskMode] = useState<"ready" | "manual">("ready");
   const [callNextPending, setCallNextPending] = useState(false);
   const [callNextError, setCallNextError] = useState<string | null>(null);
   const [endCallPending, setEndCallPending] = useState(false);
   const [endCallError, setEndCallError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (manualDialNumber && !desk.activeCall && desk.campaign.manualDialingEnabled) {
+      setDeskMode("manual");
+    }
+  }, [desk.activeCall, desk.campaign.manualDialingEnabled, manualDialNumber]);
 
   async function callNext() {
     setCallNextPending(true);
@@ -323,6 +332,18 @@ function AgentDesk({
       onDeskChanged(await startNextCall());
     } catch (error) {
       setCallNextError(error instanceof Error ? error.message : "Could not start next call");
+    } finally {
+      setCallNextPending(false);
+    }
+  }
+
+  async function callLead(lead: LeadSummary) {
+    setCallNextPending(true);
+    setCallNextError(null);
+    try {
+      onDeskChanged(await startLeadCall(lead.id));
+    } catch (error) {
+      setCallNextError(error instanceof Error ? error.message : "Could not start lead call");
     } finally {
       setCallNextPending(false);
     }
@@ -340,16 +361,44 @@ function AgentDesk({
     }
   }
 
-  return (
-    <section className="agent-grid">
-      <LeadQueue error={callNextError} leads={desk.leads} onCallNext={callNext} pending={callNextPending} />
-      <ActiveCall desk={desk} error={endCallError} onHangUp={hangUp} pending={endCallPending} />
-      <SoftphonePanel
+  if (desk.activeCall) {
+    return (
+      <section className="agent-grid active-agent-grid">
+        <LeadQueue
+          error={callNextError}
+          leads={desk.leads}
+          onCallLead={callLead}
+          onCallNext={callNext}
+          pending={callNextPending}
+        />
+        <ActiveCall desk={desk} error={endCallError} onHangUp={hangUp} pending={endCallPending} />
+        <AgentStatusPanel desk={desk} mode="active" onOpenManual={() => setDeskMode("manual")} />
+      </section>
+    );
+  }
+
+  if (deskMode === "manual" && desk.campaign.manualDialingEnabled) {
+    return (
+      <ManualDialSurface
         desk={desk}
-        manualDialNumber={manualDialNumber}
         onDeskChanged={onDeskChanged}
-        onManualDialNumberChange={onManualDialNumberChange}
+        onOpenQueue={() => setDeskMode("ready")}
+        onPhoneNumberChange={onManualDialNumberChange}
+        phoneNumber={manualDialNumber}
       />
+    );
+  }
+
+  return (
+    <section className="ready-desk-grid">
+      <LeadQueue
+        error={callNextError}
+        leads={desk.leads}
+        onCallLead={callLead}
+        onCallNext={callNext}
+        pending={callNextPending}
+      />
+      <AgentStatusPanel desk={desk} mode="ready" onOpenManual={() => setDeskMode("manual")} />
     </section>
   );
 }
@@ -357,38 +406,264 @@ function AgentDesk({
 function LeadQueue({
   error,
   leads,
+  onCallLead,
   onCallNext,
   pending
 }: {
   error: string | null;
   leads: LeadSummary[];
+  onCallLead: (lead: LeadSummary) => Promise<void>;
   onCallNext: () => Promise<void>;
   pending: boolean;
 }) {
+  const recommended = leads.find((lead) => lead.status === "ready") ?? leads[0];
+
   return (
-    <article className="panel lead-queue">
-      <PanelHeader icon={Users} title="Lead queue" meta={`${leads.length} loaded`} />
-      <button className="primary-action queue-action" disabled={pending} onClick={onCallNext} type="button">
-        <PhoneCall size={17} />
-        {pending ? "Starting" : "Call next"}
-      </button>
+    <article className="panel lead-queue next-leads-panel">
+      <div className="surface-heading">
+        <h2>Next leads</h2>
+        <p>No live call is active. Start the next call from the campaign queue.</p>
+      </div>
       {error && <p className="form-error">{error}</p>}
-      <div className="lead-list">
+      <div className="lead-table" role="table" aria-label="Next leads">
+        <div className="lead-table-row lead-table-head" role="row">
+          <span>Lead</span>
+          <span>Phone</span>
+          <span>Best time</span>
+          <span>Action</span>
+        </div>
         {leads.map((lead) => (
-          <div className="lead-row" key={lead.id}>
-            <div className={`lead-dot ${lead.status}`} />
-            <div>
-              <strong>{lead.name}</strong>
-              <span>{lead.company}</span>
-            </div>
-            <div className="lead-meta">
-              <span>{lead.phoneNumber}</span>
-              <b>{lead.status}</b>
-            </div>
+          <div className="lead-table-row" key={lead.id} role="row">
+            <strong>{lead.name}</strong>
+            <span>{lead.phoneNumber}</span>
+            <span>{lead.status === "ready" ? "Now" : lead.status}</span>
+            <button
+              className="pill-action"
+              disabled={pending || lead.status !== "ready"}
+              onClick={() => onCallLead(lead)}
+              type="button"
+            >
+              Call
+            </button>
           </div>
         ))}
       </div>
+      {recommended && (
+        <div className="recommended-call">
+          <h3>Recommended next: {recommended.name}</h3>
+          <p>
+            {recommended.company}. Default voicemail: {recommended.fields[0]?.value ?? "campaign default"}.
+          </p>
+          <button className="primary-action teal-action" disabled={pending} onClick={onCallNext} type="button">
+            <PhoneCall size={17} />
+            {pending ? "Starting" : "Start next call"}
+          </button>
+        </div>
+      )}
     </article>
+  );
+}
+
+function AgentStatusPanel({
+  desk,
+  mode,
+  onOpenManual
+}: {
+  desk: AgentDeskResponse;
+  mode: "ready" | "active";
+  onOpenManual: () => void;
+}) {
+  return (
+    <article className="panel agent-status-panel">
+      <div className="surface-heading">
+        <h2>Agent status</h2>
+      </div>
+      <div className="status-stack">
+        <StatusBadge label={mode === "active" ? "In call" : "Ready"} tone="good" />
+        <StatusBadge
+          label={desk.campaign.manualDialingEnabled ? "Manual dialing enabled" : "Manual dialing disabled"}
+          tone={desk.campaign.manualDialingEnabled ? "good" : "neutral"}
+        />
+      </div>
+      {desk.campaign.manualDialingEnabled && (
+        <button className="secondary-action manual-open-action" onClick={onOpenManual} type="button">
+          <Phone size={17} />
+          Manual dialing
+        </button>
+      )}
+      <div className="status-metric-list">
+        <Metric label="Callable leads" value={desk.campaign.callableLeads} icon={Users} />
+        <Metric label="Calls today" value={desk.metrics.todayCalls} icon={PhoneForwarded} />
+        <Metric label="Blocked numbers" value={desk.metrics.suppressed} icon={Ban} />
+      </div>
+      {!desk.activeCall && (
+        <div className="empty-call-panel">
+          <h3>No live call</h3>
+          <p>When a call starts, this panel shows timer, lead information, voicemail controls, and call outcome options.</p>
+        </div>
+      )}
+    </article>
+  );
+}
+
+function ManualDialSurface({
+  desk,
+  onDeskChanged,
+  onOpenQueue,
+  onPhoneNumberChange,
+  phoneNumber
+}: {
+  desk: AgentDeskResponse;
+  onDeskChanged: (desk: AgentDeskResponse) => void;
+  onOpenQueue: () => void;
+  onPhoneNumberChange: (phoneNumber: string) => void;
+  phoneNumber: string;
+}) {
+  const [note, setNote] = useState("");
+  const [result, setResult] = useState<ManualDialValidationResponse | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [pending, setPending] = useState(false);
+  const [startPending, setStartPending] = useState(false);
+
+  useEffect(() => {
+    setResult(null);
+    setError(null);
+  }, [phoneNumber]);
+
+  async function validate(event?: FormEvent<HTMLFormElement>) {
+    event?.preventDefault();
+    setPending(true);
+    setError(null);
+    try {
+      setResult(await validateManualDial(phoneNumber));
+    } catch (validateError) {
+      setError(validateError instanceof Error ? validateError.message : "Could not validate number");
+    } finally {
+      setPending(false);
+    }
+  }
+
+  async function startCall() {
+    setStartPending(true);
+    setError(null);
+    try {
+      onDeskChanged(await startManualCall({ phoneNumber }));
+    } catch (startError) {
+      setError(startError instanceof Error ? startError.message : "Could not start call");
+    } finally {
+      setStartPending(false);
+    }
+  }
+
+  function pressKey(key: string) {
+    onPhoneNumberChange(`${phoneNumber}${key}`);
+  }
+
+  const checks = result?.checks ?? [
+    { label: "Number format", status: "warn" as const, detail: "Check number before dialing" },
+    { label: "Blocked list", status: "warn" as const, detail: "Not checked yet" },
+    {
+      label: "Campaign permission",
+      status: desk.campaign.manualDialingEnabled ? ("pass" as const) : ("fail" as const),
+      detail: desk.campaign.manualDialingEnabled ? "Manual dialing allowed" : "Manual dialing disabled"
+    }
+  ];
+
+  return (
+    <section className="manual-dial-grid">
+      <article className="panel manual-dial-panel">
+        <div className="surface-heading">
+          <h2>Manual dialing</h2>
+          <p>Use this only when campaign rules allow it. The app checks blocked numbers before dialing.</p>
+        </div>
+        <form className="manual-dial-form" onSubmit={validate}>
+          <label>
+            Phone number
+            <input
+              onChange={(event) => onPhoneNumberChange(event.target.value)}
+              placeholder="+1 415 555 0000"
+              value={phoneNumber}
+            />
+          </label>
+          <label>
+            Lead name or note
+            <input onChange={(event) => setNote(event.target.value)} placeholder="Optional" value={note} />
+          </label>
+          <div className="large-keypad" aria-label="Dial pad">
+            {["1", "2", "3", "4", "5", "6", "7", "8", "9", "*", "0", "#"].map((key) => (
+              <button key={key} onClick={() => pressKey(key)} type="button">
+                {key}
+              </button>
+            ))}
+          </div>
+          <div className="manual-dial-actions">
+            <button className="secondary-action" disabled={pending || !phoneNumber.trim()} type="submit">
+              <CheckCircle2 size={17} />
+              {pending ? "Checking" : "Check number"}
+            </button>
+            <button
+              className="primary-action teal-action"
+              disabled={startPending || !phoneNumber.trim()}
+              onClick={startCall}
+              type="button"
+            >
+              <PhoneCall size={17} />
+              {startPending ? "Starting" : "Start call"}
+            </button>
+            <button className="icon-button" onClick={onOpenQueue} title="Back to queue" type="button">
+              <Users size={17} />
+            </button>
+          </div>
+        </form>
+      </article>
+      <article className="panel pre-call-panel">
+        <div className="surface-heading">
+          <h2>Pre-call checks</h2>
+        </div>
+        {error && <p className="form-error">{error}</p>}
+        <div className="check-list">
+          {checks.map((check) => (
+            <CheckRow detail={check.detail} key={check.label} label={check.label} status={check.status} />
+          ))}
+          <CheckRow detail="Campaign default" label="Recording default" status="pass" value="Solar Intro v3" />
+          <CheckRow
+            detail={desk.campaign.callRecordingEnabled ? "On for this campaign" : "Off for this campaign"}
+            label="Call recording"
+            status={desk.campaign.callRecordingEnabled ? "pass" : "warn"}
+          />
+        </div>
+        <div className="manual-warning">
+          <AlertTriangle size={18} />
+          <div>
+            <strong>Admin-controlled feature</strong>
+            <p>If manual dialing is disabled, this screen is hidden and agents can only call imported campaign leads.</p>
+          </div>
+        </div>
+      </article>
+    </section>
+  );
+}
+
+function CheckRow({
+  detail,
+  label,
+  status,
+  value
+}: {
+  detail: string;
+  label: string;
+  status: "pass" | "warn" | "fail";
+  value?: string;
+}) {
+  const badgeLabel = value ?? (status === "pass" ? "Valid" : status === "warn" ? "Review" : "Blocked");
+  return (
+    <div className="check-row">
+      <span className={`check-badge ${status}`}>{badgeLabel}</span>
+      <div>
+        <strong>{label}</strong>
+        <small>{detail}</small>
+      </div>
+    </div>
   );
 }
 
@@ -1280,7 +1555,7 @@ function Metric({
   );
 }
 
-function StatusBadge({ label, tone }: { label: string; tone: "good" | "bad" }) {
+function StatusBadge({ label, tone }: { label: string; tone: "good" | "bad" | "neutral" }) {
   return (
     <span className={`status-badge ${tone}`}>
       <Clock3 size={14} />
