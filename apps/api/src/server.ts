@@ -34,6 +34,12 @@ app.setErrorHandler((error, _request, reply) => {
     });
   }
 
+  if (isHttpError(error)) {
+    return reply.code(error.statusCode).send({
+      message: error.message
+    });
+  }
+
   app.log.error(error);
   return reply.code(500).send({
     message: "Internal server error"
@@ -42,6 +48,19 @@ app.setErrorHandler((error, _request, reply) => {
 
 function isPostgresError(error: unknown, code: string): error is { code: string } {
   return typeof error === "object" && error !== null && "code" in error && error.code === code;
+}
+
+function isHttpError(error: unknown): error is { message: string; statusCode: number } {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "statusCode" in error &&
+    typeof error.statusCode === "number" &&
+    error.statusCode >= 400 &&
+    error.statusCode < 500 &&
+    "message" in error &&
+    typeof error.message === "string"
+  );
 }
 
 await app.register(cors, {
