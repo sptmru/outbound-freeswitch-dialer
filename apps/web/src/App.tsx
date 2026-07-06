@@ -146,44 +146,49 @@ export function App() {
     return <LoginScreen error={error} onLogin={handleLogin} />;
   }
 
+  const isAgentOnly = user.role === "agent";
+  const activeView = isAgentOnly ? "desk" : view;
+
   return (
-    <div className="app-shell">
-      <aside className="sidebar">
-        <div className="brand">
-          <div className="brand-mark">
-            <Radio size={19} />
+    <div className={isAgentOnly ? "app-shell agent-shell" : "app-shell"}>
+      {!isAgentOnly && (
+        <aside className="sidebar">
+          <div className="brand">
+            <div className="brand-mark">
+              <Radio size={19} />
+            </div>
+            <div>
+              <strong>Outbound</strong>
+              <span>Dialer</span>
+            </div>
           </div>
-          <div>
-            <strong>Outbound</strong>
-            <span>Dialer</span>
+          <nav className="nav-list">
+            {navItems.map((item) => {
+              const Icon = item.icon;
+              return (
+                <button
+                  className={item.id === activeView ? "nav-item active" : "nav-item"}
+                  key={item.id}
+                  onClick={() => setView(item.id)}
+                  type="button"
+                  title={item.label}
+                >
+                  <Icon size={18} />
+                  <span>{item.label}</span>
+                </button>
+              );
+            })}
+          </nav>
+          <div className="sidebar-foot">
+            <span>{desk.campaign.name}</span>
+            <strong>{desk.campaign.status}</strong>
           </div>
-        </div>
-        <nav className="nav-list">
-          {navItems.map((item) => {
-            const Icon = item.icon;
-            return (
-              <button
-                className={item.id === view ? "nav-item active" : "nav-item"}
-                key={item.id}
-                onClick={() => setView(item.id)}
-                type="button"
-                title={item.label}
-              >
-                <Icon size={18} />
-                <span>{item.label}</span>
-              </button>
-            );
-          })}
-        </nav>
-        <div className="sidebar-foot">
-          <span>{desk.campaign.name}</span>
-          <strong>{desk.campaign.status}</strong>
-        </div>
-      </aside>
+        </aside>
+      )}
 
       <main className="workspace">
         <TopBar desk={desk} user={user} onLogout={handleLogout} />
-        {view === "desk" && (
+        {activeView === "desk" && (
           <AgentDesk
             desk={desk}
             manualDialNumber={manualDialNumber}
@@ -191,7 +196,7 @@ export function App() {
             onManualDialNumberChange={setManualDialNumber}
           />
         )}
-        {view !== "desk" && (
+        {activeView !== "desk" && (
           <AdminView
             admin={admin}
             csvImports={csvImports}
@@ -200,7 +205,7 @@ export function App() {
               setManualDialNumber(phoneNumber);
               setView("desk");
             }}
-            view={view}
+            view={activeView}
             user={user}
           />
         )}

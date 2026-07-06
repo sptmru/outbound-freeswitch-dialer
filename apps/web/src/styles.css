@@ -121,6 +121,10 @@ input[type="checkbox"] {
   min-height: 100vh;
 }
 
+.agent-shell {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .sidebar {
   background: #101820;
   color: #d9e4ef;
