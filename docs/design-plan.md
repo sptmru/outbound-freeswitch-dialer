@@ -173,13 +173,39 @@ The UI should expose these states as operational signals, not as developer jargo
 
 ## Design Deliverables
 
-- Figma file URL.
+- Figma file URL: https://www.figma.com/design/o8J7yyhE8vY9HWLETUZ5O9
 - Agent dashboard frame.
 - Admin frames.
 - Campaign and CSV mapping frames.
 - Component set for buttons, inputs, badges, status indicators, and call controls.
 - State matrix matching backend call states.
 - Implementation notes for frontend components.
+
+## Current Figma v1 Board
+
+The first client-review board is `Outbound Dialer - Client Design v1`:
+
+- Cover / Design overview.
+- Login.
+- Agent Desk.
+- Agent Desk - Ready.
+- Agent Desk - Manual Dialing.
+- Voicemail Drop.
+- Campaigns and CSV Import.
+- Recordings and Users.
+- Call History and Operations.
+- Settings and Suppression.
+
+The board is designed as a product walkthrough: import CSV, map fields, call lead, surface VM/beep signal, drop voicemail, release agent, finish playback, and log outcome.
+
+Applied revisions before client review:
+
+- Remove TLS and trunk/provider setup settings from visible UI.
+- Remove implementation-specific terms from UI copy.
+- Add Login.
+- Add Agent Desk idle/no-live-call state.
+- Add Agent Desk manual-dialing-enabled state.
+- Remove the `single tenant workspace` sidebar subtitle.
 
 ## Design Acceptance Criteria
 
