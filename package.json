@@ -1,0 +1,19 @@
+{
+  "name": "outbound-dialer",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm --workspace @outbound-dialer/shared run build && npm --workspace @outbound-dialer/api run build",
+    "dev:api": "npm --workspace @outbound-dialer/api run dev",
+    "lint": "npm run lint --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "typecheck": "npm --workspace @outbound-dialer/shared run typecheck && npm --workspace @outbound-dialer/api run typecheck"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

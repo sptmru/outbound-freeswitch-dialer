@@ -1,0 +1,64 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: ../..
+      dockerfile: apps/api/Dockerfile
+    restart: unless-stopped
+    env_file:
+      - ${APP_ENV_FILE:-../../.env}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      freeswitch:
+        condition: service_started
+    ports:
+      - "${API_PUBLIC_PORT:-3000}:3000"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  freeswitch:
+    image: ${FREESWITCH_IMAGE:-safarov/freeswitch:latest}
+    restart: unless-stopped
+    env_file:
+      - ${APP_ENV_FILE:-../../.env}
+    environment:
+      FREESWITCH_ESL_PASSWORD: ${FREESWITCH_ESL_PASSWORD}
+      FREESWITCH_DOMAIN: ${FREESWITCH_DOMAIN}
+      FREESWITCH_EXTERNAL_SIP_IP: ${FREESWITCH_EXTERNAL_SIP_IP}
+      FREESWITCH_EXTERNAL_RTP_IP: ${FREESWITCH_EXTERNAL_RTP_IP}
+      MAXO_TRUNK_MODE: ${MAXO_TRUNK_MODE}
+      MAXO_SIP_PROXY: ${MAXO_SIP_PROXY}
+      MAXO_SIP_REALM: ${MAXO_SIP_REALM}
+      MAXO_OUTBOUND_PROXY: ${MAXO_OUTBOUND_PROXY}
+      MAXO_USERNAME: ${MAXO_USERNAME}
+      MAXO_PASSWORD: ${MAXO_PASSWORD}
+      MAXO_CALLER_ID: ${MAXO_CALLER_ID}
+    ports:
+      - "${SIP_PORT:-5060}:5060/udp"
+      - "${SIP_PORT:-5060}:5060/tcp"
+      - "${WSS_PORT:-7443}:7443/tcp"
+      - "${FREESWITCH_RTP_START_PORT:-16384}-${FREESWITCH_RTP_END_PORT:-16484}:${FREESWITCH_RTP_START_PORT:-16384}-${FREESWITCH_RTP_END_PORT:-16484}/udp"
+    volumes:
+      - ../freeswitch/conf:/etc/freeswitch/dialer:ro
+      - ../freeswitch/recordings:/var/lib/freeswitch/storage/recordings
+
+volumes:
+  postgres_data:

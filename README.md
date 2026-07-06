@@ -30,4 +30,58 @@ docs/
   adr/                 # Architecture decision records
 ```
 
-This repository currently contains planning documents only. Implementation should start from the architecture and delivery plan above.
+## Backend Foundation
+
+The first backend slice is now scaffolded:
+
+- `apps/api` - Fastify + TypeScript API with `/health`.
+- `packages/shared` - shared call state, outcome, role, and health contracts.
+- `apps/api/db/migrations` - initial PostgreSQL schema for users, agents, campaigns, contacts, calls, call events, recordings, suppression, settings, and VM/beep signal events.
+- `infra/docker/docker-compose.yml` - PostgreSQL, API, and FreeSWITCH services.
+- `scripts/deploy.sh` - Docker deployment entrypoint using `.env`.
+
+## Local Setup
+
+Install dependencies and build:
+
+```bash
+npm install
+npm run build
+```
+
+Validate the Docker Compose file against the example env:
+
+```bash
+APP_ENV_FILE="$(pwd)/.env.example" docker compose --env-file .env.example -f infra/docker/docker-compose.yml config
+```
+
+## Docker Deployment
+
+Create a real env file:
+
+```bash
+cp .env.example .env
+```
+
+Fill the required values in `.env`, especially:
+
+- `POSTGRES_PASSWORD`
+- `DATABASE_URL`
+- `FREESWITCH_ESL_PASSWORD`
+- `PUBLIC_APP_URL`
+- `FREESWITCH_DOMAIN`
+- Maxo trunk values once the provider details are available.
+
+Deploy:
+
+```bash
+./scripts/deploy.sh
+```
+
+The API exposes:
+
+```text
+GET /health
+```
+
+Health output includes PostgreSQL and FreeSWITCH ESL connectivity. The ESL check can be temporarily disabled with `FREESWITCH_ESL_ENABLED=false` while FreeSWITCH runtime configuration is still being finalized.
