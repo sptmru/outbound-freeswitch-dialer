@@ -8,11 +8,13 @@ import type {
   CreateSuppressionRequest,
   CsvImportDetailResponse,
   CsvImportHistoryResponse,
+  EndCallRequest,
   ImportCsvRequest,
   ImportCsvResponse,
   ManualDialValidationResponse,
   MutationResponse,
   PublicUser,
+  StartManualCallRequest,
   SuppressContactRequest
 } from "./types";
 
@@ -110,6 +112,26 @@ export async function validateManualDial(
   return apiFetch<ManualDialValidationResponse>("/agent/manual-dial/validate", {
     method: "POST",
     body: JSON.stringify({ phoneNumber })
+  });
+}
+
+export async function startManualCall(input: StartManualCallRequest): Promise<AgentDeskResponse> {
+  return apiFetch<AgentDeskResponse>("/agent/manual-dial/start", {
+    method: "POST",
+    body: JSON.stringify(input)
+  });
+}
+
+export async function startNextCall(): Promise<AgentDeskResponse> {
+  return apiFetch<AgentDeskResponse>("/agent/call-next", {
+    method: "POST"
+  });
+}
+
+export async function endCall(callId: string, input: EndCallRequest = {}): Promise<AgentDeskResponse> {
+  return apiFetch<AgentDeskResponse>(`/agent/calls/${callId}/end`, {
+    method: "POST",
+    body: JSON.stringify(input)
   });
 }
 

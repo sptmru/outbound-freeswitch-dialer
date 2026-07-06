@@ -8,6 +8,7 @@ export type {
   CreateSuppressionRequest,
   CsvImportDetailResponse,
   CsvImportHistoryResponse,
+  EndCallRequest,
   CsvImportSummary,
   ImportCsvRequest,
   ImportCsvResponse,
@@ -15,5 +16,6 @@ export type {
   ManualDialValidationResponse,
   MutationResponse,
   PublicUser,
+  StartManualCallRequest,
   SuppressContactRequest
 } from "@outbound-dialer/shared";

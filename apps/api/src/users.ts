@@ -99,6 +99,53 @@ export async function createUserWithOptionalAgent(
   }
 }
 
+export async function ensureAgentForUser(
+  pool: pg.Pool,
+  config: AppConfig,
+  user: PublicUser
+): Promise<{ id: string; sipUsername: string }> {
+  const existing = await pool.query<{
+    id: string;
+    sip_username: string;
+  }>("select id, sip_username from agents where user_id = $1 order by created_at asc limit 1", [user.id]);
+  if (existing.rows[0]) {
+    return {
+      id: existing.rows[0].id,
+      sipUsername: existing.rows[0].sip_username
+    };
+  }
+
+  const sipPassword = generateSecret(18);
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const sipUsername = await nextSipUsername(client, config.SIP_USERNAME_PREFIX);
+    const created = await client.query<{
+      id: string;
+      sip_username: string;
+    }>(
+      `
+        insert into agents (user_id, sip_username, sip_password_hash, sip_password_encrypted, display_name, status)
+        values ($1, $2, $3, $4, $5, 'ready')
+        returning id, sip_username
+      `,
+      [user.id, sipUsername, await hashSecret(sipPassword), encryptSecret(config, sipPassword), user.name]
+    );
+    await client.query("commit");
+    await provisionAgentDirectory(config, { sipUsername, sipPassword, displayName: user.name });
+    const row = created.rows[0];
+    return {
+      id: row.id,
+      sipUsername: row.sip_username
+    };
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 export async function bootstrapAdmin(pool: pg.Pool, config: AppConfig): Promise<PublicUser | null> {
   if (!config.BOOTSTRAP_ADMIN_EMAIL || !config.BOOTSTRAP_ADMIN_PASSWORD) {
     return null;

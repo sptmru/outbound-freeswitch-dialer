@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type pg from "pg";
+import { callOutcomes } from "@outbound-dialer/shared";
 import type {
   AdminOverviewResponse,
   AgentDeskResponse,
@@ -13,22 +14,28 @@ import type {
   CsvImportDetailResponse,
   CsvImportFailure,
   CsvImportHistoryResponse,
+  EndCallRequest,
   ImportCsvRequest,
   ImportCsvResponse,
   LeadSummary,
   ManualDialValidationResponse,
   MutationResponse,
   PublicUser,
+  StartManualCallRequest,
   SuppressContactRequest
 } from "@outbound-dialer/shared";
 import { z } from "zod";
 import { requireUser } from "../auth/routes.js";
 import type { AppConfig } from "../config.js";
-import { toPublicUser } from "../users.js";
+import { ensureAgentForUser, toPublicUser } from "../users.js";
 
 const manualDialValidationSchema = z.object({
   phoneNumber: z.string().min(3)
-});
+}) satisfies z.ZodType<StartManualCallRequest>;
+
+const endCallSchema = z.object({
+  outcome: z.enum(callOutcomes).optional()
+}) satisfies z.ZodType<EndCallRequest>;
 
 const createCampaignSchema = z.object({
   name: z.string().min(1).max(160),
@@ -132,37 +139,102 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
     }
 
     const input = manualDialValidationSchema.parse(request.body);
-    const normalizedNumber = normalizePhoneNumber(input.phoneNumber);
-    const suppression = await findSuppression(pool, normalizedNumber);
-    const hasEnoughDigits = normalizedNumber.length >= 12;
-    const allowed = hasEnoughDigits && !suppression;
+    return validateDialableNumber(pool, input.phoneNumber);
+  });
 
-    return {
-      normalizedNumber,
-      allowed,
-      reason: allowed
-        ? "Number is callable"
-        : suppression
-          ? suppression.reason ?? "Number is suppressed"
-          : "Enter at least 10 digits",
-      checks: [
-        {
-          label: "Phone number",
-          status: hasEnoughDigits ? "pass" : "fail",
-          detail: hasEnoughDigits ? "Number has enough digits to dial" : "Enter at least 10 digits"
-        },
-        {
-          label: "Suppression list",
-          status: suppression ? "fail" : "pass",
-          detail: suppression ? (suppression.reason ?? "Number is suppressed") : "No matching suppression entry"
-        },
-        {
-          label: "Manual dialing",
-          status: "pass",
-          detail: "Allowed for this campaign"
-        }
-      ]
-    };
+  app.post("/agent/manual-dial/start", async (request, reply): Promise<AgentDeskResponse | void> => {
+    const user = await requireUser(request, config, pool);
+    if (!user) {
+      return reply.code(401).send({ message: "Unauthorized" });
+    }
+
+    const publicUser = toPublicUser(user);
+    const input = manualDialValidationSchema.parse(request.body);
+    const validation = await validateDialableNumber(pool, input.phoneNumber);
+    if (!validation.allowed) {
+      return reply.code(400).send({ message: validation.reason });
+    }
+
+    const campaign = await getActiveCampaign(pool);
+    if (!campaign) {
+      return reply.code(409).send({ message: "No campaign is available" });
+    }
+    if (!campaign.manual_dialing_enabled) {
+      return reply.code(409).send({ message: "Manual dialing is disabled for this campaign" });
+    }
+
+    const activeCall = await getActiveCall(pool, publicUser.id);
+    if (activeCall) {
+      return reply.code(409).send({ message: "An active call is already in progress" });
+    }
+
+    const agent = await ensureAgentForUser(pool, config, publicUser);
+    await createDialerCall(pool, {
+      agentId: agent.id,
+      campaignId: campaign.id,
+      contactId: null,
+      destinationNumber: input.phoneNumber,
+      normalizedDestinationNumber: validation.normalizedNumber,
+      manualDial: true,
+      callRecordingEnabled: campaign.call_recording_enabled,
+      eventType: "manual_dial_started"
+    });
+
+    return buildAgentDeskResponse(pool, publicUser);
+  });
+
+  app.post("/agent/call-next", async (request, reply): Promise<AgentDeskResponse | void> => {
+    const user = await requireUser(request, config, pool);
+    if (!user) {
+      return reply.code(401).send({ message: "Unauthorized" });
+    }
+
+    const publicUser = toPublicUser(user);
+    const activeCall = await getActiveCall(pool, publicUser.id);
+    if (activeCall) {
+      return reply.code(409).send({ message: "An active call is already in progress" });
+    }
+
+    const campaign = await getActiveCampaign(pool);
+    if (!campaign) {
+      return reply.code(409).send({ message: "No campaign is available" });
+    }
+
+    const agent = await ensureAgentForUser(pool, config, publicUser);
+    const contact = await getNextCallableContact(pool, campaign.id);
+    if (!contact) {
+      return reply.code(409).send({ message: "No callable contacts are available" });
+    }
+
+    await createDialerCall(pool, {
+      agentId: agent.id,
+      campaignId: campaign.id,
+      contactId: contact.id,
+      destinationNumber: contact.phoneNumber,
+      normalizedDestinationNumber: contact.normalizedPhoneNumber,
+      manualDial: false,
+      callRecordingEnabled: campaign.call_recording_enabled,
+      eventType: "call_next_started"
+    });
+
+    return buildAgentDeskResponse(pool, publicUser);
+  });
+
+  app.post("/agent/calls/:callId/end", async (request, reply): Promise<AgentDeskResponse | void> => {
+    const user = await requireUser(request, config, pool);
+    if (!user) {
+      return reply.code(401).send({ message: "Unauthorized" });
+    }
+
+    const publicUser = toPublicUser(user);
+    const params = z.object({ callId: z.string().uuid() }).parse(request.params);
+    const input = endCallSchema.parse(request.body ?? {});
+    const ended = await endDialerCall(pool, publicUser.id, params.callId, input.outcome ?? "agent_canceled");
+    if (!ended) {
+      return reply.code(404).send({ message: "Active call not found" });
+    }
+
+    return buildAgentDeskResponse(pool, publicUser);
   });
 
   app.post(
@@ -451,6 +523,263 @@ async function findSuppression(pool: pg.Pool, normalizedNumber: string): Promise
     [normalizedNumber]
   );
   return result.rows[0] ?? null;
+}
+
+async function validateDialableNumber(pool: pg.Pool, phoneNumber: string): Promise<ManualDialValidationResponse> {
+  const normalizedNumber = normalizePhoneNumber(phoneNumber);
+  const suppression = await findSuppression(pool, normalizedNumber);
+  const hasEnoughDigits = normalizedNumber.length >= 12;
+  const allowed = hasEnoughDigits && !suppression;
+
+  return {
+    normalizedNumber,
+    allowed,
+    reason: allowed
+      ? "Number is callable"
+      : suppression
+        ? suppression.reason ?? "Number is suppressed"
+        : "Enter at least 10 digits",
+    checks: [
+      {
+        label: "Phone number",
+        status: hasEnoughDigits ? "pass" : "fail",
+        detail: hasEnoughDigits ? "Number has enough digits to dial" : "Enter at least 10 digits"
+      },
+      {
+        label: "Suppression list",
+        status: suppression ? "fail" : "pass",
+        detail: suppression ? (suppression.reason ?? "Number is suppressed") : "No matching suppression entry"
+      },
+      {
+        label: "Manual dialing",
+        status: "pass",
+        detail: "Allowed for this campaign"
+      }
+    ]
+  };
+}
+
+async function getNextCallableContact(
+  pool: pg.Pool,
+  campaignId: string
+): Promise<{ id: string; phoneNumber: string; normalizedPhoneNumber: string } | null> {
+  const result = await pool.query<{
+    id: string;
+    phone_number: string;
+    normalized_phone_number: string;
+  }>(
+    `
+      select contacts.id, contacts.phone_number, contacts.normalized_phone_number
+      from contacts
+      left join suppression_entries
+        on suppression_entries.normalized_phone_number = contacts.normalized_phone_number
+      where contacts.campaign_id = $1
+        and contacts.status not in ('calling', 'completed', 'suppressed')
+        and suppression_entries.id is null
+      order by contacts.created_at asc
+      limit 1
+    `,
+    [campaignId]
+  );
+
+  const row = result.rows[0];
+  if (!row) {
+    return null;
+  }
+
+  return {
+    id: row.id,
+    phoneNumber: row.phone_number,
+    normalizedPhoneNumber: row.normalized_phone_number
+  };
+}
+
+async function getDefaultRecordingId(client: pg.Pool | pg.PoolClient): Promise<string | null> {
+  const result = await client.query<{ id: string }>(
+    `
+      select id
+      from recordings
+      where is_active = true
+      order by is_default desc, created_at desc
+      limit 1
+    `
+  );
+  return result.rows[0]?.id ?? null;
+}
+
+async function createDialerCall(
+  pool: pg.Pool,
+  input: {
+    agentId: string;
+    campaignId: string;
+    contactId: string | null;
+    destinationNumber: string;
+    normalizedDestinationNumber: string;
+    manualDial: boolean;
+    callRecordingEnabled: boolean;
+    eventType: string;
+  }
+): Promise<string> {
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const recordingId = await getDefaultRecordingId(client);
+    const call = await client.query<{ id: string }>(
+      `
+        insert into calls (
+          agent_id,
+          campaign_id,
+          contact_id,
+          destination_number,
+          normalized_destination_number,
+          state,
+          recording_id,
+          manual_dial,
+          call_recording_enabled,
+          started_at
+        )
+        values ($1, $2, $3, $4, $5, 'customer_dialing', $6, $7, $8, now())
+        returning id
+      `,
+      [
+        input.agentId,
+        input.campaignId,
+        input.contactId,
+        input.destinationNumber,
+        input.normalizedDestinationNumber,
+        recordingId,
+        input.manualDial,
+        input.callRecordingEnabled
+      ]
+    );
+    const callId = call.rows[0].id;
+
+    await client.query(
+      `
+        insert into call_legs (call_id, type, state, started_at)
+        values ($1, 'customer', 'created', now())
+      `,
+      [callId]
+    );
+    await client.query(
+      `
+        insert into call_events (call_id, agent_id, event_type, state, raw_json)
+        values ($1, $2, $3, 'customer_dialing', $4::jsonb)
+      `,
+      [
+        callId,
+        input.agentId,
+        input.eventType,
+        JSON.stringify({
+          destinationNumber: input.destinationNumber,
+          manualDial: input.manualDial
+        })
+      ]
+    );
+    await client.query("update agents set status = 'in_call', updated_at = now() where id = $1", [input.agentId]);
+    if (input.contactId) {
+      await client.query("update contacts set status = 'calling', updated_at = now() where id = $1", [input.contactId]);
+    }
+    await client.query("commit");
+    return callId;
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function endDialerCall(
+  pool: pg.Pool,
+  userId: string,
+  callId: string,
+  outcome: CallOutcome
+): Promise<boolean> {
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const call = await client.query<{
+      id: string;
+      agent_id: string;
+      contact_id: string | null;
+    }>(
+      `
+        select calls.id, calls.agent_id, calls.contact_id
+        from calls
+        join agents on agents.id = calls.agent_id
+        where calls.id = $1
+          and agents.user_id = $2
+          and calls.ended_at is null
+          and calls.state not in ('completed', 'failed', 'canceled')
+        for update of calls
+      `,
+      [callId, userId]
+    );
+
+    const row = call.rows[0];
+    if (!row) {
+      await client.query("rollback");
+      return false;
+    }
+
+    await client.query(
+      `
+        update calls
+        set state = 'completed',
+            outcome = $2,
+            ended_at = now(),
+            updated_at = now()
+        where id = $1
+      `,
+      [callId, outcome]
+    );
+    await client.query(
+      `
+        insert into call_events (call_id, agent_id, event_type, state, raw_json)
+        values ($1, $2, 'call_ended', 'completed', $3::jsonb)
+      `,
+      [callId, row.agent_id, JSON.stringify({ outcome })]
+    );
+
+    if (row.contact_id) {
+      const nextStatus = outcome === "agent_canceled" ? "new" : "completed";
+      await client.query(
+        `
+          update contacts
+          set status = $2,
+              updated_at = now()
+          where id = $1
+            and status = 'calling'
+        `,
+        [row.contact_id, nextStatus]
+      );
+    }
+
+    await client.query(
+      `
+        update agents
+        set status = 'ready',
+            updated_at = now()
+        where id = $1
+          and not exists (
+            select 1
+            from calls
+            where calls.agent_id = agents.id
+              and calls.ended_at is null
+              and calls.state not in ('completed', 'failed', 'canceled')
+          )
+      `,
+      [row.agent_id]
+    );
+    await client.query("commit");
+    return true;
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 interface ParsedCsv {
@@ -796,6 +1125,7 @@ async function getLeadQueue(pool: pg.Pool, campaignId: string): Promise<LeadSumm
         coalesce(contacts.mapped_fields_json ->> 'Company', contacts.mapped_fields_json ->> 'company') as company,
         case
           when suppression_entries.id is not null then 'suppressed'
+          when contacts.status = 'calling' then 'calling'
           when contacts.status in ('completed', 'suppressed') then contacts.status
           else 'ready'
         end as status
@@ -1409,7 +1739,7 @@ function buildDemoLeads(): LeadSummary[] {
 }
 
 function mapCallStatus(state: CallState): NonNullable<AgentDeskResponse["activeCall"]>["status"] {
-  if (state === "customer_dialing") {
+  if (state === "created" || state === "agent_ringing" || state === "agent_answered" || state === "customer_dialing") {
     return "dialing";
   }
   if (state === "customer_ringing") {

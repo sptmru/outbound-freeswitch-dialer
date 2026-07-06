@@ -28,6 +28,7 @@ import {
   createCampaign,
   createContact,
   createSuppression,
+  endCall,
   fetchAdminOverview,
   fetchCampaignContacts,
   fetchCsvImports,
@@ -39,6 +40,8 @@ import {
   importCampaignCsvFile,
   login,
   setStoredToken,
+  startManualCall,
+  startNextCall,
   suppressContact,
   validateManualDial
 } from "./api";
@@ -169,7 +172,12 @@ export function App() {
       <main className="workspace">
         <TopBar desk={desk} user={user} onLogout={handleLogout} />
         {view === "desk" && (
-          <AgentDesk desk={desk} manualDialNumber={manualDialNumber} onManualDialNumberChange={setManualDialNumber} />
+          <AgentDesk
+            desk={desk}
+            manualDialNumber={manualDialNumber}
+            onDeskChanged={setDesk}
+            onManualDialNumberChange={setManualDialNumber}
+          />
         )}
         {view !== "desk" && (
           <AdminView
@@ -295,25 +303,76 @@ function TopBar({
 function AgentDesk({
   desk,
   manualDialNumber,
+  onDeskChanged,
   onManualDialNumberChange
 }: {
   desk: AgentDeskResponse;
   manualDialNumber: string;
+  onDeskChanged: (desk: AgentDeskResponse) => void;
   onManualDialNumberChange: (phoneNumber: string) => void;
 }) {
+  const [callNextPending, setCallNextPending] = useState(false);
+  const [callNextError, setCallNextError] = useState<string | null>(null);
+  const [endCallPending, setEndCallPending] = useState(false);
+  const [endCallError, setEndCallError] = useState<string | null>(null);
+
+  async function callNext() {
+    setCallNextPending(true);
+    setCallNextError(null);
+    try {
+      onDeskChanged(await startNextCall());
+    } catch (error) {
+      setCallNextError(error instanceof Error ? error.message : "Could not start next call");
+    } finally {
+      setCallNextPending(false);
+    }
+  }
+
+  async function hangUp(callId: string) {
+    setEndCallPending(true);
+    setEndCallError(null);
+    try {
+      onDeskChanged(await endCall(callId, { outcome: "agent_canceled" }));
+    } catch (error) {
+      setEndCallError(error instanceof Error ? error.message : "Could not end call");
+    } finally {
+      setEndCallPending(false);
+    }
+  }
+
   return (
     <section className="agent-grid">
-      <LeadQueue leads={desk.leads} />
-      <ActiveCall desk={desk} />
-      <SoftphonePanel desk={desk} manualDialNumber={manualDialNumber} onManualDialNumberChange={onManualDialNumberChange} />
+      <LeadQueue error={callNextError} leads={desk.leads} onCallNext={callNext} pending={callNextPending} />
+      <ActiveCall desk={desk} error={endCallError} onHangUp={hangUp} pending={endCallPending} />
+      <SoftphonePanel
+        desk={desk}
+        manualDialNumber={manualDialNumber}
+        onDeskChanged={onDeskChanged}
+        onManualDialNumberChange={onManualDialNumberChange}
+      />
     </section>
   );
 }
 
-function LeadQueue({ leads }: { leads: LeadSummary[] }) {
+function LeadQueue({
+  error,
+  leads,
+  onCallNext,
+  pending
+}: {
+  error: string | null;
+  leads: LeadSummary[];
+  onCallNext: () => Promise<void>;
+  pending: boolean;
+}) {
   return (
     <article className="panel lead-queue">
       <PanelHeader icon={Users} title="Lead queue" meta={`${leads.length} loaded`} />
+      <button className="primary-action queue-action" disabled={pending} onClick={onCallNext} type="button">
+        <PhoneCall size={17} />
+        {pending ? "Starting" : "Call next"}
+      </button>
+      {error && <p className="form-error">{error}</p>}
       <div className="lead-list">
         {leads.map((lead) => (
           <div className="lead-row" key={lead.id}>
@@ -333,12 +392,23 @@ function LeadQueue({ leads }: { leads: LeadSummary[] }) {
   );
 }
 
-function ActiveCall({ desk }: { desk: AgentDeskResponse }) {
+function ActiveCall({
+  desk,
+  error,
+  onHangUp,
+  pending
+}: {
+  desk: AgentDeskResponse;
+  error: string | null;
+  onHangUp: (callId: string) => Promise<void>;
+  pending: boolean;
+}) {
   const activeCall = desk.activeCall;
   if (!activeCall) {
     return (
       <article className="panel active-call">
         <PanelHeader icon={Phone} title="Active call" meta="Ready" />
+        {error && <p className="form-error">{error}</p>}
       </article>
     );
   }
@@ -354,15 +424,16 @@ function ActiveCall({ desk }: { desk: AgentDeskResponse }) {
         <span>{activeCall.durationSeconds}s connected</span>
       </div>
       <div className="call-actions">
-        <button className="danger-action" type="button">
+        <button className="danger-action" disabled={pending} onClick={() => onHangUp(activeCall.id)} type="button">
           <PhoneOff size={17} />
-          Hang up
+          {pending ? "Ending" : "Hang up"}
         </button>
         <button className="primary-action" type="button">
           <Voicemail size={17} />
           Drop voicemail
         </button>
       </div>
+      {error && <p className="form-error">{error}</p>}
       <div className="signal-strip">
         <div>
           <span>VM/beep signal</span>
@@ -388,10 +459,12 @@ function ActiveCall({ desk }: { desk: AgentDeskResponse }) {
 function SoftphonePanel({
   desk,
   manualDialNumber,
+  onDeskChanged,
   onManualDialNumberChange
 }: {
   desk: AgentDeskResponse;
   manualDialNumber: string;
+  onDeskChanged: (desk: AgentDeskResponse) => void;
   onManualDialNumberChange: (phoneNumber: string) => void;
 }) {
   return (
@@ -413,7 +486,11 @@ function SoftphonePanel({
           <button type="button">#</button>
         </div>
       </article>
-      <ManualDial phoneNumber={manualDialNumber} onPhoneNumberChange={onManualDialNumberChange} />
+      <ManualDial
+        onDeskChanged={onDeskChanged}
+        phoneNumber={manualDialNumber}
+        onPhoneNumberChange={onManualDialNumberChange}
+      />
       <article className="metric-grid">
         <Metric label="Today calls" value={desk.metrics.todayCalls} icon={PhoneForwarded} />
         <Metric label="VM dropped" value={desk.metrics.voicemailsDropped} icon={Voicemail} />
@@ -424,26 +501,46 @@ function SoftphonePanel({
 }
 
 function ManualDial({
+  onDeskChanged,
   onPhoneNumberChange,
   phoneNumber
 }: {
+  onDeskChanged: (desk: AgentDeskResponse) => void;
   onPhoneNumberChange: (phoneNumber: string) => void;
   phoneNumber: string;
 }) {
   const [result, setResult] = useState<ManualDialValidationResponse | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  const [startPending, setStartPending] = useState(false);
 
   useEffect(() => {
     setResult(null);
+    setError(null);
   }, [phoneNumber]);
 
   async function validate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setPending(true);
+    setError(null);
     try {
       setResult(await validateManualDial(phoneNumber));
+    } catch (validateError) {
+      setError(validateError instanceof Error ? validateError.message : "Could not validate number");
     } finally {
       setPending(false);
+    }
+  }
+
+  async function startCall() {
+    setStartPending(true);
+    setError(null);
+    try {
+      onDeskChanged(await startManualCall({ phoneNumber }));
+    } catch (startError) {
+      setError(startError instanceof Error ? startError.message : "Could not start call");
+    } finally {
+      setStartPending(false);
     }
   }
 
@@ -459,7 +556,17 @@ function ManualDial({
         <button className="icon-button dark" disabled={pending} title="Validate" type="submit">
           <CheckCircle2 size={17} />
         </button>
+        <button
+          className="icon-button"
+          disabled={startPending || !phoneNumber.trim()}
+          onClick={startCall}
+          title="Start manual call"
+          type="button"
+        >
+          <PhoneCall size={17} />
+        </button>
       </form>
+      {error && <p className="form-error">{error}</p>}
       {result && (
         <div className={result.allowed ? "validation-result allowed" : "validation-result blocked"}>
           {result.allowed ? <CheckCircle2 size={16} /> : <XCircle size={16} />}

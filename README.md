@@ -92,6 +92,9 @@ POST /auth/login
 GET /auth/me
 GET /agent/desk
 POST /agent/manual-dial/validate
+POST /agent/manual-dial/start
+POST /agent/call-next
+POST /agent/calls/:callId/end
 GET /admin/overview
 GET /admin/csv-imports
 GET /admin/csv-imports/:importId

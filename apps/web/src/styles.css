@@ -316,6 +316,10 @@ input[type="checkbox"] {
   gap: 8px;
 }
 
+.queue-action {
+  width: 100%;
+}
+
 .lead-row {
   align-items: center;
   border: 1px solid #ebf0f5;
@@ -545,7 +549,7 @@ input[type="checkbox"] {
 }
 
 .manual-form {
-  grid-template-columns: minmax(0, 1fr) 38px;
+  grid-template-columns: minmax(0, 1fr) 38px 38px;
 }
 
 .validation-result {

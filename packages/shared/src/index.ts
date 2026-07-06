@@ -224,6 +224,14 @@ export interface SuppressContactRequest {
   reason?: string;
 }
 
+export interface StartManualCallRequest {
+  phoneNumber: string;
+}
+
+export interface EndCallRequest {
+  outcome?: CallOutcome;
+}
+
 export interface MutationResponse<T> {
   item: T;
 }
