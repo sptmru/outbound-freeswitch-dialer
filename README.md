@@ -35,9 +35,10 @@ docs/
 The first backend slice is now scaffolded:
 
 - `apps/api` - Fastify + TypeScript API with `/health`.
+- `apps/web` - React + Vite operator UI based on the Figma v1 Agent Desk and admin flows.
 - `packages/shared` - shared call state, outcome, role, and health contracts.
 - `apps/api/db/migrations` - initial PostgreSQL schema for users, agents, campaigns, contacts, calls, call events, recordings, suppression, settings, and VM/beep signal events.
-- `infra/docker/docker-compose.yml` - PostgreSQL, API, and FreeSWITCH services. FreeSWITCH runs with `network_mode: host` so SIP, WSS, and RTP bind directly on the deployment host.
+- `infra/docker/docker-compose.yml` - PostgreSQL, API, Web UI, HTTPS proxy, certbot, FreeSWITCH, and fail2ban services. FreeSWITCH runs with `network_mode: host` so SIP, WSS, and RTP bind directly on the deployment host.
 - `scripts/deploy.sh` - Docker deployment entrypoint using `.env`.
 
 ## Local Setup
@@ -73,6 +74,8 @@ Fill the required values in `.env`, especially:
 - `BOOTSTRAP_ADMIN_PASSWORD`
 - `PUBLIC_APP_URL`
 - `FREESWITCH_DOMAIN`
+- `LETSENCRYPT_DOMAIN`
+- `LETSENCRYPT_EMAIL`
 - Maxo trunk values once the provider details are available.
 
 Deploy:
@@ -85,7 +88,44 @@ The API exposes:
 
 ```text
 GET /health
+POST /auth/login
+GET /auth/me
+GET /agent/desk
+POST /agent/manual-dial/validate
+GET /admin/overview
 ```
+
+The Web UI is served by the `web` container and published through the `proxy`
+container. Production UI traffic should use:
+
+```text
+https://<LETSENCRYPT_DOMAIN>
+```
+
+The proxy also forwards API requests under:
+
+```text
+https://<LETSENCRYPT_DOMAIN>/api/*
+```
+
+By default the internal `web` service is also exposed for local checks at:
+
+```text
+http://127.0.0.1:8080
+```
+
+Set `WEB_PUBLIC_PORT` to change that direct host port. For deployed builds,
+keep `VITE_API_BASE_URL=/api` so the browser uses the same HTTPS origin as the
+UI.
+
+`./scripts/deploy.sh` starts the proxy, runs certbot with the webroot challenge
+for `LETSENCRYPT_DOMAIN`, and reloads nginx after the certificate is issued.
+The proxy starts with a short-lived self-signed fallback certificate only so the
+container can boot before the first Let's Encrypt certificate exists.
+
+Certificate renewal is handled by `scripts/renew-cert.sh`. The deploy script
+installs a daily cron entry through `scripts/install-cert-renew-cron.sh`; renewal
+logs are written to `logs/cert-renew.log`.
 
 Health output includes PostgreSQL and FreeSWITCH ESL connectivity. The ESL check can be temporarily disabled with `FREESWITCH_ESL_ENABLED=false` while FreeSWITCH runtime configuration is still being finalized.
 

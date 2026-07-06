@@ -3,6 +3,7 @@ import Fastify from "fastify";
 import { ZodError } from "zod";
 import { registerAuthRoutes } from "./auth/routes.js";
 import { loadConfig } from "./config.js";
+import { registerDashboardRoutes } from "./dashboard/routes.js";
 import { createPool, runMigrations } from "./db.js";
 import { provisionAllAgentDirectories } from "./freeswitch/provisioning.js";
 import { registerHealthRoutes } from "./health.js";
@@ -46,6 +47,7 @@ await app.register(cors, {
 
 registerHealthRoutes(app, config, pool);
 registerAuthRoutes(app, config, pool);
+registerDashboardRoutes(app, config, pool);
 
 app.get("/", async () => ({
   service: "outbound-dialer-api",

@@ -61,7 +61,7 @@ export function registerAuthRoutes(app: FastifyInstance, config: AppConfig, pool
   });
 }
 
-async function requireUser(request: FastifyRequest, config: AppConfig, pool: pg.Pool) {
+export async function requireUser(request: FastifyRequest, config: AppConfig, pool: pg.Pool) {
   const authorization = request.headers.authorization;
   const token = authorization?.startsWith("Bearer ") ? authorization.slice("Bearer ".length) : null;
   if (!token) {

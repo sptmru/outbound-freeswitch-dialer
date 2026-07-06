@@ -10,7 +10,9 @@ if [[ ! -f "${ENV_FILE}" ]]; then
   exit 1
 fi
 
-APP_ENV_FILE="${ENV_FILE}" docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" pull postgres
-APP_ENV_FILE="${ENV_FILE}" docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" build api freeswitch
+APP_ENV_FILE="${ENV_FILE}" docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" pull postgres certbot
+APP_ENV_FILE="${ENV_FILE}" docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" build api freeswitch web proxy
 APP_ENV_FILE="${ENV_FILE}" docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" up -d
+"${ROOT_DIR}/scripts/ensure-cert.sh"
+"${ROOT_DIR}/scripts/install-cert-renew-cron.sh"
 APP_ENV_FILE="${ENV_FILE}" docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" ps
