@@ -47,7 +47,6 @@ import { ensureAgentForUser, toPublicUser } from "../users.js";
 
 const manualDialValidationSchema = z.object({
   phoneNumber: z.string().min(3),
-  defaultCountryCode: z.string().length(2).optional(),
   campaignId: z.string().uuid().optional()
 }) satisfies z.ZodType<StartManualCallRequest>;
 
@@ -76,14 +75,12 @@ const createContactSchema = z.object({
   campaignId: z.string().uuid(),
   name: z.string().min(1).max(160),
   phoneNumber: z.string().min(3).max(64),
-  defaultCountryCode: z.string().length(2).optional(),
   company: z.string().max(160).optional(),
   fields: z.array(z.object({ label: z.string().min(1).max(80), value: z.string().max(400) })).max(20).optional()
 }) satisfies z.ZodType<CreateContactRequest>;
 
 const createSuppressionSchema = z.object({
   phoneNumber: z.string().min(3).max(64),
-  defaultCountryCode: z.string().length(2).optional(),
   reason: z.string().max(240).optional()
 }) satisfies z.ZodType<CreateSuppressionRequest>;
 
@@ -93,8 +90,7 @@ const suppressContactSchema = z.object({
 
 const importCsvSchema = z.object({
   filename: z.string().min(1).max(240),
-  csvText: z.string().min(1).max(2_000_000),
-  defaultCountryCode: z.string().length(2).optional()
+  csvText: z.string().min(1).max(2_000_000)
 }) satisfies z.ZodType<ImportCsvRequest>;
 
 const contactsQuerySchema = z.object({
@@ -204,7 +200,7 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
     }
 
     const input = manualDialValidationSchema.parse(request.body);
-    return validateDialableNumber(pool, input.phoneNumber, input.defaultCountryCode);
+    return validateDialableNumber(pool, config, input.phoneNumber);
   });
 
   app.post("/agent/manual-dial/start", async (request, reply): Promise<AgentDeskResponse | void> => {
@@ -215,7 +211,7 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
 
     const publicUser = toPublicUser(user);
     const input = manualDialValidationSchema.parse(request.body);
-    const validation = await validateDialableNumber(pool, input.phoneNumber, input.defaultCountryCode);
+    const validation = await validateDialableNumber(pool, config, input.phoneNumber);
     if (!validation.allowed) {
       return reply.code(400).send({ message: validation.reason });
     }
@@ -432,7 +428,7 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
         return reply.code(404).send({ message: "Campaign not found" });
       }
 
-      const normalized = normalizePhoneNumber(input.phoneNumber, input.defaultCountryCode);
+      const normalized = normalizePhoneNumber(input.phoneNumber, config.DEFAULT_PHONE_COUNTRY_CODE);
       if (!normalized.ok) {
         return reply.code(400).send({ message: normalized.reason });
       }
@@ -583,7 +579,7 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
           params.campaignId,
           input.filename,
           parsed,
-          input.defaultCountryCode
+          config.DEFAULT_PHONE_COUNTRY_CODE
         );
         return reply.code(201).send(importResult);
       } catch (error) {
@@ -629,7 +625,7 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
           params.campaignId,
           file.filename,
           parsed,
-          getDefaultCountryCodeFromMultipart(file.fields)
+          config.DEFAULT_PHONE_COUNTRY_CODE
         );
         return reply.code(201).send(importResult);
       } catch (error) {
@@ -653,7 +649,7 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
       }
 
       const input = createSuppressionSchema.parse(request.body);
-      const normalized = normalizePhoneNumber(input.phoneNumber, input.defaultCountryCode);
+      const normalized = normalizePhoneNumber(input.phoneNumber, config.DEFAULT_PHONE_COUNTRY_CODE);
       if (!normalized.ok) {
         return reply.code(400).send({ message: normalized.reason });
       }
@@ -962,10 +958,10 @@ function isCsvImportCampaignForeignKeyError(error: unknown): error is { code: st
 
 async function validateDialableNumber(
   pool: pg.Pool,
-  phoneNumber: string,
-  defaultCountryCode?: string
+  config: AppConfig,
+  phoneNumber: string
 ): Promise<ManualDialValidationResponse> {
-  const normalized = normalizePhoneNumber(phoneNumber, defaultCountryCode);
+  const normalized = normalizePhoneNumber(phoneNumber, config.DEFAULT_PHONE_COUNTRY_CODE);
   const suppression = normalized.ok ? await findSuppression(pool, normalized.number) : null;
   const allowed = normalized.ok && !suppression;
   const normalizedFailureReason = normalized.ok ? "" : normalized.reason;
@@ -2574,16 +2570,4 @@ function normalizeCountryCode(value?: string): CountryCode | undefined {
   }
   const countryCode = value.trim().toUpperCase();
   return isSupportedCountry(countryCode) ? (countryCode as CountryCode) : undefined;
-}
-
-function getDefaultCountryCodeFromMultipart(fields: unknown): string | undefined {
-  if (!fields || typeof fields !== "object" || !("defaultCountryCode" in fields)) {
-    return undefined;
-  }
-  const field = (fields as Record<string, unknown>).defaultCountryCode;
-  if (!field || typeof field !== "object" || !("value" in field)) {
-    return undefined;
-  }
-  const value = (field as { value?: unknown }).value;
-  return typeof value === "string" ? value : undefined;
 }

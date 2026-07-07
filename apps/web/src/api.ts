@@ -125,13 +125,10 @@ export async function fetchCampaignContacts(
   return apiFetch<CampaignContactsResponse>(`/admin/campaigns/${campaignId}/contacts${query ? `?${query}` : ""}`);
 }
 
-export async function validateManualDial(
-  phoneNumber: string,
-  defaultCountryCode?: string
-): Promise<ManualDialValidationResponse> {
+export async function validateManualDial(phoneNumber: string): Promise<ManualDialValidationResponse> {
   return apiFetch<ManualDialValidationResponse>("/agent/manual-dial/validate", {
     method: "POST",
-    body: JSON.stringify({ phoneNumber, defaultCountryCode })
+    body: JSON.stringify({ phoneNumber })
   });
 }
 
@@ -248,16 +245,9 @@ export async function importCampaignCsv(
   });
 }
 
-export async function importCampaignCsvFile(
-  campaignId: string,
-  file: File,
-  defaultCountryCode?: string
-): Promise<ImportCsvResponse> {
+export async function importCampaignCsvFile(campaignId: string, file: File): Promise<ImportCsvResponse> {
   const formData = new FormData();
   formData.append("file", file);
-  if (defaultCountryCode) {
-    formData.append("defaultCountryCode", defaultCountryCode);
-  }
   return apiFetch<ImportCsvResponse>(`/admin/campaigns/${campaignId}/import-csv-file`, {
     method: "POST",
     body: formData

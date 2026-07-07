@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { isSupportedCountry } from "libphonenumber-js";
 import { z } from "zod";
 
 const envSchema = z.object({
@@ -21,6 +22,12 @@ const envSchema = z.object({
   BOOTSTRAP_ADMIN_EMAIL: z.string().email().optional(),
   BOOTSTRAP_ADMIN_PASSWORD: z.string().min(12).optional(),
   BOOTSTRAP_ADMIN_NAME: z.string().default("Admin"),
+  DEFAULT_PHONE_COUNTRY_CODE: z
+    .string()
+    .length(2)
+    .transform((value) => value.toUpperCase())
+    .refine((value) => isSupportedCountry(value), "Unsupported default phone country code")
+    .default("US"),
   SIP_USERNAME_PREFIX: z.string().regex(/^[a-zA-Z0-9_-]+$/).default("agent"),
   FREESWITCH_GENERATED_CONFIG_DIR: z.string().default("/var/lib/outbound-dialer/freeswitch"),
   FREESWITCH_DOMAIN: z.string().default("localhost"),
