@@ -397,6 +397,7 @@ function AgentDesk({
           onCallLead={callLead}
           onCallNext={callNext}
           pending={callNextPending}
+          showRecommendedCall={false}
         />
         <ActiveCall desk={desk} error={endCallError} onHangUp={hangUp} pending={endCallPending} />
         <AgentStatusPanel
@@ -445,13 +446,15 @@ function LeadQueue({
   leads,
   onCallLead,
   onCallNext,
-  pending
+  pending,
+  showRecommendedCall = true
 }: {
   error: string | null;
   leads: LeadSummary[];
   onCallLead: (lead: LeadSummary) => Promise<void>;
   onCallNext: () => Promise<void>;
   pending: boolean;
+  showRecommendedCall?: boolean;
 }) {
   const recommended = leads.find((lead) => lead.status === "ready") ?? leads[0];
 
@@ -485,7 +488,7 @@ function LeadQueue({
           </div>
         ))}
       </div>
-      {recommended && (
+      {showRecommendedCall && recommended && (
         <div className="recommended-call">
           <h3>Recommended next: {recommended.name}</h3>
           <p>
