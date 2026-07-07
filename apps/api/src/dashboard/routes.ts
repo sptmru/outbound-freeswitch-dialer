@@ -1,4 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import { isSupportedCountry, parsePhoneNumberFromString } from "libphonenumber-js";
+import type { CountryCode } from "libphonenumber-js";
 import type pg from "pg";
 import { callOutcomes } from "@outbound-dialer/shared";
 import type {
@@ -45,6 +47,7 @@ import { ensureAgentForUser, toPublicUser } from "../users.js";
 
 const manualDialValidationSchema = z.object({
   phoneNumber: z.string().min(3),
+  defaultCountryCode: z.string().length(2).optional(),
   campaignId: z.string().uuid().optional()
 }) satisfies z.ZodType<StartManualCallRequest>;
 
@@ -73,12 +76,14 @@ const createContactSchema = z.object({
   campaignId: z.string().uuid(),
   name: z.string().min(1).max(160),
   phoneNumber: z.string().min(3).max(64),
+  defaultCountryCode: z.string().length(2).optional(),
   company: z.string().max(160).optional(),
   fields: z.array(z.object({ label: z.string().min(1).max(80), value: z.string().max(400) })).max(20).optional()
 }) satisfies z.ZodType<CreateContactRequest>;
 
 const createSuppressionSchema = z.object({
   phoneNumber: z.string().min(3).max(64),
+  defaultCountryCode: z.string().length(2).optional(),
   reason: z.string().max(240).optional()
 }) satisfies z.ZodType<CreateSuppressionRequest>;
 
@@ -88,7 +93,8 @@ const suppressContactSchema = z.object({
 
 const importCsvSchema = z.object({
   filename: z.string().min(1).max(240),
-  csvText: z.string().min(1).max(2_000_000)
+  csvText: z.string().min(1).max(2_000_000),
+  defaultCountryCode: z.string().length(2).optional()
 }) satisfies z.ZodType<ImportCsvRequest>;
 
 const contactsQuerySchema = z.object({
@@ -198,7 +204,7 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
     }
 
     const input = manualDialValidationSchema.parse(request.body);
-    return validateDialableNumber(pool, input.phoneNumber);
+    return validateDialableNumber(pool, input.phoneNumber, input.defaultCountryCode);
   });
 
   app.post("/agent/manual-dial/start", async (request, reply): Promise<AgentDeskResponse | void> => {
@@ -209,7 +215,7 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
 
     const publicUser = toPublicUser(user);
     const input = manualDialValidationSchema.parse(request.body);
-    const validation = await validateDialableNumber(pool, input.phoneNumber);
+    const validation = await validateDialableNumber(pool, input.phoneNumber, input.defaultCountryCode);
     if (!validation.allowed) {
       return reply.code(400).send({ message: validation.reason });
     }
@@ -232,7 +238,7 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
       agentId: agent.id,
       campaignId: campaign.id,
       contactId: null,
-      destinationNumber: input.phoneNumber,
+      destinationNumber: validation.normalizedNumber,
       normalizedDestinationNumber: validation.normalizedNumber,
       manualDial: true,
       callRecordingEnabled: campaign.call_recording_enabled,
@@ -426,7 +432,10 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
         return reply.code(404).send({ message: "Campaign not found" });
       }
 
-      const normalizedNumber = normalizePhoneNumber(input.phoneNumber);
+      const normalized = normalizePhoneNumber(input.phoneNumber, input.defaultCountryCode);
+      if (!normalized.ok) {
+        return reply.code(400).send({ message: normalized.reason });
+      }
       const mappedFields = Object.fromEntries((input.fields ?? []).map((field) => [field.label, field.value]));
       if (input.company) {
         mappedFields.Company = input.company;
@@ -451,7 +460,7 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
           on conflict (campaign_id, normalized_phone_number) do nothing
           returning id, display_name, phone_number, mapped_fields_json
         `,
-        [input.campaignId, input.phoneNumber, normalizedNumber, input.name, JSON.stringify(mappedFields)]
+        [input.campaignId, input.phoneNumber, normalized.number, input.name, JSON.stringify(mappedFields)]
       );
 
       const row = result.rows[0];
@@ -459,7 +468,7 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
         return reply.code(409).send({ message: "Lead already exists in this campaign" });
       }
 
-      const suppression = await findSuppression(pool, normalizedNumber);
+      const suppression = await findSuppression(pool, normalized.number);
       return reply.code(201).send({
         item: {
           id: row.id,
@@ -569,7 +578,13 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
         if (parsed.rows.length === 0) {
           return reply.code(400).send({ message: "CSV has no data rows" });
         }
-        const importResult = await importContactsFromCsv(pool, params.campaignId, input.filename, parsed);
+        const importResult = await importContactsFromCsv(
+          pool,
+          params.campaignId,
+          input.filename,
+          parsed,
+          input.defaultCountryCode
+        );
         return reply.code(201).send(importResult);
       } catch (error) {
         if (error instanceof CsvImportError) {
@@ -609,7 +624,13 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
         if (parsed.rows.length === 0) {
           return reply.code(400).send({ message: "CSV has no data rows" });
         }
-        const importResult = await importContactsFromCsv(pool, params.campaignId, file.filename, parsed);
+        const importResult = await importContactsFromCsv(
+          pool,
+          params.campaignId,
+          file.filename,
+          parsed,
+          getDefaultCountryCodeFromMultipart(file.fields)
+        );
         return reply.code(201).send(importResult);
       } catch (error) {
         if (error instanceof CsvImportError) {
@@ -632,7 +653,10 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
       }
 
       const input = createSuppressionSchema.parse(request.body);
-      const normalizedNumber = normalizePhoneNumber(input.phoneNumber);
+      const normalized = normalizePhoneNumber(input.phoneNumber, input.defaultCountryCode);
+      if (!normalized.ok) {
+        return reply.code(400).send({ message: normalized.reason });
+      }
       const result = await pool.query<{
         id: string;
         phone_number: string;
@@ -645,7 +669,7 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
           do update set reason = excluded.reason
           returning id, phone_number, reason
         `,
-        [input.phoneNumber, normalizedNumber, input.reason ?? null, user.id]
+        [input.phoneNumber, normalized.number, input.reason ?? null, user.id]
       );
 
       const row = result.rows[0];
@@ -936,25 +960,29 @@ function isCsvImportCampaignForeignKeyError(error: unknown): error is { code: st
   );
 }
 
-async function validateDialableNumber(pool: pg.Pool, phoneNumber: string): Promise<ManualDialValidationResponse> {
-  const normalizedNumber = normalizePhoneNumber(phoneNumber);
-  const suppression = await findSuppression(pool, normalizedNumber);
-  const hasEnoughDigits = normalizedNumber.length >= 12;
-  const allowed = hasEnoughDigits && !suppression;
+async function validateDialableNumber(
+  pool: pg.Pool,
+  phoneNumber: string,
+  defaultCountryCode?: string
+): Promise<ManualDialValidationResponse> {
+  const normalized = normalizePhoneNumber(phoneNumber, defaultCountryCode);
+  const suppression = normalized.ok ? await findSuppression(pool, normalized.number) : null;
+  const allowed = normalized.ok && !suppression;
+  const normalizedFailureReason = normalized.ok ? "" : normalized.reason;
 
   return {
-    normalizedNumber,
+    normalizedNumber: normalized.ok ? normalized.number : "",
     allowed,
     reason: allowed
       ? "Number is callable"
       : suppression
         ? suppression.reason ?? "Number is suppressed"
-        : "Enter at least 10 digits",
+        : normalizedFailureReason,
     checks: [
       {
         label: "Phone number",
-        status: hasEnoughDigits ? "pass" : "fail",
-        detail: hasEnoughDigits ? "Number has enough digits to dial" : "Enter at least 10 digits"
+        status: normalized.ok ? "pass" : "fail",
+        detail: normalized.ok ? `Normalized to ${normalized.number}` : normalizedFailureReason
       },
       {
         label: "Suppression list",
@@ -1438,7 +1466,8 @@ async function importContactsFromCsv(
   pool: pg.Pool,
   campaignId: string,
   filename: string,
-  parsed: ParsedCsv
+  parsed: ParsedCsv,
+  defaultCountryCode?: string
 ): Promise<ImportCsvResponse> {
   const phoneIndex = findColumn(parsed.headers, ["phone", "phone_number", "number", "mobile", "cell"]);
   if (phoneIndex === -1) {
@@ -1477,13 +1506,13 @@ async function importContactsFromCsv(
     for (const [rowIndex, row] of parsed.rows.entries()) {
       const rowNumber = rowIndex + 2;
       const phoneNumber = (row[phoneIndex] ?? "").trim();
-      const normalizedNumber = normalizePhoneNumber(phoneNumber);
+      const normalized = normalizePhoneNumber(phoneNumber, defaultCountryCode);
       const mappedFields = Object.fromEntries(
         parsed.headers.map((header, index) => [header, (row[index] ?? "").trim()])
       );
 
-      if (normalizedNumber.length < 12) {
-        await insertCsvImportFailure(client, importId, rowNumber, "Invalid or missing phone number", mappedFields);
+      if (!normalized.ok) {
+        await insertCsvImportFailure(client, importId, rowNumber, normalized.reason, mappedFields);
         failedRows += 1;
         continue;
       }
@@ -1513,7 +1542,7 @@ async function importContactsFromCsv(
         [
           campaignId,
           phoneNumber,
-          normalizedNumber,
+          normalized.number,
           displayName,
           JSON.stringify(mappedFields),
           JSON.stringify(mappedFields)
@@ -2509,7 +2538,52 @@ function humanize(value: string): string {
     .join(" ");
 }
 
-function normalizePhoneNumber(value: string): string {
-  const digits = value.replace(/\D/g, "");
-  return digits.startsWith("1") ? `+${digits}` : `+1${digits}`;
+type PhoneNormalizationResult =
+  | { ok: true; number: string }
+  | { ok: false; reason: string };
+
+function normalizePhoneNumber(value: string, defaultCountryCode?: string): PhoneNormalizationResult {
+  const raw = value.trim();
+  if (!raw) {
+    return { ok: false, reason: "Missing phone number" };
+  }
+
+  const prepared = raw.replace(/^00(?=\d)/, "+");
+  const countryCode = normalizeCountryCode(defaultCountryCode);
+  if (defaultCountryCode && !countryCode) {
+    return { ok: false, reason: `Unsupported default country ${defaultCountryCode.trim().toUpperCase()}` };
+  }
+  if (!prepared.startsWith("+") && !countryCode) {
+    return { ok: false, reason: "Local number requires a default country" };
+  }
+
+  const parsed = parsePhoneNumberFromString(prepared, countryCode);
+  if (!parsed?.isValid()) {
+    return {
+      ok: false,
+      reason: countryCode ? `Invalid phone number for ${countryCode}` : "Invalid international phone number"
+    };
+  }
+
+  return { ok: true, number: parsed.number };
+}
+
+function normalizeCountryCode(value?: string): CountryCode | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const countryCode = value.trim().toUpperCase();
+  return isSupportedCountry(countryCode) ? (countryCode as CountryCode) : undefined;
+}
+
+function getDefaultCountryCodeFromMultipart(fields: unknown): string | undefined {
+  if (!fields || typeof fields !== "object" || !("defaultCountryCode" in fields)) {
+    return undefined;
+  }
+  const field = (fields as Record<string, unknown>).defaultCountryCode;
+  if (!field || typeof field !== "object" || !("value" in field)) {
+    return undefined;
+  }
+  const value = (field as { value?: unknown }).value;
+  return typeof value === "string" ? value : undefined;
 }

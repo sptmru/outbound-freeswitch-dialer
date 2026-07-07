@@ -82,6 +82,15 @@ const navItems: Array<{ id: View; label: string; icon: typeof BarChart3 }> = [
   { id: "settings", label: "Settings", icon: Shield }
 ];
 
+const defaultCountryOptions = [
+  { code: "US", label: "US +1" },
+  { code: "AM", label: "AM +374" },
+  { code: "IL", label: "IL +972" },
+  { code: "GB", label: "GB +44" },
+  { code: "CA", label: "CA +1" },
+  { code: "AU", label: "AU +61" }
+];
+
 export function App() {
   const [tokenReady, setTokenReady] = useState(false);
   const [user, setUser] = useState<PublicUser | null>(null);
@@ -594,6 +603,7 @@ function ManualDialSurface({
   phoneNumber: string;
 }) {
   const [note, setNote] = useState("");
+  const [defaultCountryCode, setDefaultCountryCode] = useState("US");
   const [result, setResult] = useState<ManualDialValidationResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
@@ -602,14 +612,14 @@ function ManualDialSurface({
   useEffect(() => {
     setResult(null);
     setError(null);
-  }, [phoneNumber]);
+  }, [defaultCountryCode, phoneNumber]);
 
   async function validate(event?: FormEvent<HTMLFormElement>) {
     event?.preventDefault();
     setPending(true);
     setError(null);
     try {
-      setResult(await validateManualDial(phoneNumber));
+      setResult(await validateManualDial(phoneNumber, defaultCountryCode));
     } catch (validateError) {
       setError(validateError instanceof Error ? validateError.message : "Could not validate number");
     } finally {
@@ -621,7 +631,7 @@ function ManualDialSurface({
     setStartPending(true);
     setError(null);
     try {
-      onDeskChanged(await startManualCall({ campaignId: desk.campaign.id, phoneNumber }));
+      onDeskChanged(await startManualCall({ campaignId: desk.campaign.id, phoneNumber, defaultCountryCode }));
     } catch (startError) {
       setError(startError instanceof Error ? startError.message : "Could not start call");
     } finally {
@@ -659,6 +669,7 @@ function ManualDialSurface({
               value={phoneNumber}
             />
           </label>
+          <DefaultCountrySelect value={defaultCountryCode} onChange={setDefaultCountryCode} />
           <label>
             Lead name or note
             <input onChange={(event) => setNote(event.target.value)} placeholder="Optional" value={note} />
@@ -861,6 +872,7 @@ function ManualDial({
   onPhoneNumberChange: (phoneNumber: string) => void;
   phoneNumber: string;
 }) {
+  const [defaultCountryCode, setDefaultCountryCode] = useState("US");
   const [result, setResult] = useState<ManualDialValidationResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
@@ -869,14 +881,14 @@ function ManualDial({
   useEffect(() => {
     setResult(null);
     setError(null);
-  }, [phoneNumber]);
+  }, [defaultCountryCode, phoneNumber]);
 
   async function validate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setPending(true);
     setError(null);
     try {
-      setResult(await validateManualDial(phoneNumber));
+      setResult(await validateManualDial(phoneNumber, defaultCountryCode));
     } catch (validateError) {
       setError(validateError instanceof Error ? validateError.message : "Could not validate number");
     } finally {
@@ -888,7 +900,7 @@ function ManualDial({
     setStartPending(true);
     setError(null);
     try {
-      onDeskChanged(await startManualCall({ campaignId, phoneNumber }));
+      onDeskChanged(await startManualCall({ campaignId, phoneNumber, defaultCountryCode }));
     } catch (startError) {
       setError(startError instanceof Error ? startError.message : "Could not start call");
     } finally {
@@ -905,6 +917,17 @@ function ManualDial({
           placeholder="+1 415 555 0199"
           value={phoneNumber}
         />
+        <select
+          aria-label="Default country"
+          onChange={(event) => setDefaultCountryCode(event.target.value)}
+          value={defaultCountryCode}
+        >
+          {defaultCountryOptions.map((country) => (
+            <option key={country.code} value={country.code}>
+              {country.label}
+            </option>
+          ))}
+        </select>
         <button className="icon-button dark" disabled={pending} title="Validate" type="submit">
           <CheckCircle2 size={17} />
         </button>
@@ -1264,6 +1287,7 @@ function CsvImportForm({
   const [filename, setFilename] = useState("leads.csv");
   const [csvText, setCsvText] = useState("name,phone,company\nAvery Johnson,+1 415 555 0148,North Bay Solar");
   const [file, setFile] = useState<File | null>(null);
+  const [defaultCountryCode, setDefaultCountryCode] = useState("US");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ImportCsvResponse | null>(null);
@@ -1280,7 +1304,7 @@ function CsvImportForm({
     setPending(true);
     setError(null);
     try {
-      const importResult = await importCampaignCsv(campaignId, { filename, csvText });
+      const importResult = await importCampaignCsv(campaignId, { filename, csvText, defaultCountryCode });
       setResult(importResult);
       await onChanged();
     } catch (submitError) {
@@ -1299,7 +1323,7 @@ function CsvImportForm({
     setPending(true);
     setError(null);
     try {
-      const importResult = await importCampaignCsvFile(campaignId, file);
+      const importResult = await importCampaignCsvFile(campaignId, file, defaultCountryCode);
       setResult(importResult);
       setFile(null);
       await onChanged();
@@ -1335,6 +1359,7 @@ function CsvImportForm({
             <input onChange={(event) => setFilename(event.target.value)} required value={filename} />
           </label>
         </div>
+        <DefaultCountrySelect value={defaultCountryCode} onChange={setDefaultCountryCode} />
         <label>
           Upload file
           <input
@@ -1506,6 +1531,7 @@ function CreateContactForm({
   const [name, setName] = useState("");
   const [company, setCompany] = useState("");
   const [phoneNumber, setPhoneNumber] = useState("");
+  const [defaultCountryCode, setDefaultCountryCode] = useState("US");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -1521,7 +1547,7 @@ function CreateContactForm({
     setPending(true);
     setError(null);
     try {
-      await createContact({ campaignId, name, company: company || undefined, phoneNumber });
+      await createContact({ campaignId, name, company: company || undefined, phoneNumber, defaultCountryCode });
       setName("");
       setCompany("");
       setPhoneNumber("");
@@ -1565,6 +1591,7 @@ function CreateContactForm({
             value={phoneNumber}
           />
         </label>
+        <DefaultCountrySelect value={defaultCountryCode} onChange={setDefaultCountryCode} />
         <label>
           Company
           <input onChange={(event) => setCompany(event.target.value)} placeholder="North Bay Solar" value={company} />
@@ -1913,6 +1940,7 @@ function toneForTrunk(status: FreeSwitchDiagnosticsResponse["trunk"]["status"]):
 
 function CreateSuppressionForm({ onChanged }: { onChanged: () => Promise<void> }) {
   const [phoneNumber, setPhoneNumber] = useState("");
+  const [defaultCountryCode, setDefaultCountryCode] = useState("US");
   const [reason, setReason] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1922,7 +1950,7 @@ function CreateSuppressionForm({ onChanged }: { onChanged: () => Promise<void> }
     setPending(true);
     setError(null);
     try {
-      await createSuppression({ phoneNumber, reason: reason || undefined });
+      await createSuppression({ phoneNumber, defaultCountryCode, reason: reason || undefined });
       setPhoneNumber("");
       setReason("");
       await onChanged();
@@ -1946,6 +1974,7 @@ function CreateSuppressionForm({ onChanged }: { onChanged: () => Promise<void> }
             value={phoneNumber}
           />
         </label>
+        <DefaultCountrySelect value={defaultCountryCode} onChange={setDefaultCountryCode} />
         <label>
           Reason
           <input onChange={(event) => setReason(event.target.value)} placeholder="Do not call request" value={reason} />
@@ -1957,6 +1986,27 @@ function CreateSuppressionForm({ onChanged }: { onChanged: () => Promise<void> }
         </button>
       </form>
     </article>
+  );
+}
+
+function DefaultCountrySelect({
+  onChange,
+  value
+}: {
+  onChange: (value: string) => void;
+  value: string;
+}) {
+  return (
+    <label>
+      Default country
+      <select onChange={(event) => onChange(event.target.value)} value={value}>
+        {defaultCountryOptions.map((country) => (
+          <option key={country.code} value={country.code}>
+            {country.label}
+          </option>
+        ))}
+      </select>
+    </label>
   );
 }
 

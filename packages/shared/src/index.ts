@@ -162,12 +162,14 @@ export interface CreateContactRequest {
   campaignId: string;
   name: string;
   phoneNumber: string;
+  defaultCountryCode?: string;
   company?: string;
   fields?: Array<{ label: string; value: string }>;
 }
 
 export interface CreateSuppressionRequest {
   phoneNumber: string;
+  defaultCountryCode?: string;
   reason?: string;
 }
 
@@ -189,6 +191,7 @@ export interface CreateUserResponse {
 export interface ImportCsvRequest {
   filename: string;
   csvText: string;
+  defaultCountryCode?: string;
 }
 
 export interface ImportCsvResponse {
@@ -254,6 +257,7 @@ export interface SuppressContactRequest {
 
 export interface StartManualCallRequest {
   phoneNumber: string;
+  defaultCountryCode?: string;
   campaignId?: string;
 }
 
