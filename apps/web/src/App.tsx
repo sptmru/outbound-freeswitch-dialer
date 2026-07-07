@@ -994,6 +994,16 @@ function Campaigns({
   );
 }
 
+function getValidCampaignId(
+  campaignId: string,
+  campaigns: AdminOverviewResponse["campaigns"]
+): string {
+  if (campaigns.some((campaign) => campaign.id === campaignId)) {
+    return campaignId;
+  }
+  return campaigns[0]?.id ?? "";
+}
+
 function CampaignCard({
   campaign,
   onChanged
@@ -1060,8 +1070,9 @@ function CampaignContacts({
   const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
-    if (!campaignId && campaigns[0]?.id) {
-      setCampaignId(campaigns[0].id);
+    const nextCampaignId = getValidCampaignId(campaignId, campaigns);
+    if (nextCampaignId !== campaignId) {
+      setCampaignId(nextCampaignId);
     }
   }, [campaignId, campaigns]);
 
@@ -1198,8 +1209,9 @@ function CsvImportForm({
   const [result, setResult] = useState<ImportCsvResponse | null>(null);
 
   useEffect(() => {
-    if (!campaignId && campaigns[0]?.id) {
-      setCampaignId(campaigns[0].id);
+    const nextCampaignId = getValidCampaignId(campaignId, campaigns);
+    if (nextCampaignId !== campaignId) {
+      setCampaignId(nextCampaignId);
     }
   }, [campaignId, campaigns]);
 
@@ -1438,8 +1450,9 @@ function CreateContactForm({
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!campaignId && campaigns[0]?.id) {
-      setCampaignId(campaigns[0].id);
+    const nextCampaignId = getValidCampaignId(campaignId, campaigns);
+    if (nextCampaignId !== campaignId) {
+      setCampaignId(nextCampaignId);
     }
   }, [campaignId, campaigns]);
 

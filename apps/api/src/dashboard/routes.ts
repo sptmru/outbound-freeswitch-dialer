@@ -514,17 +514,23 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
 
       const params = z.object({ campaignId: z.string().uuid() }).parse(request.params);
       const input = importCsvSchema.parse(request.body);
-      const parsed = parseCsv(input.csvText);
-      if (parsed.rows.length === 0) {
-        return reply.code(400).send({ message: "CSV has no data rows" });
+      if (!(await campaignExists(pool, params.campaignId))) {
+        return reply.code(404).send({ message: "Campaign not found" });
       }
 
       try {
+        const parsed = parseCsv(input.csvText);
+        if (parsed.rows.length === 0) {
+          return reply.code(400).send({ message: "CSV has no data rows" });
+        }
         const importResult = await importContactsFromCsv(pool, params.campaignId, input.filename, parsed);
         return reply.code(201).send(importResult);
       } catch (error) {
         if (error instanceof CsvImportError) {
           return reply.code(400).send({ message: error.message });
+        }
+        if (isCsvImportCampaignForeignKeyError(error)) {
+          return reply.code(404).send({ message: "Campaign not found" });
         }
         throw error;
       }
@@ -547,19 +553,24 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
       if (!isCsvFilename(file.filename)) {
         return reply.code(400).send({ message: "Only .csv files are supported" });
       }
-
-      const csvText = (await file.toBuffer()).toString("utf8");
-      const parsed = parseCsv(csvText);
-      if (parsed.rows.length === 0) {
-        return reply.code(400).send({ message: "CSV has no data rows" });
+      if (!(await campaignExists(pool, params.campaignId))) {
+        return reply.code(404).send({ message: "Campaign not found" });
       }
 
       try {
+        const csvText = (await file.toBuffer()).toString("utf8");
+        const parsed = parseCsv(csvText);
+        if (parsed.rows.length === 0) {
+          return reply.code(400).send({ message: "CSV has no data rows" });
+        }
         const importResult = await importContactsFromCsv(pool, params.campaignId, file.filename, parsed);
         return reply.code(201).send(importResult);
       } catch (error) {
         if (error instanceof CsvImportError) {
           return reply.code(400).send({ message: error.message });
+        }
+        if (isCsvImportCampaignForeignKeyError(error)) {
+          return reply.code(404).send({ message: "Campaign not found" });
         }
         throw error;
       }
@@ -861,6 +872,22 @@ async function deleteCampaign(pool: pg.Pool, campaignId: string): Promise<"delet
   } finally {
     client.release();
   }
+}
+
+async function campaignExists(pool: pg.Pool, campaignId: string): Promise<boolean> {
+  const result = await pool.query("select 1 from campaigns where id = $1", [campaignId]);
+  return Boolean(result.rowCount);
+}
+
+function isCsvImportCampaignForeignKeyError(error: unknown): error is { code: string; constraint: string } {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    error.code === "23503" &&
+    "constraint" in error &&
+    error.constraint === "csv_imports_campaign_id_fkey"
+  );
 }
 
 async function validateDialableNumber(pool: pg.Pool, phoneNumber: string): Promise<ManualDialValidationResponse> {
@@ -1553,7 +1580,7 @@ function parseCsv(input: string): ParsedCsv {
 
   const headers = (rows.shift() ?? []).map((header) => header.trim()).filter(Boolean);
   if (!headers.length) {
-    throw new Error("CSV header row is required");
+    throw new CsvImportError("CSV header row is required");
   }
 
   return {
