@@ -391,7 +391,7 @@ input[type="checkbox"] {
   border-radius: 8px;
   display: grid;
   gap: 12px;
-  grid-template-columns: minmax(140px, 1.15fr) minmax(130px, 0.95fr) minmax(92px, 0.7fr) 72px;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.95fr) minmax(0, 0.7fr) minmax(72px, 0.42fr);
   min-height: 42px;
   padding: 0 10px;
 }
@@ -406,14 +406,23 @@ input[type="checkbox"] {
 .lead-table-row strong {
   color: #17202a;
   font-size: 13px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .lead-table-row span {
   color: #17202a;
   font-size: 12px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .pill-action {
+  justify-self: stretch;
   background: #ffffff;
   border: 1px solid #0f766e;
   border-radius: 999px;
@@ -422,6 +431,7 @@ input[type="checkbox"] {
   font-weight: 800;
   min-height: 26px;
   padding: 0 12px;
+  width: 100%;
 }
 
 .pill-action:disabled {
