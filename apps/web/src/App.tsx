@@ -12,6 +12,7 @@ import {
   History,
   LogOut,
   Mic,
+  Pencil,
   Phone,
   PhoneCall,
   PhoneForwarded,
@@ -53,6 +54,7 @@ import {
   startManualCall,
   startNextCall,
   suppressContact,
+  updateCampaign,
   validateManualDial
 } from "./api";
 import type {
@@ -1014,8 +1016,31 @@ function CampaignCard({
   campaign: AdminOverviewResponse["campaigns"][number];
   onChanged: () => Promise<void>;
 }) {
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(campaign.name);
+  const [status, setStatus] = useState(campaign.status);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setName(campaign.name);
+    setStatus(campaign.status);
+  }, [campaign.name, campaign.status]);
+
+  async function save(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setPending(true);
+    setError(null);
+    try {
+      await updateCampaign(campaign.id, { name, status });
+      setEditing(false);
+      await onChanged();
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "Could not update campaign");
+    } finally {
+      setPending(false);
+    }
+  }
 
   async function remove() {
     if (!window.confirm(`Delete campaign "${campaign.name}"?`)) {
@@ -1040,11 +1065,43 @@ function CampaignCard({
           <Upload size={18} />
           <h2>{campaign.name}</h2>
         </div>
-        <button className="icon-button danger-icon" disabled={pending} onClick={remove} title="Delete campaign" type="button">
-          <Trash2 size={16} />
-        </button>
+        <div className="row-actions">
+          <button
+            className="icon-button"
+            disabled={pending}
+            onClick={() => setEditing((current) => !current)}
+            title={editing ? "Cancel edit" : "Edit campaign"}
+            type="button"
+          >
+            {editing ? <XCircle size={16} /> : <Pencil size={16} />}
+          </button>
+          <button className="icon-button danger-icon" disabled={pending} onClick={remove} title="Delete campaign" type="button">
+            <Trash2 size={16} />
+          </button>
+        </div>
       </div>
-      <StatusBadge label={campaign.status} tone="neutral" />
+      {editing ? (
+        <form className="campaign-edit-form" onSubmit={save}>
+          <label>
+            Name
+            <input onChange={(event) => setName(event.target.value)} required value={name} />
+          </label>
+          <label>
+            Status
+            <select onChange={(event) => setStatus(event.target.value as typeof status)} value={status}>
+              <option value="draft">draft</option>
+              <option value="active">active</option>
+              <option value="paused">paused</option>
+            </select>
+          </label>
+          <button className="primary-action compact-action" disabled={pending} type="submit">
+            <CheckCircle2 size={16} />
+            {pending ? "Saving" : "Save"}
+          </button>
+        </form>
+      ) : (
+        <StatusBadge label={campaign.status} tone="neutral" />
+      )}
       <div className="stat-row campaign-stat-row">
         <Metric label="Loaded" value={campaign.loaded} icon={Users} />
         <Metric label="Callable" value={campaign.callable} icon={PhoneCall} />

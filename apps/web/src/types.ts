@@ -23,5 +23,6 @@ export type {
   PublicUser,
   StartNextCallRequest,
   StartManualCallRequest,
-  SuppressContactRequest
+  SuppressContactRequest,
+  UpdateCampaignRequest
 } from "@outbound-dialer/shared";

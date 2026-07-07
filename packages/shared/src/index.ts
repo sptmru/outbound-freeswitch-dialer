@@ -35,6 +35,8 @@ export const userRoles = ["agent", "admin"] as const;
 
 export type UserRole = (typeof userRoles)[number];
 
+export type CampaignStatus = "active" | "paused" | "draft";
+
 export interface HealthResponse {
   status: "ok" | "degraded";
   service: "api";
@@ -119,7 +121,7 @@ export interface AdminOverviewResponse {
   campaigns: Array<{
     id: string;
     name: string;
-    status: string;
+    status: CampaignStatus;
     loaded: number;
     callable: number;
   }>;
@@ -146,9 +148,14 @@ export interface AdminOverviewResponse {
 
 export interface CreateCampaignRequest {
   name: string;
-  status: "active" | "paused" | "draft";
+  status: CampaignStatus;
   manualDialingEnabled: boolean;
   callRecordingEnabled: boolean;
+}
+
+export interface UpdateCampaignRequest {
+  name: string;
+  status: CampaignStatus;
 }
 
 export interface CreateContactRequest {

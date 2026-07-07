@@ -21,7 +21,8 @@ import type {
   PublicUser,
   StartNextCallRequest,
   StartManualCallRequest,
-  SuppressContactRequest
+  SuppressContactRequest,
+  UpdateCampaignRequest
 } from "./types";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "/api";
@@ -172,6 +173,16 @@ export async function createCampaign(
 export async function deleteCampaign(campaignId: string): Promise<DeleteResponse> {
   return apiFetch<DeleteResponse>(`/admin/campaigns/${campaignId}`, {
     method: "DELETE"
+  });
+}
+
+export async function updateCampaign(
+  campaignId: string,
+  input: UpdateCampaignRequest
+): Promise<MutationResponse<AdminOverviewResponse["campaigns"][number]>> {
+  return apiFetch<MutationResponse<AdminOverviewResponse["campaigns"][number]>>(`/admin/campaigns/${campaignId}`, {
+    method: "PATCH",
+    body: JSON.stringify(input)
   });
 }
 

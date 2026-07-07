@@ -27,7 +27,8 @@ import type {
   PublicUser,
   StartNextCallRequest,
   StartManualCallRequest,
-  SuppressContactRequest
+  SuppressContactRequest,
+  UpdateCampaignRequest
 } from "@outbound-dialer/shared";
 import { z } from "zod";
 import { requireUser } from "../auth/routes.js";
@@ -62,6 +63,11 @@ const createCampaignSchema = z.object({
   manualDialingEnabled: z.boolean(),
   callRecordingEnabled: z.boolean()
 }) satisfies z.ZodType<CreateCampaignRequest>;
+
+const updateCampaignSchema = z.object({
+  name: z.string().min(1).max(160),
+  status: z.enum(["active", "paused", "draft"])
+}) satisfies z.ZodType<UpdateCampaignRequest>;
 
 const createContactSchema = z.object({
   campaignId: z.string().uuid(),
@@ -333,11 +339,11 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
       }
 
       const input = createCampaignSchema.parse(request.body);
-      const result = await pool.query<{
-        id: string;
-        name: string;
-        status: string;
-      }>(
+  const result = await pool.query<{
+    id: string;
+    name: string;
+    status: AdminOverviewResponse["campaigns"][number]["status"];
+  }>(
         `
           insert into campaigns (name, status, manual_dialing_enabled, call_recording_enabled)
           values ($1, $2, $3, $4)
@@ -356,6 +362,37 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
           callable: 0
         }
       });
+    }
+  );
+
+  app.patch(
+    "/admin/campaigns/:campaignId",
+    async (request, reply): Promise<MutationResponse<AdminOverviewResponse["campaigns"][number]> | void> => {
+      const user = await requireAdmin(request, reply, config, pool);
+      if (!user) {
+        return;
+      }
+
+      const params = campaignParamsSchema.parse(request.params);
+      const input = updateCampaignSchema.parse(request.body);
+      const result = await pool.query(
+        `
+          update campaigns
+          set name = $2, status = $3, updated_at = now()
+          where id = $1
+        `,
+        [params.campaignId, input.name, input.status]
+      );
+
+      if (!result.rowCount) {
+        return reply.code(404).send({ message: "Campaign not found" });
+      }
+
+      const item = await getCampaignOverviewItem(pool, params.campaignId);
+      if (!item) {
+        return reply.code(404).send({ message: "Campaign not found" });
+      }
+      return { item };
     }
   );
 
@@ -385,6 +422,10 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
       }
 
       const input = createContactSchema.parse(request.body);
+      if (!(await campaignExists(pool, input.campaignId))) {
+        return reply.code(404).send({ message: "Campaign not found" });
+      }
+
       const normalizedNumber = normalizePhoneNumber(input.phoneNumber);
       const mappedFields = Object.fromEntries((input.fields ?? []).map((field) => [field.label, field.value]));
       if (input.company) {
@@ -407,12 +448,17 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
             status
           )
           values ($1, $2, $3, $4, $5::jsonb, 'new')
+          on conflict (campaign_id, normalized_phone_number) do nothing
           returning id, display_name, phone_number, mapped_fields_json
         `,
         [input.campaignId, input.phoneNumber, normalizedNumber, input.name, JSON.stringify(mappedFields)]
       );
 
       const row = result.rows[0];
+      if (!row) {
+        return reply.code(409).send({ message: "Lead already exists in this campaign" });
+      }
+
       const suppression = await findSuppression(pool, normalizedNumber);
       return reply.code(201).send({
         item: {
@@ -1926,7 +1972,7 @@ async function getCampaigns(pool: pg.Pool): Promise<AdminOverviewResponse["campa
   const result = await pool.query<{
     id: string;
     name: string;
-    status: string;
+    status: AdminOverviewResponse["campaigns"][number]["status"];
     loaded: string;
     callable: string;
   }>(`
@@ -1954,6 +2000,48 @@ async function getCampaigns(pool: pg.Pool): Promise<AdminOverviewResponse["campa
     loaded: Number(row.loaded),
     callable: Number(row.callable)
   }));
+}
+
+async function getCampaignOverviewItem(
+  pool: pg.Pool,
+  campaignId: string
+): Promise<AdminOverviewResponse["campaigns"][number] | null> {
+  const result = await pool.query<{
+    id: string;
+    name: string;
+    status: AdminOverviewResponse["campaigns"][number]["status"];
+    loaded: string;
+    callable: string;
+  }>(
+    `
+      select
+        campaigns.id,
+        campaigns.name,
+        campaigns.status,
+        count(contacts.id) as loaded,
+        count(contacts.id) filter (
+          where contacts.status not in ('completed', 'suppressed')
+            and suppression_entries.id is null
+        ) as callable
+      from campaigns
+      left join contacts on contacts.campaign_id = campaigns.id
+      left join suppression_entries on suppression_entries.normalized_phone_number = contacts.normalized_phone_number
+      where campaigns.id = $1
+      group by campaigns.id
+    `,
+    [campaignId]
+  );
+  const row = result.rows[0];
+  if (!row) {
+    return null;
+  }
+  return {
+    id: row.id,
+    name: row.name,
+    status: row.status,
+    loaded: Number(row.loaded),
+    callable: Number(row.callable)
+  };
 }
 
 async function getRecordings(pool: pg.Pool): Promise<AdminOverviewResponse["recordings"]> {
