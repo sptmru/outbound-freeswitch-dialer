@@ -70,6 +70,7 @@ services:
         condition: service_healthy
     environment:
       LETSENCRYPT_DOMAIN: ${LETSENCRYPT_DOMAIN}
+      FREESWITCH_WS_UPSTREAM_SCHEME: ${FREESWITCH_WS_UPSTREAM_SCHEME:-http}
       FREESWITCH_WS_UPSTREAM: ${FREESWITCH_WS_UPSTREAM:-host.docker.internal:5066}
     extra_hosts:
       - "host.docker.internal:host-gateway"

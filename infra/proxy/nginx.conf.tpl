@@ -53,9 +53,12 @@ server {
     proxy_set_header Host $host;
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection "Upgrade";
+    proxy_set_header Sec-WebSocket-Protocol $http_sec_websocket_protocol;
+    proxy_ssl_verify off;
+    proxy_ssl_server_name on;
     proxy_read_timeout 3600s;
     proxy_send_timeout 3600s;
-    proxy_pass http://outbound_dialer_freeswitch_ws;
+    proxy_pass ${FREESWITCH_WS_UPSTREAM_SCHEME}://outbound_dialer_freeswitch_ws/;
   }
 
   location / {

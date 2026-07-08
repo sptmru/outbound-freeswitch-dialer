@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Invitation, Registerer, SessionState, UserAgent } from "sip.js";
+import { Invitation, Registerer, RegistererState, SessionState, UserAgent } from "sip.js";
 import { fetchSoftphoneProvisioning } from "./api";
 import type { PublicUser } from "./types";
 
@@ -37,6 +37,8 @@ const idleRuntime: SoftphoneRuntime = {
   declineIncomingCall: async () => undefined,
   hangUpSoftphoneCall: async () => undefined
 };
+
+const registrationTimeoutMs = 20_000;
 
 export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRuntime {
   const invitationRef = useRef<Invitation | null>(null);
@@ -109,6 +111,7 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
     let cancelled = false;
     let mediaStream: MediaStream | null = null;
     let registerer: Registerer | null = null;
+    let registrationTimer: number | null = null;
     let userAgent: UserAgent | null = null;
     const getActions = () => ({
       answerIncomingCall,
@@ -161,6 +164,8 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
           authorizationPassword: provisioning.sipPassword,
           authorizationUsername: provisioning.sipUsername,
           displayName: provisioning.displayName,
+          logBuiltinEnabled: true,
+          logLevel: "debug",
           delegate: {
             onInvite: (invitation) => {
               if (invitationRef.current) {
@@ -206,7 +211,8 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
             }
           },
           transportOptions: {
-            server: provisioning.websocketUrl
+            server: provisioning.websocketUrl,
+            traceSip: true
           },
           uri,
           sessionDescriptionHandlerFactoryOptions: {
@@ -217,24 +223,110 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
           }
         });
         registerer = new Registerer(userAgent);
+        registerer.stateChange.addListener((state) => {
+          if (cancelled) {
+            return;
+          }
+
+          if (state === RegistererState.Registered) {
+            if (registrationTimer) {
+              window.clearTimeout(registrationTimer);
+              registrationTimer = null;
+            }
+            setRuntime((current) => ({
+              ...current,
+              registered: true,
+              microphoneAllowed: true,
+              state: "registered",
+              label: "Softphone registered",
+              detail: `${provisioning.sipUsername}@${provisioning.domain}`,
+              error: null
+            }));
+            return;
+          }
+
+          if (state === RegistererState.Unregistered || state === RegistererState.Terminated) {
+            setRuntime((current) => ({
+              ...current,
+              registered: false,
+              state: current.state === "failed" ? current.state : "registering",
+              label: current.state === "failed" ? current.label : "Softphone offline",
+              detail: current.state === "failed" ? current.detail : "Waiting for accepted SIP registration"
+            }));
+          }
+        });
         await userAgent.start();
-        await registerer.register();
+        registrationTimer = window.setTimeout(() => {
+          if (cancelled) {
+            return;
+          }
+          setRuntime((current) => {
+            if (current.registered || current.state === "registered") {
+              return current;
+            }
+            return {
+              ...current,
+              registered: false,
+              state: "failed",
+              label: "Softphone offline",
+              detail: "SIP registration timed out",
+              error: `No accepted REGISTER response within ${registrationTimeoutMs / 1000}s. Check browser console for SIP.js logs.`
+            };
+          });
+        }, registrationTimeoutMs);
+        await registerer.register({
+          requestDelegate: {
+            onAccept: () => {
+              if (cancelled) {
+                return;
+              }
+              setRuntime((current) => ({
+                ...current,
+                registered: current.state === "registered" ? current.registered : false,
+                state: current.state === "registered" ? current.state : "registering",
+                label: current.state === "registered" ? current.label : "Registration accepted",
+                detail:
+                  current.state === "registered"
+                    ? current.detail
+                    : "Waiting for softphone registration confirmation",
+                error: null
+              }));
+            },
+            onReject: (response) => {
+              if (cancelled) {
+                return;
+              }
+              const statusCode = response.message.statusCode;
+              const reasonPhrase = response.message.reasonPhrase;
+              setRuntime((current) => ({
+                ...current,
+                registered: false,
+                state: "failed",
+                label: "Softphone offline",
+                detail: "SIP registration rejected",
+                error: `REGISTER rejected${statusCode ? ` ${statusCode}` : ""}${reasonPhrase ? ` ${reasonPhrase}` : ""}`
+              }));
+            }
+          }
+        });
 
         if (cancelled) {
           return;
         }
 
-        setRuntime({
-          registered: true,
+        setRuntime((current) => ({
+          ...current,
+          registered: false,
           microphoneAllowed: true,
-          state: "registered",
-          callState: "none",
-          label: "Softphone registered",
-          detail: `${provisioning.sipUsername}@${provisioning.domain}`,
-          error: null,
-          incomingCallLabel: null,
+          state: current.state === "registered" ? current.state : "registering",
+          label: current.state === "registered" ? current.label : "Registration sent",
+          detail:
+            current.state === "registered"
+              ? current.detail
+              : "Waiting for accepted SIP registration",
+          error: current.state === "registered" ? null : current.error,
           ...getActions()
-        });
+        }));
       } catch (error) {
         if (cancelled) {
           return;
@@ -257,6 +349,10 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
 
     return () => {
       cancelled = true;
+      if (registrationTimer) {
+        window.clearTimeout(registrationTimer);
+        registrationTimer = null;
+      }
       void invitationRef.current?.bye().catch(() => undefined);
       invitationRef.current = null;
       mediaStream?.getTracks().forEach((track) => track.stop());
