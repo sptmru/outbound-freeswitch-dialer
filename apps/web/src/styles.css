@@ -219,8 +219,7 @@ input[type="checkbox"] {
   margin-bottom: 20px;
 }
 
-.topbar p,
-.topbar h1 {
+.topbar p {
   margin: 0;
 }
 
@@ -228,12 +227,6 @@ input[type="checkbox"] {
   color: #607086;
   font-size: 13px;
   font-weight: 700;
-}
-
-.topbar h1 {
-  color: #101820;
-  font-size: 28px;
-  letter-spacing: 0;
 }
 
 .topbar-actions {

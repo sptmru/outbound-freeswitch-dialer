@@ -311,10 +311,7 @@ function TopBar({
 }) {
   return (
     <header className="topbar">
-      <div>
-        <p>{desk.campaign.name}</p>
-        <h1>Agent Desk</h1>
-      </div>
+      <p>{desk.campaign.name}</p>
       <div className="topbar-actions">
         <StatusBadge
           label={softphone.registered ? "app registered" : "app offline"}
