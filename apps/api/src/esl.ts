@@ -14,11 +14,6 @@ export interface OriginateCustomerLegInput {
   legUuid: string;
 }
 
-export interface OriginateAgentTestCallInput {
-  legUuid: string;
-  sipUsername: string;
-}
-
 export async function checkFreeSwitchEsl(config: AppConfig): Promise<string> {
   if (!config.FREESWITCH_ESL_ENABLED) {
     return "disabled by FREESWITCH_ESL_ENABLED=false";
@@ -48,39 +43,6 @@ export async function originateCustomerLeg(
     .filter(Boolean)
     .join(",");
   const command = `originate {${variables}}${dialString} &park()`;
-  const response = await sendFreeSwitchBgapiCommand(config, command);
-  return {
-    command,
-    jobUuid: parseJobUuid(response),
-    legUuid: input.legUuid
-  };
-}
-
-export async function isAgentRegistered(config: AppConfig, sipUsername: string): Promise<boolean> {
-  const response = await sendFreeSwitchApiCommand(
-    config,
-    `sofia status profile internal-webrtc reg ${escapeCommandToken(sipUsername)}`
-  );
-  const text = `${response.body}\n${response.raw}`.toLowerCase();
-  if (text.includes("not found") || text.includes("no registrations")) {
-    return false;
-  }
-  return text.includes(sipUsername.toLowerCase()) || text.includes("contact") || text.includes("user");
-}
-
-export async function originateAgentTestCall(
-  config: AppConfig,
-  input: OriginateAgentTestCallInput
-): Promise<{ command: string; jobUuid: string; legUuid: string }> {
-  const variables = [
-    `origination_uuid=${input.legUuid}`,
-    "outbound_dialer_test_call=true",
-    "origination_caller_id_name=Outbound Dialer Test",
-    "origination_caller_id_number=0000",
-    "originate_timeout=30"
-  ].join(",");
-  const dialString = `user/${escapeDialString(input.sipUsername)}@${escapeDialString(config.FREESWITCH_DOMAIN)}`;
-  const command = `originate {${variables}}${dialString} &echo()`;
   const response = await sendFreeSwitchBgapiCommand(config, command);
   return {
     command,
@@ -194,14 +156,6 @@ function normalizeDestinationForDialString(value: string): string {
 
 function escapeOriginateVariable(value: string): string {
   return value.replace(/[{},]/g, "");
-}
-
-function escapeCommandToken(value: string): string {
-  return value.replace(/[^a-zA-Z0-9_.@-]/g, "");
-}
-
-function escapeDialString(value: string): string {
-  return value.replace(/[^a-zA-Z0-9_.-]/g, "");
 }
 
 function parseJobUuid(response: EslCommandResponse): string {

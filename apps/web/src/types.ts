@@ -22,7 +22,6 @@ export type {
   MutationResponse,
   PublicUser,
   SoftphoneProvisioningResponse,
-  SoftphoneTestCallResponse,
   StartNextCallRequest,
   StartManualCallRequest,
   SuppressContactRequest,

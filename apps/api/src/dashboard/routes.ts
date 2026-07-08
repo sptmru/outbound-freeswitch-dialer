@@ -28,7 +28,6 @@ import type {
   MutationResponse,
   PublicUser,
   SoftphoneProvisioningResponse,
-  SoftphoneTestCallResponse,
   StartNextCallRequest,
   StartManualCallRequest,
   SuppressContactRequest,
@@ -41,8 +40,6 @@ import {
   canOriginateCustomerLeg,
   checkFreeSwitchEsl,
   createFreeSwitchUuid,
-  isAgentRegistered,
-  originateAgentTestCall,
   originateCustomerLeg,
   sendFreeSwitchApiCommand,
   sendFreeSwitchBgapiCommand
@@ -132,15 +129,6 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
     }
 
     return getSoftphoneProvisioningForUser(pool, config, toPublicUser(user));
-  });
-
-  app.post("/agent/softphone/test-call", async (request, reply): Promise<SoftphoneTestCallResponse | void> => {
-    const user = await requireUser(request, config, pool);
-    if (!user) {
-      return reply.code(401).send({ message: "Unauthorized" });
-    }
-
-    return runAgentSoftphoneTestCall(pool, config, toPublicUser(user));
   });
 
   app.get("/admin/overview", async (request, reply): Promise<AdminOverviewResponse | void> => {
@@ -798,68 +786,6 @@ async function runFreeSwitchSafeTest(pool: pg.Pool, config: AppConfig): Promise<
                     updated_at = now()
     `,
     [JSON.stringify(result)]
-  );
-
-  return result;
-}
-
-async function runAgentSoftphoneTestCall(
-  pool: pg.Pool,
-  config: AppConfig,
-  user: PublicUser
-): Promise<SoftphoneTestCallResponse> {
-  const checkedAt = new Date().toISOString();
-  const agent = await ensureAgentForUser(pool, config, user);
-  let generatedUuid: string | undefined;
-  let jobUuid: string | undefined;
-  let uuidCreated = false;
-  let registered = false;
-  let originateQueued = false;
-  let message = "Softphone test call queued";
-
-  try {
-    if (!config.FREESWITCH_ESL_ENABLED) {
-      throw new Error("FreeSWITCH ESL is disabled");
-    }
-
-    registered = await isAgentRegistered(config, agent.sipUsername);
-    if (!registered) {
-      throw new Error("Agent softphone is not registered in FreeSWITCH");
-    }
-
-    generatedUuid = await createFreeSwitchUuid(config);
-    uuidCreated = Boolean(generatedUuid);
-    const originate = await originateAgentTestCall(config, {
-      legUuid: generatedUuid,
-      sipUsername: agent.sipUsername
-    });
-    jobUuid = originate.jobUuid;
-    originateQueued = Boolean(jobUuid || originate.command);
-  } catch (error) {
-    message = error instanceof Error ? error.message : "Softphone test call failed";
-  }
-
-  const result: SoftphoneTestCallResponse = {
-    ok: registered && uuidCreated && originateQueued,
-    checkedAt,
-    sipUsername: agent.sipUsername,
-    registered,
-    uuidCreated,
-    originateQueued,
-    generatedUuid,
-    jobUuid,
-    message
-  };
-
-  await pool.query(
-    `
-      insert into system_settings (key, value_json, updated_at)
-      values ($1, $2::jsonb, now())
-      on conflict (key)
-      do update set value_json = excluded.value_json,
-                    updated_at = now()
-    `,
-    [`freeswitch.softphone_test.${user.id}`, JSON.stringify(result)]
   );
 
   return result;

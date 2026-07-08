@@ -118,18 +118,6 @@ export interface SoftphoneProvisioningResponse {
   domain: string;
 }
 
-export interface SoftphoneTestCallResponse {
-  ok: boolean;
-  checkedAt: string;
-  sipUsername: string;
-  registered: boolean;
-  uuidCreated: boolean;
-  originateQueued: boolean;
-  generatedUuid?: string;
-  jobUuid?: string;
-  message: string;
-}
-
 export interface AdminOverviewResponse {
   user: PublicUser;
   stats: {
