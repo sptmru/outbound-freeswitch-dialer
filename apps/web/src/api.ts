@@ -19,6 +19,7 @@ import type {
   ManualDialValidationResponse,
   MutationResponse,
   PublicUser,
+  SoftphoneProvisioningResponse,
   StartNextCallRequest,
   StartManualCallRequest,
   SuppressContactRequest,
@@ -86,6 +87,10 @@ export async function fetchMe(): Promise<{ user: PublicUser }> {
 export async function fetchAgentDesk(campaignId?: string): Promise<AgentDeskResponse> {
   const query = campaignId ? `?campaignId=${encodeURIComponent(campaignId)}` : "";
   return apiFetch<AgentDeskResponse>(`/agent/desk${query}`);
+}
+
+export async function fetchSoftphoneProvisioning(): Promise<SoftphoneProvisioningResponse> {
+  return apiFetch<SoftphoneProvisioningResponse>("/agent/softphone/provisioning");
 }
 
 export async function fetchAdminOverview(): Promise<AdminOverviewResponse> {

@@ -1,7 +1,7 @@
 import type pg from "pg";
 import type { UserRole } from "@outbound-dialer/shared";
 import type { AppConfig } from "./config.js";
-import { encryptSecret } from "./auth/crypto.js";
+import { decryptSecret, encryptSecret } from "./auth/crypto.js";
 import { generateSecret, hashSecret } from "./auth/passwords.js";
 import { provisionAgentDirectory } from "./freeswitch/provisioning.js";
 
@@ -25,6 +25,15 @@ export interface PublicUser {
 export interface AgentCredentials {
   sipUsername: string;
   sipPassword: string;
+}
+
+export interface AgentSoftphoneProvisioning {
+  sipUri: string;
+  sipUsername: string;
+  sipPassword: string;
+  displayName: string;
+  websocketUrl: string;
+  domain: string;
 }
 
 export interface CreateUserInput {
@@ -144,6 +153,41 @@ export async function ensureAgentForUser(
   } finally {
     client.release();
   }
+}
+
+export async function getSoftphoneProvisioningForUser(
+  pool: pg.Pool,
+  config: AppConfig,
+  user: PublicUser
+): Promise<AgentSoftphoneProvisioning> {
+  await ensureAgentForUser(pool, config, user);
+  const result = await pool.query<{
+    sip_username: string;
+    sip_password_encrypted: string;
+    display_name: string;
+  }>(
+    `
+      select sip_username, sip_password_encrypted, display_name
+      from agents
+      where user_id = $1
+      order by created_at asc
+      limit 1
+    `,
+    [user.id]
+  );
+  const agent = result.rows[0];
+  if (!agent) {
+    throw new Error("Agent credentials are unavailable");
+  }
+
+  return {
+    sipUri: `sip:${agent.sip_username}@${config.FREESWITCH_DOMAIN}`,
+    sipUsername: agent.sip_username,
+    sipPassword: decryptSecret(config, agent.sip_password_encrypted),
+    displayName: agent.display_name || user.name,
+    websocketUrl: `wss://${config.FREESWITCH_DOMAIN}:${config.FREESWITCH_WEBRTC_WSS_PORT}`,
+    domain: config.FREESWITCH_DOMAIN
+  };
 }
 
 export async function bootstrapAdmin(pool: pg.Pool, config: AppConfig): Promise<PublicUser | null> {

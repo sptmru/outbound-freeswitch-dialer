@@ -27,6 +27,7 @@ import type {
   ManualDialValidationResponse,
   MutationResponse,
   PublicUser,
+  SoftphoneProvisioningResponse,
   StartNextCallRequest,
   StartManualCallRequest,
   SuppressContactRequest,
@@ -43,7 +44,7 @@ import {
   sendFreeSwitchApiCommand,
   sendFreeSwitchBgapiCommand
 } from "../esl.js";
-import { ensureAgentForUser, toPublicUser } from "../users.js";
+import { ensureAgentForUser, getSoftphoneProvisioningForUser, toPublicUser } from "../users.js";
 
 const manualDialValidationSchema = z.object({
   phoneNumber: z.string().min(3),
@@ -119,6 +120,15 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
 
     const query = agentDeskQuerySchema.parse(request.query);
     return buildAgentDeskResponse(pool, toPublicUser(user), query.campaignId);
+  });
+
+  app.get("/agent/softphone/provisioning", async (request, reply): Promise<SoftphoneProvisioningResponse | void> => {
+    const user = await requireUser(request, config, pool);
+    if (!user) {
+      return reply.code(401).send({ message: "Unauthorized" });
+    }
+
+    return getSoftphoneProvisioningForUser(pool, config, toPublicUser(user));
   });
 
   app.get("/admin/overview", async (request, reply): Promise<AdminOverviewResponse | void> => {

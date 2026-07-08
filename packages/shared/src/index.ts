@@ -109,6 +109,15 @@ export interface AgentDeskResponse {
   } | null;
 }
 
+export interface SoftphoneProvisioningResponse {
+  sipUri: string;
+  sipUsername: string;
+  sipPassword: string;
+  displayName: string;
+  websocketUrl: string;
+  domain: string;
+}
+
 export interface AdminOverviewResponse {
   user: PublicUser;
   stats: {

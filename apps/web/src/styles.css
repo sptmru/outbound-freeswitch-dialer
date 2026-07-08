@@ -488,6 +488,48 @@ input[type="checkbox"] {
   gap: 8px;
 }
 
+.softphone-runtime-card {
+  align-items: center;
+  background: #ffffff;
+  border: 1px solid #dce4ee;
+  border-radius: 8px;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 36px minmax(0, 1fr);
+  min-height: 58px;
+  padding: 10px;
+}
+
+.softphone-runtime-card strong,
+.softphone-runtime-card span {
+  display: block;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.softphone-runtime-card strong {
+  color: #17202a;
+  font-size: 14px;
+}
+
+.softphone-runtime-card span {
+  color: #667789;
+  font-size: 12px;
+  line-height: 1.35;
+  margin-top: 2px;
+}
+
+.softphone-runtime-icon {
+  align-items: center;
+  background: #eaf1ff;
+  border-radius: 8px;
+  color: #246bfe;
+  display: flex;
+  height: 36px;
+  justify-content: center;
+  width: 36px;
+}
+
 .manual-open-action {
   justify-self: start;
 }

@@ -57,6 +57,8 @@ import {
   updateCampaign,
   validateManualDial
 } from "./api";
+import { useSoftphoneRegistration } from "./softphone";
+import type { SoftphoneRuntime } from "./softphone";
 import type {
   AdminOverviewResponse,
   AgentDeskResponse,
@@ -149,6 +151,8 @@ export function App() {
     setDesk(await fetchAgentDesk(campaignId));
   }
 
+  const softphoneRuntime = useSoftphoneRegistration(user);
+
   if (!tokenReady) {
     return <div className="boot-screen">Loading dialer</div>;
   }
@@ -198,7 +202,7 @@ export function App() {
       )}
 
       <main className="workspace">
-        <TopBar desk={desk} user={user} onLogout={handleLogout} />
+        <TopBar desk={desk} softphone={softphoneRuntime} user={user} onLogout={handleLogout} />
         {activeView === "desk" && (
           <AgentDesk
             desk={desk}
@@ -206,6 +210,7 @@ export function App() {
             onCampaignChange={handleCampaignChange}
             onDeskChanged={setDesk}
             onManualDialNumberChange={setManualDialNumber}
+            softphone={softphoneRuntime}
           />
         )}
         {activeView !== "desk" && (
@@ -296,10 +301,12 @@ function LoginScreen({
 function TopBar({
   desk,
   onLogout,
+  softphone,
   user
 }: {
   desk: AgentDeskResponse;
   onLogout: () => void;
+  softphone: SoftphoneRuntime;
   user: PublicUser;
 }) {
   return (
@@ -310,12 +317,12 @@ function TopBar({
       </div>
       <div className="topbar-actions">
         <StatusBadge
-          label={desk.softphone.registered ? "app registered" : "app offline"}
-          tone={desk.softphone.registered ? "good" : "bad"}
+          label={softphone.registered ? "app registered" : "app offline"}
+          tone={softphone.registered ? "good" : "bad"}
         />
         <StatusBadge
-          label={desk.softphone.microphoneAllowed ? "Mic allowed" : "Mic blocked"}
-          tone={desk.softphone.microphoneAllowed ? "good" : "bad"}
+          label={softphone.microphoneAllowed ? "Mic allowed" : "Mic blocked"}
+          tone={softphone.microphoneAllowed ? "good" : "bad"}
         />
         <div className="user-pill">
           <Headphones size={16} />
@@ -334,13 +341,15 @@ function AgentDesk({
   manualDialNumber,
   onCampaignChange,
   onDeskChanged,
-  onManualDialNumberChange
+  onManualDialNumberChange,
+  softphone
 }: {
   desk: AgentDeskResponse;
   manualDialNumber: string;
   onCampaignChange: (campaignId: string) => Promise<void>;
   onDeskChanged: (desk: AgentDeskResponse) => void;
   onManualDialNumberChange: (phoneNumber: string) => void;
+  softphone: SoftphoneRuntime;
 }) {
   const [deskMode, setDeskMode] = useState<"ready" | "manual">("ready");
   const [callNextPending, setCallNextPending] = useState(false);
@@ -407,6 +416,7 @@ function AgentDesk({
           mode="active"
           onCampaignChange={onCampaignChange}
           onOpenManual={() => setDeskMode("manual")}
+          softphone={softphone}
         />
       </section>
     );
@@ -438,6 +448,7 @@ function AgentDesk({
         mode="ready"
         onCampaignChange={onCampaignChange}
         onOpenManual={() => setDeskMode("manual")}
+        softphone={softphone}
       />
     </section>
   );
@@ -510,12 +521,14 @@ function AgentStatusPanel({
   desk,
   mode,
   onCampaignChange,
-  onOpenManual
+  onOpenManual,
+  softphone
 }: {
   desk: AgentDeskResponse;
   mode: "ready" | "active";
   onCampaignChange: (campaignId: string) => Promise<void>;
   onOpenManual: () => void;
+  softphone: SoftphoneRuntime;
 }) {
   const [campaignPending, setCampaignPending] = useState(false);
   const [campaignError, setCampaignError] = useState<string | null>(null);
@@ -558,6 +571,15 @@ function AgentStatusPanel({
           label={desk.campaign.manualDialingEnabled ? "Manual dialing enabled" : "Manual dialing disabled"}
           tone={desk.campaign.manualDialingEnabled ? "good" : "neutral"}
         />
+      </div>
+      <div className="softphone-runtime-card">
+        <div className="softphone-runtime-icon">
+          <Mic size={17} />
+        </div>
+        <div>
+          <strong>{softphone.label}</strong>
+          <span>{softphone.error ?? softphone.detail}</span>
+        </div>
       </div>
       {desk.campaign.manualDialingEnabled && (
         <button className="secondary-action manual-open-action" onClick={onOpenManual} type="button">

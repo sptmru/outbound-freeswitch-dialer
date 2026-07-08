@@ -21,6 +21,7 @@ export type {
   ManualDialValidationResponse,
   MutationResponse,
   PublicUser,
+  SoftphoneProvisioningResponse,
   StartNextCallRequest,
   StartManualCallRequest,
   SuppressContactRequest,
