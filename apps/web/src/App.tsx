@@ -48,6 +48,7 @@ import {
   importCampaignCsv,
   importCampaignCsvFile,
   login,
+  runSoftphoneTestCall,
   runFreeSwitchSafeTest,
   setStoredToken,
   startLeadCall,
@@ -71,7 +72,8 @@ import type {
   ImportCsvResponse,
   LeadSummary,
   ManualDialValidationResponse,
-  PublicUser
+  PublicUser,
+  SoftphoneTestCallResponse
 } from "./types";
 
 type View = "desk" | "campaigns" | "recordings" | "history" | "settings";
@@ -545,6 +547,9 @@ function AgentStatusPanel({
 }) {
   const [campaignPending, setCampaignPending] = useState(false);
   const [campaignError, setCampaignError] = useState<string | null>(null);
+  const [testCallPending, setTestCallPending] = useState(false);
+  const [testCallResult, setTestCallResult] = useState<SoftphoneTestCallResponse | null>(null);
+  const [testCallError, setTestCallError] = useState<string | null>(null);
 
   async function changeCampaign(campaignId: string) {
     setCampaignPending(true);
@@ -555,6 +560,23 @@ function AgentStatusPanel({
       setCampaignError(error instanceof Error ? error.message : "Could not switch campaign");
     } finally {
       setCampaignPending(false);
+    }
+  }
+
+  async function startSoftphoneTestCall() {
+    setTestCallPending(true);
+    setTestCallError(null);
+    setTestCallResult(null);
+    try {
+      const result = await runSoftphoneTestCall();
+      setTestCallResult(result);
+      if (!result.ok) {
+        setTestCallError(result.message);
+      }
+    } catch (error) {
+      setTestCallError(error instanceof Error ? error.message : "Could not start softphone test call");
+    } finally {
+      setTestCallPending(false);
     }
   }
 
@@ -594,6 +616,40 @@ function AgentStatusPanel({
           <span>{softphone.error ?? softphone.detail}</span>
         </div>
       </div>
+      <div className="softphone-actions">
+        <button
+          className="secondary-action compact-action"
+          disabled={!softphone.registered || softphone.callState !== "none" || testCallPending}
+          onClick={startSoftphoneTestCall}
+          type="button"
+        >
+          <PhoneCall size={16} />
+          {testCallPending ? "Calling" : "Test call"}
+        </button>
+        {softphone.callState === "incoming" && (
+          <>
+            <button className="primary-action compact-action" onClick={() => void softphone.answerIncomingCall()} type="button">
+              <Phone size={16} />
+              Answer
+            </button>
+            <button className="secondary-action compact-action" onClick={() => void softphone.declineIncomingCall()} type="button">
+              <PhoneOff size={16} />
+              Decline
+            </button>
+          </>
+        )}
+        {softphone.callState === "active" && (
+          <button className="danger-action compact-action" onClick={() => void softphone.hangUpSoftphoneCall()} type="button">
+            <PhoneOff size={16} />
+            Hang up
+          </button>
+        )}
+      </div>
+      {(testCallError || testCallResult?.ok) && (
+        <p className={testCallResult?.ok ? "inline-success" : "form-error"}>
+          {testCallResult?.ok ? "Test call queued. Answer it in this browser." : testCallError}
+        </p>
+      )}
       {desk.campaign.manualDialingEnabled && (
         <button className="secondary-action manual-open-action" onClick={onOpenManual} type="button">
           <Phone size={17} />

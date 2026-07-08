@@ -530,6 +530,21 @@ input[type="checkbox"] {
   width: 36px;
 }
 
+.softphone-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.inline-success {
+  background: #e9f8f2;
+  border: 1px solid #a9e4cb;
+  border-radius: 8px;
+  color: #126344;
+  margin: 0;
+  padding: 10px 12px;
+}
+
 .manual-open-action {
   justify-self: start;
 }
@@ -683,6 +698,8 @@ input[type="checkbox"] {
 }
 
 .primary-action:disabled,
+.danger-action:disabled,
+.secondary-action:disabled,
 .icon-button:disabled {
   cursor: not-allowed;
   opacity: 0.6;

@@ -92,6 +92,7 @@ POST /auth/login
 GET /auth/me
 GET /agent/desk
 GET /agent/softphone/provisioning
+POST /agent/softphone/test-call
 POST /agent/manual-dial/validate
 POST /agent/manual-dial/start
 POST /agent/call-next

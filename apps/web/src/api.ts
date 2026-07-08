@@ -20,6 +20,7 @@ import type {
   MutationResponse,
   PublicUser,
   SoftphoneProvisioningResponse,
+  SoftphoneTestCallResponse,
   StartNextCallRequest,
   StartManualCallRequest,
   SuppressContactRequest,
@@ -91,6 +92,12 @@ export async function fetchAgentDesk(campaignId?: string): Promise<AgentDeskResp
 
 export async function fetchSoftphoneProvisioning(): Promise<SoftphoneProvisioningResponse> {
   return apiFetch<SoftphoneProvisioningResponse>("/agent/softphone/provisioning");
+}
+
+export async function runSoftphoneTestCall(): Promise<SoftphoneTestCallResponse> {
+  return apiFetch<SoftphoneTestCallResponse>("/agent/softphone/test-call", {
+    method: "POST"
+  });
 }
 
 export async function fetchAdminOverview(): Promise<AdminOverviewResponse> {
