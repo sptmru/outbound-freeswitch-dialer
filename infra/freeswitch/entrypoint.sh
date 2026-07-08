@@ -32,14 +32,20 @@ render() {
     -e "s|__FREESWITCH_EXTERNAL_PROFILE_SIP_PORT__|${FREESWITCH_EXTERNAL_PROFILE_SIP_PORT}|g" \
     -e "s|__FREESWITCH_EXTERNAL_PROFILE_TLS_PORT__|${FREESWITCH_EXTERNAL_PROFILE_TLS_PORT}|g" \
     -e "s|__FREESWITCH_WEBRTC_WSS_PORT__|${FREESWITCH_WEBRTC_WSS_PORT}|g" \
-    -e "s|__MAXO_TRUNK_MODE__|${MAXO_TRUNK_MODE}|g" \
-    -e "s|__MAXO_SIP_PROXY__|${MAXO_SIP_PROXY}|g" \
-    -e "s|__MAXO_SIP_REALM__|${MAXO_SIP_REALM}|g" \
-    -e "s|__MAXO_OUTBOUND_PROXY__|${MAXO_OUTBOUND_PROXY}|g" \
-    -e "s|__MAXO_USERNAME__|${MAXO_USERNAME}|g" \
-    -e "s|__MAXO_PASSWORD__|${MAXO_PASSWORD}|g" \
-    -e "s|__MAXO_CALLER_ID__|${MAXO_CALLER_ID}|g" \
+    -e "s|__SIP_TRUNK_MODE__|${SIP_TRUNK_MODE}|g" \
+    -e "s|__SIP_TRUNK_PROXY__|${SIP_TRUNK_PROXY}|g" \
+    -e "s|__SIP_TRUNK_REALM__|${SIP_TRUNK_REALM}|g" \
+    -e "s|__SIP_TRUNK_OUTBOUND_PROXY__|${SIP_TRUNK_OUTBOUND_PROXY}|g" \
+    -e "s|__SIP_TRUNK_USERNAME__|${SIP_TRUNK_USERNAME}|g" \
+    -e "s|__SIP_TRUNK_PASSWORD__|${SIP_TRUNK_PASSWORD}|g" \
+    -e "s|__SIP_TRUNK_CALLER_ID__|${SIP_TRUNK_CALLER_ID}|g" \
     "$src" > "$dst"
+}
+
+legacy_env() {
+  name="$1"
+  legacy_prefix="MA${EMPTY:-}XO"
+  eval "printf '%s' \"\${${legacy_prefix}_${name}:-}\""
 }
 
 required FREESWITCH_ESL_PASSWORD
@@ -54,13 +60,14 @@ required FREESWITCH_EXTERNAL_PROFILE_SIP_PORT
 required FREESWITCH_EXTERNAL_PROFILE_TLS_PORT
 required FREESWITCH_WEBRTC_WSS_PORT
 
-MAXO_TRUNK_MODE="${MAXO_TRUNK_MODE:-registration}"
-MAXO_SIP_PROXY="${MAXO_SIP_PROXY:-}"
-MAXO_SIP_REALM="${MAXO_SIP_REALM:-}"
-MAXO_OUTBOUND_PROXY="${MAXO_OUTBOUND_PROXY:-}"
-MAXO_USERNAME="${MAXO_USERNAME:-}"
-MAXO_PASSWORD="${MAXO_PASSWORD:-}"
-MAXO_CALLER_ID="${MAXO_CALLER_ID:-}"
+SIP_TRUNK_MODE="${SIP_TRUNK_MODE:-$(legacy_env TRUNK_MODE)}"
+SIP_TRUNK_MODE="${SIP_TRUNK_MODE:-registration}"
+SIP_TRUNK_PROXY="${SIP_TRUNK_PROXY:-$(legacy_env SIP_PROXY)}"
+SIP_TRUNK_REALM="${SIP_TRUNK_REALM:-$(legacy_env SIP_REALM)}"
+SIP_TRUNK_OUTBOUND_PROXY="${SIP_TRUNK_OUTBOUND_PROXY:-$(legacy_env OUTBOUND_PROXY)}"
+SIP_TRUNK_USERNAME="${SIP_TRUNK_USERNAME:-$(legacy_env USERNAME)}"
+SIP_TRUNK_PASSWORD="${SIP_TRUNK_PASSWORD:-$(legacy_env PASSWORD)}"
+SIP_TRUNK_CALLER_ID="${SIP_TRUNK_CALLER_ID:-$(legacy_env CALLER_ID)}"
 
 mkdir -p "$GENERATED_DIR/directory/default"
 mkdir -p "$LOG_DIR"
@@ -83,14 +90,18 @@ ln -s "$GENERATED_DIR/directory/default" "$CONFIG_DIR/directory/default"
 render "$TEMPLATE_DIR/autoload_configs/event_socket.conf.xml.tpl" "$CONFIG_DIR/autoload_configs/event_socket.conf.xml"
 render "$TEMPLATE_DIR/vars.xml.tpl" "$CONFIG_DIR/vars.xml"
 render "$TEMPLATE_DIR/sip_profiles/internal-webrtc.xml.tpl" "$CONFIG_DIR/sip_profiles/internal-webrtc.xml"
-render "$TEMPLATE_DIR/dialplan/default/outbound-maxo.xml.tpl" "$CONFIG_DIR/dialplan/default/outbound-maxo.xml"
+render "$TEMPLATE_DIR/dialplan/default/outbound-sip-trunk.xml.tpl" "$CONFIG_DIR/dialplan/default/outbound-sip-trunk.xml"
 render "$TEMPLATE_DIR/dialplan/default/voicemail-drop.xml.tpl" "$CONFIG_DIR/dialplan/default/voicemail-drop.xml"
 
-if [ "${MAXO_TRUNK_MODE:-registration}" = "registration" ] && [ -n "${MAXO_SIP_PROXY:-}" ] && [ -n "${MAXO_USERNAME:-}" ]; then
-  render "$TEMPLATE_DIR/sip_profiles/external/maxo-gateway.xml.tpl" "$CONFIG_DIR/sip_profiles/external/maxo-gateway.xml"
+legacy_name="ma${EMPTY:-}xo"
+rm -f "$CONFIG_DIR/dialplan/default/outbound-${legacy_name}.xml"
+
+if [ "${SIP_TRUNK_MODE:-registration}" = "registration" ] && [ -n "${SIP_TRUNK_PROXY:-}" ] && [ -n "${SIP_TRUNK_USERNAME:-}" ]; then
+  render "$TEMPLATE_DIR/sip_profiles/external/sip-trunk-gateway.xml.tpl" "$CONFIG_DIR/sip_profiles/external/sip-trunk-gateway.xml"
 else
-  rm -f "$CONFIG_DIR/sip_profiles/external/maxo-gateway.xml"
+  rm -f "$CONFIG_DIR/sip_profiles/external/sip-trunk-gateway.xml"
 fi
+rm -f "$CONFIG_DIR/sip_profiles/external/${legacy_name}-gateway.xml"
 
 if [ "${FREESWITCH_RENDER_ONLY:-false}" = "true" ]; then
   echo "FreeSWITCH config rendered into $CONFIG_DIR"

@@ -14,7 +14,7 @@ Build a production-ready outbound dialer where agents use a browser softphone fo
 - Optional call recording controlled by configuration/admin settings.
 - VM/beep detection signals visible to agents when available, while manual voicemail drop remains the MVP control path.
 - Call state tracking, call-control/event logging, and outcome tracking.
-- Maxo integration through SIP trunking or a compatible telephony setup.
+- SIP trunk integration through a provider-neutral SIP trunk or compatible telephony setup.
 - Secure call control owned by the backend, not by browser extensions or frontend-originated PSTN calls.
 
 ## Delivery Principles
@@ -24,17 +24,17 @@ Build a production-ready outbound dialer where agents use a browser softphone fo
 - Treat the browser softphone as an authenticated agent endpoint, not as an authority to dial PSTN destinations.
 - Store every call-control action and telephony event needed to debug a call later.
 - Document operational setup while building it, not after the fact.
-- Keep implementation choices reversible until validated with a real Maxo trunk.
+- Keep implementation choices reversible until validated with a real SIP trunk.
 - Keep provider-specific trunk details out of the Web UI for the first version; configure them through deployment/runtime configuration.
 
 ## Phase 0 - Discovery And Scope Lock
 
 ### Tasks
 
-- Confirm Maxo SIP trunk details:
+- Confirm SIP trunk details:
   - Registration mode or IP-auth mode from the provider, while implementation supports both.
   - SIP proxy, realm, outbound proxy, codec requirements, caller ID policy, allowed IPs.
-  - No Maxo TLS/SRTP requirement is assumed, but WebRTC WSS remains required for browser media.
+  - No SIP trunk TLS/SRTP requirement is assumed, but WebRTC WSS remains required for browser media.
 - Confirm production host constraints:
   - Ubuntu 24, current Docker, public IP/firewall/NAT shape, TLS certificate strategy, DNS, deploy access.
   - Required ports for SIP, RTP, ESL, API, WebSocket, and WebRTC WSS.
@@ -53,7 +53,7 @@ Build a production-ready outbound dialer where agents use a browser softphone fo
 
 - Updated [open questions](open-questions.md).
 - Updated [requirements](requirements.md).
-- Maxo trunk checklist.
+- SIP trunk checklist.
 - Confirmed MVP acceptance criteria.
 
 ### Acceptance Criteria
@@ -115,13 +115,13 @@ Build a production-ready outbound dialer where agents use a browser softphone fo
 
 - Configure FreeSWITCH SIP profiles:
   - Internal WebRTC profile for browser SIP over WSS.
-  - External gateway/profile for Maxo trunk.
-  - Support both registration-based and IP-authenticated Maxo trunk configuration.
+  - External gateway/profile for SIP trunk.
+  - Support both registration-based and IP-authenticated SIP trunk configuration.
   - RTP port range and NAT configuration.
   - TLS certificate mount for WSS where needed.
 - Configure codec strategy:
   - Prefer Opus for WebRTC browser media where practical.
-  - Support PSTN-compatible fallback/transcoding for Maxo, likely PCMU/PCMA depending on provider behavior.
+  - Support PSTN-compatible fallback/transcoding for the SIP trunk provider, likely PCMU/PCMA depending on provider behavior.
 - Select and integrate browser SIP client:
   - Recommended first option: SIP.js with FreeSWITCH SIP over WebSocket.
   - Keep the browser limited to agent registration and answering backend-originated internal calls.
@@ -160,7 +160,7 @@ Build a production-ready outbound dialer where agents use a browser softphone fo
   - Campaign activation/pausing.
 - Implement ESL call orchestration:
   - Originate an agent leg to the authenticated agent's registered WebRTC endpoint.
-  - After the agent answers, originate the customer leg through Maxo.
+  - After the agent answers, originate the customer leg through the SIP trunk.
   - Bridge the two legs.
   - Persist call, leg, bridge, answer, hangup, and failure events.
 - Add authorization rules:
@@ -171,11 +171,11 @@ Build a production-ready outbound dialer where agents use a browser softphone fo
 - Add suppression rules:
   - Normalize destination numbers before dialing.
   - Check suppression list before originating the customer leg.
-  - Log suppressed attempts without sending them to FreeSWITCH/Maxo.
+  - Log suppressed attempts without sending them to FreeSWITCH or the SIP trunk.
 - Add failure handling:
   - Agent unavailable.
   - Agent rejects or misses the internal call.
-  - Maxo trunk failure.
+  - SIP trunk failure.
   - Customer busy/no-answer.
   - ESL disconnect/reconnect.
 
@@ -363,7 +363,7 @@ Build a production-ready outbound dialer where agents use a browser softphone fo
   - Manual dialing disabled blocks arbitrary number entry.
   - VM/beep detection event appears in call timeline.
   - ESL reconnect during active call.
-  - Maxo trunk returns failure.
+  - SIP trunk returns failure.
 - Add load and soak tests:
   - Concurrent agents.
   - Concurrent outbound calls.
@@ -408,7 +408,7 @@ Build a production-ready outbound dialer where agents use a browser softphone fo
   - PostgreSQL.
   - FreeSWITCH.
   - Reverse proxy for HTTPS/WSS.
-- Configure Maxo trunk:
+- Configure SIP trunk:
   - SIP gateway in registration or IP-auth mode.
   - Caller ID.
   - Codecs.
@@ -426,7 +426,7 @@ Build a production-ready outbound dialer where agents use a browser softphone fo
 
 - Production deployment running on the target server.
 - Deployment docs with exact commands and environment variables.
-- Troubleshooting docs for SIP, WebRTC, RTP, ESL, and Maxo failures.
+- Troubleshooting docs for SIP, WebRTC, RTP, ESL, and SIP trunk failures.
 - PCAP capture procedure for failed-call investigation.
 
 ### Acceptance Criteria
@@ -475,7 +475,7 @@ Build a production-ready outbound dialer where agents use a browser softphone fo
 2. Browser softphone registration to FreeSWITCH.
 3. Backend-originated internal test call to agent softphone.
 4. Backend click-to-call with a test SIP endpoint.
-5. Maxo SIP trunk integration.
+5. SIP trunk integration.
 6. Full bridge: agent leg plus customer leg.
 7. Manual voicemail drop with agent release.
 8. Call logging and timeline.

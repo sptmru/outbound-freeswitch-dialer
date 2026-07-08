@@ -6,12 +6,12 @@ The system is a single-tenant outbound dialer with a Web UI softphone. Agents wo
 
 ## Telephony
 
-- Support Maxo SIP trunk integration.
+- Support SIP trunk integration.
 - Support both SIP registration and IP-authenticated trunk modes.
 - Trunk configuration can be file/environment driven; trunk setup through the Web UI is not required for the first version.
 - Use provider-supplied SIP proxy, realm, outbound proxy, credentials, caller ID rules, and allowlisted production IPs.
-- No explicit TLS/SRTP requirement for the Maxo trunk, but WebRTC still requires secure browser transport.
-- Use an efficient WebRTC codec path where possible, with Opus preferred for browser media and PSTN-compatible fallback/transcoding as required by FreeSWITCH/Maxo.
+- No explicit TLS/SRTP requirement for the SIP trunk, but WebRTC still requires secure browser transport.
+- Use an efficient WebRTC codec path where possible, with Opus preferred for browser media and PSTN-compatible fallback/transcoding as required by FreeSWITCH and the SIP trunk provider.
 - Concurrency is naturally limited by online agents rather than a hard business limit.
 
 ## Voicemail Drop

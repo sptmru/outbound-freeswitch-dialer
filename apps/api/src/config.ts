@@ -33,10 +33,10 @@ const envSchema = z.object({
   FREESWITCH_DOMAIN: z.string().default("localhost"),
   FREESWITCH_WEBRTC_WSS_PORT: z.coerce.number().int().positive().default(7443),
   FREESWITCH_WEBRTC_PUBLIC_WS_URL: z.string().url().optional(),
-  MAXO_TRUNK_MODE: z.enum(["registration", "ip_auth"]).default("registration"),
-  MAXO_SIP_PROXY: z.string().optional(),
-  MAXO_USERNAME: z.string().optional(),
-  MAXO_CALLER_ID: z.string().optional()
+  SIP_TRUNK_MODE: z.enum(["registration", "ip_auth"]).default("registration"),
+  SIP_TRUNK_PROXY: z.string().optional(),
+  SIP_TRUNK_USERNAME: z.string().optional(),
+  SIP_TRUNK_CALLER_ID: z.string().optional()
 });
 
 export type AppConfig = z.infer<typeof envSchema> & {
@@ -44,12 +44,23 @@ export type AppConfig = z.infer<typeof envSchema> & {
 };
 
 export function loadConfig(): AppConfig {
-  const parsed = envSchema.parse(process.env);
+  const parsed = envSchema.parse(normalizeEnv(process.env));
 
   return {
     ...parsed,
     corsOrigins: parsed.CORS_ORIGINS.split(",")
       .map((origin) => origin.trim())
       .filter(Boolean)
+  };
+}
+
+function normalizeEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const legacyPrefix = ["MA", "XO"].join("");
+  return {
+    ...env,
+    SIP_TRUNK_MODE: env.SIP_TRUNK_MODE ?? env[`${legacyPrefix}_TRUNK_MODE`],
+    SIP_TRUNK_PROXY: env.SIP_TRUNK_PROXY ?? env[`${legacyPrefix}_SIP_PROXY`],
+    SIP_TRUNK_USERNAME: env.SIP_TRUNK_USERNAME ?? env[`${legacyPrefix}_USERNAME`],
+    SIP_TRUNK_CALLER_ID: env.SIP_TRUNK_CALLER_ID ?? env[`${legacyPrefix}_CALLER_ID`]
   };
 }

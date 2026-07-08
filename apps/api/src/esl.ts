@@ -38,7 +38,9 @@ export async function originateCustomerLeg(
     `outbound_dialer_call_id=${input.callId}`,
     "ignore_early_media=true",
     "originate_timeout=45",
-    config.MAXO_CALLER_ID ? `origination_caller_id_number=${escapeOriginateVariable(config.MAXO_CALLER_ID)}` : null
+    config.SIP_TRUNK_CALLER_ID
+      ? `origination_caller_id_number=${escapeOriginateVariable(config.SIP_TRUNK_CALLER_ID)}`
+      : null
   ]
     .filter(Boolean)
     .join(",");
@@ -55,10 +57,10 @@ export function canOriginateCustomerLeg(config: AppConfig): boolean {
   if (!config.FREESWITCH_ESL_ENABLED) {
     return false;
   }
-  if (config.MAXO_TRUNK_MODE === "ip_auth") {
-    return Boolean(config.MAXO_SIP_PROXY);
+  if (config.SIP_TRUNK_MODE === "ip_auth") {
+    return Boolean(config.SIP_TRUNK_PROXY);
   }
-  return Boolean(config.MAXO_SIP_PROXY && config.MAXO_USERNAME);
+  return Boolean(config.SIP_TRUNK_PROXY && config.SIP_TRUNK_USERNAME);
 }
 
 export async function sendFreeSwitchApiCommand(config: AppConfig, command: string): Promise<EslCommandResponse> {
@@ -135,16 +137,16 @@ async function sendFreeSwitchCommand(config: AppConfig, command: string): Promis
 
 function buildCustomerDialString(config: AppConfig, destinationNumber: string): string {
   const digits = normalizeDestinationForDialString(destinationNumber);
-  if (config.MAXO_TRUNK_MODE === "ip_auth") {
-    if (!config.MAXO_SIP_PROXY) {
-      throw new Error("MAXO_SIP_PROXY is required for ip_auth originate");
+  if (config.SIP_TRUNK_MODE === "ip_auth") {
+    if (!config.SIP_TRUNK_PROXY) {
+      throw new Error("SIP_TRUNK_PROXY is required for ip_auth originate");
     }
-    return `sofia/external/${digits}@${config.MAXO_SIP_PROXY}`;
+    return `sofia/external/${digits}@${config.SIP_TRUNK_PROXY}`;
   }
-  if (!config.MAXO_SIP_PROXY || !config.MAXO_USERNAME) {
-    throw new Error("MAXO_SIP_PROXY and MAXO_USERNAME are required for registration originate");
+  if (!config.SIP_TRUNK_PROXY || !config.SIP_TRUNK_USERNAME) {
+    throw new Error("SIP_TRUNK_PROXY and SIP_TRUNK_USERNAME are required for registration originate");
   }
-  return `sofia/gateway/maxo/${digits}`;
+  return `sofia/gateway/sip-trunk/${digits}`;
 }
 
 function normalizeDestinationForDialString(value: string): string {

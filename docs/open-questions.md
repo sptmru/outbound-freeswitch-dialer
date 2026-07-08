@@ -2,14 +2,14 @@
 
 This file tracks remaining unknowns only. Confirmed decisions are captured in [requirements](requirements.md).
 
-## Maxo And SIP Trunk
+## SIP Trunk
 
-- Which Maxo trunk mode will the provider give us: registration-based or IP-authenticated?
+- Which SIP trunk mode will the provider give us: registration-based or IP-authenticated?
   - Requirement: support both modes.
-- What exact SIP proxy, realm, outbound proxy, username, password, and from-domain will Maxo provide?
-- What caller ID format does Maxo require?
+- What exact SIP proxy, realm, outbound proxy, username, password, and from-domain will the SIP trunk provider provide?
+- What caller ID format does the SIP trunk provider require?
 - Which production server IPs need to be allowlisted?
-- Does Maxo require any codec constraints beyond normal PSTN compatibility?
+- Does the SIP trunk provider require any codec constraints beyond normal PSTN compatibility?
 
 ## Voicemail And Detection
 

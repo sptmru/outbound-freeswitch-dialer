@@ -6,7 +6,7 @@ Accepted
 
 ## Context
 
-The first requirements clarification answered major scope questions around Maxo trunking, voicemail behavior, campaigns, CSV imports, suppression, call recording, authentication, production deployment, and UI design.
+The first requirements clarification answered major scope questions around SIP trunking, voicemail behavior, campaigns, CSV imports, suppression, call recording, authentication, production deployment, and UI design.
 
 ## Decision
 
@@ -16,8 +16,8 @@ Build the first version with these assumptions:
 - Local username/password authentication.
 - Roles limited to `agent` and `admin`.
 - Agent SIP credentials are generated automatically when an agent is created.
-- Maxo trunk supports both registration-based and IP-authenticated modes.
-- Maxo trunk configuration is deployment/runtime configuration, not Web UI configuration.
+- SIP trunk supports both registration-based and IP-authenticated modes.
+- SIP trunk configuration is deployment/runtime configuration, not Web UI configuration.
 - Manual "Drop Voicemail" is the MVP behavior.
 - VM/beep detection is visible to agents as a signal but does not automatically control voicemail drop in MVP.
 - Customer leg hangs up automatically after voicemail playback completes.
@@ -33,7 +33,7 @@ Build the first version with these assumptions:
 
 ## Rationale
 
-- Supporting both Maxo trunk modes avoids blocking development on provider details.
+- Supporting both SIP trunk modes avoids blocking development on provider details.
 - Manual voicemail drop satisfies the client requirement while VM/beep visibility creates evidence for future automation.
 - Campaigns, CSV field mapping, and suppression are needed for a usable outbound workflow rather than a raw dial pad.
 - Local auth and single-tenancy keep the first implementation focused.
@@ -49,7 +49,7 @@ Build the first version with these assumptions:
 
 ## Alternatives Considered
 
-- Only support one Maxo trunk mode.
+- Only support one SIP trunk mode.
   - Rejected because the provider details are not known yet.
 - Automatic voicemail drop based on detection.
   - Deferred until detection reliability is proven from real calls.

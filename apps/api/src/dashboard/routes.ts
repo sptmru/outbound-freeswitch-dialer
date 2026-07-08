@@ -814,12 +814,12 @@ async function checkEslHealth(config: AppConfig): Promise<FreeSwitchDiagnosticsR
 
 async function checkTrunkStatus(config: AppConfig): Promise<FreeSwitchDiagnosticsResponse["trunk"]> {
   const base = {
-    mode: config.MAXO_TRUNK_MODE,
+    mode: config.SIP_TRUNK_MODE,
     configured: canOriginateCustomerLeg(config),
-    gatewayName: config.MAXO_TRUNK_MODE === "registration" ? "maxo" : undefined,
-    proxyConfigured: Boolean(config.MAXO_SIP_PROXY),
-    usernameConfigured: Boolean(config.MAXO_USERNAME),
-    callerIdConfigured: Boolean(config.MAXO_CALLER_ID)
+    gatewayName: config.SIP_TRUNK_MODE === "registration" ? "sip-trunk" : undefined,
+    proxyConfigured: Boolean(config.SIP_TRUNK_PROXY),
+    usernameConfigured: Boolean(config.SIP_TRUNK_USERNAME),
+    callerIdConfigured: Boolean(config.SIP_TRUNK_CALLER_ID)
   };
 
   if (!base.configured) {
@@ -827,13 +827,13 @@ async function checkTrunkStatus(config: AppConfig): Promise<FreeSwitchDiagnostic
       ...base,
       status: "not_configured",
       summary:
-        config.MAXO_TRUNK_MODE === "ip_auth"
-          ? "MAXO_SIP_PROXY is required before outbound calls can be originated."
-          : "MAXO_SIP_PROXY and MAXO_USERNAME are required before outbound calls can be originated."
+        config.SIP_TRUNK_MODE === "ip_auth"
+          ? "SIP_TRUNK_PROXY is required before outbound calls can be originated."
+          : "SIP_TRUNK_PROXY and SIP_TRUNK_USERNAME are required before outbound calls can be originated."
     };
   }
 
-  if (config.MAXO_TRUNK_MODE === "ip_auth") {
+  if (config.SIP_TRUNK_MODE === "ip_auth") {
     return {
       ...base,
       status: "ready",
@@ -842,7 +842,7 @@ async function checkTrunkStatus(config: AppConfig): Promise<FreeSwitchDiagnostic
   }
 
   try {
-    const gateway = await sendFreeSwitchApiCommand(config, "sofia status gateway maxo");
+    const gateway = await sendFreeSwitchApiCommand(config, "sofia status gateway sip-trunk");
     const status = parseGatewayStatus(gateway.body || gateway.raw);
     return {
       ...base,
@@ -854,7 +854,7 @@ async function checkTrunkStatus(config: AppConfig): Promise<FreeSwitchDiagnostic
     return {
       ...base,
       status: "error",
-      summary: error instanceof Error ? error.message : "Could not read Maxo gateway status"
+      summary: error instanceof Error ? error.message : "Could not read SIP trunk gateway status"
     };
   }
 }
@@ -875,18 +875,18 @@ function parseGatewayStatus(raw: string): FreeSwitchTrunkStatus {
 
 function summarizeGatewayStatus(status: FreeSwitchTrunkStatus): string {
   if (status === "ready") {
-    return "Maxo gateway is registered and ready for live originate tests.";
+    return "SIP trunk gateway is registered and ready for live originate tests.";
   }
   if (status === "dns_error") {
-    return "FreeSWITCH cannot resolve the configured Maxo SIP proxy.";
+    return "FreeSWITCH cannot resolve the configured SIP trunk proxy.";
   }
   if (status === "registration_failed") {
-    return "Maxo gateway is configured but not registered.";
+    return "SIP trunk gateway is configured but not registered.";
   }
   if (status === "error") {
-    return "Could not read Maxo gateway status.";
+    return "Could not read SIP trunk gateway status.";
   }
-  return "Maxo gateway status is not conclusive yet.";
+  return "SIP trunk gateway status is not conclusive yet.";
 }
 
 function parseBgapiJobUuid(body: string): string | undefined {
@@ -1205,7 +1205,7 @@ async function syncFreeSwitchOriginate(
       eventType: "freeswitch_originate_skipped",
       state: "customer_dialing",
       raw: {
-        reason: "Maxo trunk is not configured",
+        reason: "SIP trunk is not configured",
         destinationNumber: input.destinationNumber
       }
     });

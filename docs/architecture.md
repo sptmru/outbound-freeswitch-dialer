@@ -24,7 +24,7 @@ Node.js TypeScript API
 
 FreeSWITCH
   - WebRTC SIP profile for agent softphones
-  - Maxo SIP gateway/profile for PSTN calls, supporting registration and IP-auth modes
+  - SIP trunk gateway/profile for PSTN calls, supporting registration and IP-auth modes
   - Dialplan for bridge and voicemail-drop flows
   - Optional call recording and VM/beep signal experiments
   - ESL event source and command target
@@ -40,7 +40,7 @@ PostgreSQL
   - Suppression entries
   - System settings
 
-Maxo
+SIP trunk provider
   - SIP trunk or compatible telephony setup
   - PSTN termination
 ```
@@ -76,7 +76,7 @@ Use a backend-owned two-leg call:
 2. Backend creates a call record and correlation ID.
 3. Backend originates an internal call to the agent's WebRTC SIP endpoint.
 4. Agent answers in the browser softphone.
-5. Backend originates the customer leg through the Maxo gateway.
+5. Backend originates the customer leg through the SIP trunk gateway.
 6. Backend bridges the agent and customer legs.
 7. Backend streams state updates to the dashboard.
 
@@ -318,15 +318,15 @@ Technical reason codes should be stored separately from the user-facing outcome.
 - `FREESWITCH_WEBRTC_WSS_URL`
 - `FREESWITCH_RTP_START_PORT`
 - `FREESWITCH_RTP_END_PORT`
-- `MAXO_SIP_MODE`
-- `MAXO_SIP_REGISTRATION_ENABLED`
-- `MAXO_SIP_PROXY`
-- `MAXO_SIP_REALM`
-- `MAXO_SIP_OUTBOUND_PROXY`
-- `MAXO_SIP_USERNAME`
-- `MAXO_SIP_PASSWORD`
-- `MAXO_SIP_FROM_DOMAIN`
-- `MAXO_OUTBOUND_CALLER_ID`
+- `SIP_TRUNK_MODE`
+- `SIP_TRUNK_REGISTRATION_ENABLED`
+- `SIP_TRUNK_PROXY`
+- `SIP_TRUNK_REALM`
+- `SIP_TRUNK_OUTBOUND_PROXY`
+- `SIP_TRUNK_USERNAME`
+- `SIP_TRUNK_PASSWORD`
+- `SIP_TRUNK_FROM_DOMAIN`
+- `SIP_TRUNK_CALLER_ID`
 - `RECORDINGS_PATH`
 - `CALL_RECORDINGS_PATH`
 - `DEFAULT_CALL_RECORDING_ENABLED`
@@ -358,7 +358,7 @@ For support, production docs must include how to collect PCAP files and correlat
 
 - NAT, RTP, and WebRTC media path issues.
 - AWS NAT and advertised SIP/RTP IP mismatches.
-- Maxo trunk requirements that differ between local and production.
+- SIP trunk requirements that differ between local and production.
 - FreeSWITCH bridge behavior when one leg is released.
 - VM/beep detection reliability.
 - Race conditions around voicemail drop and customer hangup.

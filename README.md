@@ -76,7 +76,7 @@ Fill the required values in `.env`, especially:
 - `FREESWITCH_DOMAIN`
 - `LETSENCRYPT_DOMAIN`
 - `LETSENCRYPT_EMAIL`
-- Maxo trunk values once the provider details are available.
+- SIP trunk values once the provider details are available.
 
 Deploy:
 
@@ -164,8 +164,8 @@ FreeSWITCH runtime config is rendered at container startup from templates in `in
 - ESL password and ACL.
 - Global domain, RTP range, and advertised SIP/RTP IPs.
 - Internal WebRTC SIP profile.
-- Optional Maxo registration gateway when `MAXO_TRUNK_MODE=registration` and trunk credentials are present.
-- IP-auth outbound routing skeleton for `MAXO_TRUNK_MODE=ip_auth`.
+- Optional SIP trunk registration gateway when `SIP_TRUNK_MODE=registration` and trunk credentials are present.
+- IP-auth outbound routing skeleton for `SIP_TRUNK_MODE=ip_auth`.
 - Manual voicemail-drop dialplan context.
 
 Browser softphone registration uses SIP.js over WebSocket. In production the
