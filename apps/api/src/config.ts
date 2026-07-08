@@ -32,6 +32,7 @@ const envSchema = z.object({
   FREESWITCH_GENERATED_CONFIG_DIR: z.string().default("/var/lib/outbound-dialer/freeswitch"),
   FREESWITCH_DOMAIN: z.string().default("localhost"),
   FREESWITCH_WEBRTC_WSS_PORT: z.coerce.number().int().positive().default(7443),
+  FREESWITCH_WEBRTC_PUBLIC_WS_URL: z.string().url().optional(),
   MAXO_TRUNK_MODE: z.enum(["registration", "ip_auth"]).default("registration"),
   MAXO_SIP_PROXY: z.string().optional(),
   MAXO_USERNAME: z.string().optional(),

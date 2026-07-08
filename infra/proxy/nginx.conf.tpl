@@ -6,6 +6,10 @@ upstream outbound_dialer_api {
   server api:3000;
 }
 
+upstream outbound_dialer_freeswitch_ws {
+  server ${FREESWITCH_WS_UPSTREAM};
+}
+
 server {
   listen 80;
   server_name ${LETSENCRYPT_DOMAIN};
@@ -42,6 +46,16 @@ server {
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto https;
     proxy_pass http://outbound_dialer_api/;
+  }
+
+  location /freeswitch-ws {
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "Upgrade";
+    proxy_read_timeout 3600s;
+    proxy_send_timeout 3600s;
+    proxy_pass http://outbound_dialer_freeswitch_ws;
   }
 
   location / {

@@ -168,6 +168,13 @@ FreeSWITCH runtime config is rendered at container startup from templates in `in
 - IP-auth outbound routing skeleton for `MAXO_TRUNK_MODE=ip_auth`.
 - Manual voicemail-drop dialplan context.
 
+Browser softphone registration uses SIP.js over WebSocket. In production the
+API provisions `wss://<FREESWITCH_DOMAIN>/freeswitch-ws` by default, and the
+HTTPS proxy terminates the public Let's Encrypt certificate before forwarding
+the WebSocket to FreeSWITCH's internal `ws-binding` on port `5066`. Override
+`FREESWITCH_WEBRTC_PUBLIC_WS_URL` only when a deployment intentionally exposes a
+different trusted WSS endpoint.
+
 Fail2ban runs as a separate host-network container and watches FreeSWITCH logs
 for SIP scanner noise such as `Can't find user [...] from <ip>`. The jail lives
 in `infra/fail2ban` and bans matching IPs after repeated misses.

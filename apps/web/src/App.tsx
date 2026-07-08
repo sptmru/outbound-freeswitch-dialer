@@ -364,6 +364,10 @@ function AgentDesk({
   }, [desk.activeCall, desk.campaign.manualDialingEnabled, manualDialNumber]);
 
   async function callNext() {
+    if (!softphone.registered) {
+      setCallNextError("Softphone must be registered before starting a call");
+      return;
+    }
     setCallNextPending(true);
     setCallNextError(null);
     try {
@@ -376,6 +380,10 @@ function AgentDesk({
   }
 
   async function callLead(lead: LeadSummary) {
+    if (!softphone.registered) {
+      setCallNextError("Softphone must be registered before starting a call");
+      return;
+    }
     setCallNextPending(true);
     setCallNextError(null);
     try {
@@ -403,6 +411,7 @@ function AgentDesk({
     return (
       <section className="agent-grid active-agent-grid">
         <LeadQueue
+          canStartCalls={softphone.registered}
           error={callNextError}
           leads={desk.leads}
           onCallLead={callLead}
@@ -430,6 +439,7 @@ function AgentDesk({
         onOpenQueue={() => setDeskMode("ready")}
         onPhoneNumberChange={onManualDialNumberChange}
         phoneNumber={manualDialNumber}
+        softphone={softphone}
       />
     );
   }
@@ -437,6 +447,7 @@ function AgentDesk({
   return (
     <section className="ready-desk-grid">
       <LeadQueue
+        canStartCalls={softphone.registered}
         error={callNextError}
         leads={desk.leads}
         onCallLead={callLead}
@@ -455,6 +466,7 @@ function AgentDesk({
 }
 
 function LeadQueue({
+  canStartCalls,
   error,
   leads,
   onCallLead,
@@ -462,6 +474,7 @@ function LeadQueue({
   pending,
   showRecommendedCall = true
 }: {
+  canStartCalls: boolean;
   error: string | null;
   leads: LeadSummary[];
   onCallLead: (lead: LeadSummary) => Promise<void>;
@@ -492,7 +505,7 @@ function LeadQueue({
             <span>{lead.status === "ready" ? "Now" : lead.status}</span>
             <button
               className="pill-action"
-              disabled={pending || lead.status !== "ready"}
+              disabled={pending || lead.status !== "ready" || !canStartCalls}
               onClick={() => onCallLead(lead)}
               type="button"
             >
@@ -507,7 +520,7 @@ function LeadQueue({
           <p>
             {recommended.company}. Default voicemail: {recommended.fields[0]?.value ?? "campaign default"}.
           </p>
-          <button className="primary-action teal-action" disabled={pending} onClick={onCallNext} type="button">
+          <button className="primary-action teal-action" disabled={pending || !canStartCalls} onClick={onCallNext} type="button">
             <PhoneCall size={17} />
             {pending ? "Starting" : "Start next call"}
           </button>
@@ -607,13 +620,15 @@ function ManualDialSurface({
   onDeskChanged,
   onOpenQueue,
   onPhoneNumberChange,
-  phoneNumber
+  phoneNumber,
+  softphone
 }: {
   desk: AgentDeskResponse;
   onDeskChanged: (desk: AgentDeskResponse) => void;
   onOpenQueue: () => void;
   onPhoneNumberChange: (phoneNumber: string) => void;
   phoneNumber: string;
+  softphone: SoftphoneRuntime;
 }) {
   const [note, setNote] = useState("");
   const [result, setResult] = useState<ManualDialValidationResponse | null>(null);
@@ -640,6 +655,10 @@ function ManualDialSurface({
   }
 
   async function startCall() {
+    if (!softphone.registered) {
+      setError("Softphone must be registered before starting a call");
+      return;
+    }
     setStartPending(true);
     setError(null);
     try {
@@ -699,7 +718,7 @@ function ManualDialSurface({
             </button>
             <button
               className="primary-action teal-action"
-              disabled={startPending || !phoneNumber.trim()}
+              disabled={startPending || !phoneNumber.trim() || !softphone.registered}
               onClick={startCall}
               type="button"
             >

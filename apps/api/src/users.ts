@@ -185,7 +185,7 @@ export async function getSoftphoneProvisioningForUser(
     sipUsername: agent.sip_username,
     sipPassword: decryptSecret(config, agent.sip_password_encrypted),
     displayName: agent.display_name || user.name,
-    websocketUrl: `wss://${config.FREESWITCH_DOMAIN}:${config.FREESWITCH_WEBRTC_WSS_PORT}`,
+    websocketUrl: config.FREESWITCH_WEBRTC_PUBLIC_WS_URL ?? `wss://${config.FREESWITCH_DOMAIN}/freeswitch-ws`,
     domain: config.FREESWITCH_DOMAIN
   };
 }

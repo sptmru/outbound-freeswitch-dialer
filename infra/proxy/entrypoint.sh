@@ -29,6 +29,6 @@ else
   export OUTBOUND_DIALER_SSL_CERTIFICATE_KEY="${fallback_key}"
 fi
 
-envsubst '${LETSENCRYPT_DOMAIN} ${OUTBOUND_DIALER_SSL_CERTIFICATE} ${OUTBOUND_DIALER_SSL_CERTIFICATE_KEY}' \
+envsubst '${LETSENCRYPT_DOMAIN} ${OUTBOUND_DIALER_SSL_CERTIFICATE} ${OUTBOUND_DIALER_SSL_CERTIFICATE_KEY} ${FREESWITCH_WS_UPSTREAM}' \
   < /etc/nginx/templates/outbound-dialer.conf.tpl \
   > /etc/nginx/conf.d/default.conf
