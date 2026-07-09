@@ -11,7 +11,9 @@ This plan is based on the July 2026 audit of the API, FreeSWITCH event handling,
   - Manual dial validation with campaign permissions.
   - Strict campaign selection for dialer actions.
   - Missing trunk originate cleanup.
+  - Call creation failure messages.
   - Transactional active-call/contact selection.
+  - Recording helper behavior: extension detection, multipart fields, content types, name normalization, and WAV duration detection.
   - ESL dial string and response parsing.
   - FreeSWITCH event state mapping, including `CHANNEL_DESTROY`.
   - FreeSWITCH generated agent XML recreation/deletion.
@@ -40,6 +42,15 @@ This plan is based on the July 2026 audit of the API, FreeSWITCH event handling,
   - the non-persisted manual dial note field was removed.
 - Phase 6 deployment surface cleanup:
   - direct web nginx now proxies `/api/` to the API service instead of serving the SPA fallback.
+- Phase 2 backend module split:
+  - `apps/api/src/dashboard/routes.ts` was reduced from 3726 lines to 1826 lines.
+  - phone normalization moved to `dashboard/phone.ts`.
+  - CSV parsing/import persistence moved to `dashboard/csv.ts`.
+  - campaign lookup/deletion helpers moved to `dashboard/campaigns.ts`.
+  - manual dial validation moved to `dashboard/manual-dial.ts`.
+  - suppression lookup moved to `dashboard/suppression.ts`.
+  - call orchestration moved to `dashboard/calls.ts`.
+  - recording persistence/default/audio metadata/duration helpers moved to `dashboard/recordings.ts`.
 
 ## Phase 1: Stabilize Call State Invariants
 
@@ -60,14 +71,21 @@ Goal: make it impossible for backend-controlled calls to stay active without a r
 
 Goal: make `apps/api/src/dashboard/routes.ts` small enough to reason about and test.
 
-Suggested modules:
+Completed modules:
 
-- `dashboard/campaigns.ts`: campaign lookup, strict selected campaign lookup, campaign updates.
-- `dashboard/manual-dial.ts`: validation, suppression checks, manual dialing policy.
-- `dashboard/calls.ts`: create/end/drop voicemail/DTMF workflows.
-- `dashboard/csv.ts`: CSV parsing and import persistence.
-- `dashboard/recordings.ts`: recording upload, duration detection, default selection, audio serving.
+- Done: `dashboard/phone.ts`: phone normalization.
+- Done: `dashboard/csv.ts`: CSV parsing and import persistence.
+- Done: `dashboard/campaigns.ts`: campaign lookup, strict selected campaign lookup, campaign deletion helpers.
+- Done: `dashboard/manual-dial.ts`: validation, suppression checks, manual dialing policy.
+- Done: `dashboard/suppression.ts`: shared suppression lookup.
+- Done: `dashboard/calls.ts`: create/end/drop voicemail/DTMF workflows.
+- Done: `dashboard/recordings.ts`: recording persistence, default selection, audio metadata, content-type, and duration helpers.
+
+Remaining backend splits:
+
 - `dashboard/responders.ts`: response builders for agent desk/admin overview.
+- contact/suppression mutation handlers if they keep growing.
+- optional Fastify route grouping once response/demo behavior is stable.
 
 Move behavior only after tests exist for the extracted function. Avoid changing SQL and extraction in the same commit unless the test explicitly covers the behavior.
 
@@ -113,8 +131,8 @@ Goal: direct container ports and proxied production paths should behave consiste
 
 ## Suggested Order
 
-1. Extract and test call orchestration helpers.
-2. Remove demo API fallbacks.
+1. Remove demo API fallbacks.
+2. Extract response builders after empty-state behavior is tested.
 3. Add web test harness.
 4. Scope or remove server-side `agent_registered`.
 5. Add ESL-backed reload/flush for deleted agent registrations.

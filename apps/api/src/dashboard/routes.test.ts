@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type pg from "pg";
 import type { AppConfig } from "../config.js";
-import { __testing } from "./routes.js";
+import { getAgentCampaign, getAgentCampaignForDialerAction } from "./campaigns.js";
+import { createDialerCall, createDialerCallFailureMessage, syncFreeSwitchOriginate } from "./calls.js";
+import { parseCsv } from "./csv.js";
+import { validateDialableNumber } from "./manual-dial.js";
+import { normalizePhoneNumber } from "./phone.js";
 
 const selectedCampaignId = "11111111-1111-4111-8111-111111111111";
 
@@ -12,14 +16,14 @@ const config = {
 
 describe("dashboard route helpers", () => {
   it("parses quoted CSV fields and escaped quotes", () => {
-    const parsed = __testing.parseCsv('Name,Phone,Company\n"Doe, Jane","+1 415 555 0100","Acme ""Labs"""');
+    const parsed = parseCsv('Name,Phone,Company\n"Doe, Jane","+1 415 555 0100","Acme ""Labs"""');
 
     assert.deepEqual(parsed.headers, ["Name", "Phone", "Company"]);
     assert.deepEqual(parsed.rows, [["Doe, Jane", "+1 415 555 0100", 'Acme "Labs"']]);
   });
 
   it("normalizes international phone numbers with 00 prefix", () => {
-    assert.deepEqual(__testing.normalizePhoneNumber("0014155550100", "US"), {
+    assert.deepEqual(normalizePhoneNumber("0014155550100", "US"), {
       ok: true,
       number: "+14155550100"
     });
@@ -36,7 +40,7 @@ describe("dashboard route helpers", () => {
       throw new Error(`Unexpected query: ${sql}`);
     });
 
-    const result = await __testing.validateDialableNumber(pool, config, "+1 415 555 0100", selectedCampaignId);
+    const result = await validateDialableNumber(pool, config, "+1 415 555 0100", selectedCampaignId);
 
     assert.equal(result.allowed, false);
     assert.equal(result.reason, "Manual dialing is disabled for this campaign");
@@ -53,7 +57,7 @@ describe("dashboard route helpers", () => {
       return rows([]);
     });
 
-    const campaign = await __testing.getAgentCampaignForDialerAction(pool, selectedCampaignId);
+    const campaign = await getAgentCampaignForDialerAction(pool, selectedCampaignId);
 
     assert.equal(campaign, null);
   });
@@ -64,7 +68,7 @@ describe("dashboard route helpers", () => {
       return rows([campaignRow()]);
     });
 
-    const campaign = await __testing.getAgentCampaign(pool);
+    const campaign = await getAgentCampaign(pool);
 
     assert.equal(campaign?.id, selectedCampaignId);
   });
@@ -79,7 +83,7 @@ describe("dashboard route helpers", () => {
       return rows([]);
     });
 
-    await __testing.syncFreeSwitchOriginate(
+    await syncFreeSwitchOriginate(
       pool,
       {
         FREESWITCH_ESL_ENABLED: false
@@ -115,7 +119,7 @@ describe("dashboard route helpers", () => {
       }
     });
 
-    const result = await __testing.createDialerCall(pool, config, {
+    const result = await createDialerCall(pool, config, {
       agentId: "33333333-3333-4333-8333-333333333333",
       campaignId: selectedCampaignId,
       contactId: null,
@@ -169,7 +173,7 @@ describe("dashboard route helpers", () => {
       }
     });
 
-    const result = await __testing.createDialerCall(
+    const result = await createDialerCall(
       pool,
       {
         ...config,
@@ -195,6 +199,12 @@ describe("dashboard route helpers", () => {
     assert.ok(clientQueries.some((query) => query.sql.includes("for update of contacts skip locked")));
     assert.ok(clientQueries.some((query) => query.sql === "commit"));
     assert.ok(poolQueries.some((query) => query.sql.includes("set state = 'failed'")));
+  });
+
+  it("maps call creation failure reasons to operator-facing messages", () => {
+    assert.equal(createDialerCallFailureMessage("active_call"), "An active call is already in progress");
+    assert.equal(createDialerCallFailureMessage("no_callable_contacts"), "No callable contacts are available");
+    assert.equal(createDialerCallFailureMessage("lead_not_callable"), "Lead is not callable");
   });
 });
 
