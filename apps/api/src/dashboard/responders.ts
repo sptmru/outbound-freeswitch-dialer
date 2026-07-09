@@ -16,7 +16,7 @@ export async function buildAgentDeskResponse(
   selectedCampaignId?: string
 ): Promise<AgentDeskResponse> {
   const [campaign, availableCampaigns, activeCall, metrics] = await Promise.all([
-    getAgentCampaign(pool, selectedCampaignId),
+    getAgentCampaign(pool, selectedCampaignId, { userId: user.id }),
     getAgentCampaigns(pool),
     getActiveCall(pool, user.id),
     getAgentMetrics(pool, user.id)

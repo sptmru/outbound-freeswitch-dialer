@@ -11,6 +11,11 @@ export type AgentCampaign = {
   agent_registered: boolean;
 };
 
+type AgentCampaignOptions = {
+  allowFallback?: boolean;
+  userId?: string;
+};
+
 export async function deleteCampaign(
   pool: pg.Pool,
   campaignId: string
@@ -63,7 +68,7 @@ export async function campaignExists(pool: pg.Pool, campaignId: string): Promise
 export async function getAgentCampaign(
   pool: pg.Pool,
   selectedCampaignId?: string,
-  options: { allowFallback?: boolean } = {}
+  options: AgentCampaignOptions = {}
 ): Promise<AgentCampaign | null> {
   const result = await pool.query<AgentCampaign>(
     `
@@ -81,6 +86,7 @@ export async function getAgentCampaign(
         select 1
         from agents
         where agents.status = 'registered'
+          and ($3::uuid is null or agents.user_id = $3)
       ) as agent_registered
     from campaigns
     left join contacts on contacts.campaign_id = campaigns.id
@@ -93,7 +99,7 @@ export async function getAgentCampaign(
       campaigns.created_at desc
     limit 1
   `,
-    [selectedCampaignId ?? null, options.allowFallback ?? true]
+    [selectedCampaignId ?? null, options.allowFallback ?? true, options.userId ?? null]
   );
 
   return result.rows[0] ?? null;

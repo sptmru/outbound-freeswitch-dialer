@@ -19,6 +19,7 @@ This plan is based on the July 2026 audit of the API, FreeSWITCH event handling,
   - FreeSWITCH generated agent XML recreation/deletion.
 - Verification commands:
   - `npm --workspace @outbound-dialer/api test`
+  - `npm --workspace @outbound-dialer/web test`
   - `npm test`
   - `npm run typecheck`
   - `npm run build`
@@ -31,6 +32,7 @@ This plan is based on the July 2026 audit of the API, FreeSWITCH event handling,
   - selected lead calls revalidate and lock the contact before call creation.
   - active call uniqueness is backed by partial DB indexes.
 - Phase 4 provisioning lifecycle:
+  - server-side `agent_registered` is scoped to the current user.
   - existing agent softphone provisioning recreates missing generated XML before returning credentials.
   - user deletion removes generated agent XML after DB commit.
 - Phase 5 web reliability cleanup:
@@ -40,10 +42,12 @@ This plan is based on the July 2026 audit of the API, FreeSWITCH event handling,
   - campaign contact search/filter ignores stale responses.
   - unused legacy softphone/manual dial components were removed.
   - the non-persisted manual dial note field was removed.
+  - Vitest, jsdom, and React Testing Library were added for web tests.
+  - Agent Desk no-campaign and empty-lead states are covered by web tests.
 - Phase 6 deployment surface cleanup:
   - direct web nginx now proxies `/api/` to the API service instead of serving the SPA fallback.
 - Phase 2 backend module split:
-  - `apps/api/src/dashboard/routes.ts` was reduced from 3726 lines to 1826 lines.
+  - `apps/api/src/dashboard/routes.ts` was reduced from 3726 lines to 1393 lines.
   - phone normalization moved to `dashboard/phone.ts`.
   - CSV parsing/import persistence moved to `dashboard/csv.ts`.
   - campaign lookup/deletion helpers moved to `dashboard/campaigns.ts`.
@@ -106,7 +110,7 @@ Goal: production API should never mask real empty states.
 
 Goal: softphone status should describe the current user and the generated FreeSWITCH directory should match DB state.
 
-- Scope server-side `agent_registered` to the current user or remove it from the API and rely on browser SIP.js runtime state.
+- Done: scope server-side `agent_registered` to the current user.
 - Persist/register status from actual FreeSWITCH registration events if server-side status remains.
 - Done: recreate the agent XML directory file when existing credentials are returned but the XML file is missing.
 - Done: delete generated FreeSWITCH agent XML when a user/agent is deleted.
@@ -116,7 +120,8 @@ Goal: softphone status should describe the current user and the generated FreeSW
 
 Goal: make async UI state deterministic and testable.
 
-- Add Vitest, jsdom, and React Testing Library for web tests.
+- Done: add Vitest, jsdom, and React Testing Library for web tests.
+- Done: cover Agent Desk no-campaign and empty-lead states in web tests.
 - Done: introduce a typed `ApiError` with HTTP status in `apps/web/src/api.ts`.
 - Done: on 401 during polling, clear token/session instead of leaving stale desk state.
 - Done: add latest-request guards for:
@@ -136,7 +141,5 @@ Goal: direct container ports and proxied production paths should behave consiste
 
 ## Suggested Order
 
-1. Add web test harness.
-2. Scope or remove server-side `agent_registered`.
-3. Add ESL-backed reload/flush for deleted agent registrations.
-4. Finish deployment smoke tests.
+1. Add ESL-backed reload/flush for deleted agent registrations.
+2. Finish deployment smoke tests.

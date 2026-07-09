@@ -55,7 +55,7 @@ describe("dashboard route helpers", () => {
 
   it("does not fall back to another campaign for dialer actions when campaignId is selected", async () => {
     const pool = createQueryPool((_sql, params) => {
-      assert.deepEqual(params, [selectedCampaignId, false]);
+      assert.deepEqual(params, [selectedCampaignId, false, null]);
       return rows([]);
     });
 
@@ -66,13 +66,26 @@ describe("dashboard route helpers", () => {
 
   it("keeps fallback behavior for default desk campaign selection", async () => {
     const pool = createQueryPool((_sql, params) => {
-      assert.deepEqual(params, [null, true]);
+      assert.deepEqual(params, [null, true, null]);
       return rows([campaignRow()]);
     });
 
     const campaign = await getAgentCampaign(pool);
 
     assert.equal(campaign?.id, selectedCampaignId);
+  });
+
+  it("scopes server-side registration status to the current user", async () => {
+    const userId = "99999999-9999-4999-8999-999999999999";
+    const pool = createQueryPool((sql, params) => {
+      assert.match(sql, /agents\.user_id = \$3/);
+      assert.deepEqual(params, [selectedCampaignId, true, userId]);
+      return rows([campaignRow({ agent_registered: true })]);
+    });
+
+    const campaign = await getAgentCampaign(pool, selectedCampaignId, { userId });
+
+    assert.equal(campaign?.agent_registered, true);
   });
 
   it("fails and releases a call when originate is skipped because trunk is not configured", async () => {
