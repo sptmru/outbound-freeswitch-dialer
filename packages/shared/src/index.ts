@@ -286,6 +286,11 @@ export interface DropVoicemailRequest {
   campaignId?: string;
 }
 
+export interface SendDtmfRequest {
+  digit: string;
+  campaignId?: string;
+}
+
 export interface MutationResponse<T> {
   item: T;
 }

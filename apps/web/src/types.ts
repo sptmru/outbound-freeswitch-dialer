@@ -23,6 +23,7 @@ export type {
   ManualDialValidationResponse,
   MutationResponse,
   PublicUser,
+  SendDtmfRequest,
   SoftphoneProvisioningResponse,
   StartNextCallRequest,
   StartManualCallRequest,

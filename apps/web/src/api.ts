@@ -21,6 +21,7 @@ import type {
   ManualDialValidationResponse,
   MutationResponse,
   PublicUser,
+  SendDtmfRequest,
   SoftphoneProvisioningResponse,
   StartNextCallRequest,
   StartManualCallRequest,
@@ -168,6 +169,13 @@ export async function endCall(callId: string, input: EndCallRequest = {}): Promi
 
 export async function dropVoicemail(callId: string, input: DropVoicemailRequest = {}): Promise<AgentDeskResponse> {
   return apiFetch<AgentDeskResponse>(`/agent/calls/${callId}/drop-voicemail`, {
+    method: "POST",
+    body: JSON.stringify(input)
+  });
+}
+
+export async function sendDtmf(callId: string, input: SendDtmfRequest): Promise<AgentDeskResponse> {
+  return apiFetch<AgentDeskResponse>(`/agent/calls/${callId}/dtmf`, {
     method: "POST",
     body: JSON.stringify(input)
   });

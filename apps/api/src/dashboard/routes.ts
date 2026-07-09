@@ -32,6 +32,7 @@ import type {
   ManualDialValidationResponse,
   MutationResponse,
   PublicUser,
+  SendDtmfRequest,
   SoftphoneProvisioningResponse,
   StartNextCallRequest,
   StartManualCallRequest,
@@ -69,6 +70,11 @@ const endCallSchema = z.object({
 const dropVoicemailSchema = z.object({
   campaignId: z.string().uuid().optional()
 }) satisfies z.ZodType<DropVoicemailRequest>;
+
+const sendDtmfSchema = z.object({
+  digit: z.enum(["1", "2", "3", "4", "5", "6", "7", "8", "9", "*", "0", "#"]),
+  campaignId: z.string().uuid().optional()
+}) satisfies z.ZodType<SendDtmfRequest>;
 
 const createCampaignSchema = z.object({
   name: z.string().min(1).max(160),
@@ -375,6 +381,23 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
     const dropped = await dropVoicemailForCall(pool, config, publicUser.id, params.callId);
     if (!dropped.ok) {
       return reply.code(dropped.statusCode).send({ message: dropped.message });
+    }
+
+    return buildAgentDeskResponse(pool, publicUser, input.campaignId);
+  });
+
+  app.post("/agent/calls/:callId/dtmf", async (request, reply): Promise<AgentDeskResponse | void> => {
+    const user = await requireUser(request, config, pool);
+    if (!user) {
+      return reply.code(401).send({ message: "Unauthorized" });
+    }
+
+    const publicUser = toPublicUser(user);
+    const params = z.object({ callId: z.string().uuid() }).parse(request.params);
+    const input = sendDtmfSchema.parse(request.body ?? {});
+    const sent = await sendDtmfForCall(pool, config, publicUser.id, params.callId, input.digit);
+    if (!sent.ok) {
+      return reply.code(sent.statusCode).send({ message: sent.message });
     }
 
     return buildAgentDeskResponse(pool, publicUser, input.campaignId);
@@ -1839,6 +1862,78 @@ async function dropVoicemailForCall(
   if (row.agent_leg_uuid) {
     await killFreeSwitchLeg(pool, config, callId, row.agent_id, { type: "agent", uuid: row.agent_leg_uuid });
   }
+  return { ok: true };
+}
+
+async function sendDtmfForCall(
+  pool: pg.Pool,
+  config: AppConfig,
+  userId: string,
+  callId: string,
+  digit: string
+): Promise<{ ok: true } | { ok: false; statusCode: 404 | 409 | 502; message: string }> {
+  const result = await pool.query<{
+    agent_id: string;
+    agent_leg_uuid: string | null;
+    customer_leg_uuid: string | null;
+    state: CallState;
+  }>(
+    `
+      select
+        calls.agent_id,
+        calls.state,
+        agent_leg.freeswitch_uuid as agent_leg_uuid,
+        customer_leg.freeswitch_uuid as customer_leg_uuid
+      from calls
+      join agents on agents.id = calls.agent_id
+      left join call_legs agent_leg on agent_leg.call_id = calls.id and agent_leg.type = 'agent'
+      left join call_legs customer_leg on customer_leg.call_id = calls.id and customer_leg.type = 'customer'
+      where calls.id = $1
+        and agents.user_id = $2
+        and calls.ended_at is null
+        and calls.state not in ('completed', 'failed', 'canceled')
+      limit 1
+    `,
+    [callId, userId]
+  );
+  const row = result.rows[0];
+  if (!row) {
+    return { ok: false, statusCode: 404, message: "Active call not found" };
+  }
+  if (!row.customer_leg_uuid) {
+    return { ok: false, statusCode: 409, message: "Customer leg is not ready for DTMF" };
+  }
+
+  try {
+    const customerLegUuid = assertFreeSwitchApiArgument(row.customer_leg_uuid, "customer leg UUID");
+    await sendFreeSwitchApiCommand(config, `uuid_send_dtmf ${customerLegUuid} ${digit}`);
+  } catch (error) {
+    await insertCallEvent(pool, {
+      agentId: row.agent_id,
+      callId,
+      eventType: "dtmf_failed",
+      state: row.state,
+      apiCommandName: "uuid_send_dtmf",
+      agentLegUuid: row.agent_leg_uuid ?? undefined,
+      customerLegUuid: row.customer_leg_uuid,
+      raw: {
+        digit,
+        message: error instanceof Error ? error.message : "FreeSWITCH DTMF failed"
+      }
+    });
+    return { ok: false, statusCode: 502, message: "FreeSWITCH could not send DTMF" };
+  }
+
+  await insertCallEvent(pool, {
+    agentId: row.agent_id,
+    callId,
+    eventType: "dtmf_sent",
+    state: row.state,
+    apiCommandName: "uuid_send_dtmf",
+    agentLegUuid: row.agent_leg_uuid ?? undefined,
+    customerLegUuid: row.customer_leg_uuid,
+    raw: { digit }
+  });
   return { ok: true };
 }
 

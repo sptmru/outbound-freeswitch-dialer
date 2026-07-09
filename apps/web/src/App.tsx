@@ -53,6 +53,7 @@ import {
   importCampaignCsvFile,
   login,
   runFreeSwitchSafeTest,
+  sendDtmf,
   setStoredToken,
   setDefaultRecording,
   startLeadCall,
@@ -389,6 +390,7 @@ function AgentDesk({
   const [callNextError, setCallNextError] = useState<string | null>(null);
   const [endCallPending, setEndCallPending] = useState(false);
   const [dropVoicemailPending, setDropVoicemailPending] = useState(false);
+  const [dtmfPending, setDtmfPending] = useState(false);
   const [endCallError, setEndCallError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -453,6 +455,18 @@ function AgentDesk({
     }
   }
 
+  async function handleSendDtmf(callId: string, digit: string) {
+    setDtmfPending(true);
+    setEndCallError(null);
+    try {
+      onDeskChanged(await sendDtmf(callId, { campaignId: desk.campaign.id, digit }));
+    } catch (error) {
+      setEndCallError(error instanceof Error ? error.message : "Could not send DTMF");
+    } finally {
+      setDtmfPending(false);
+    }
+  }
+
   if (desk.activeCall) {
     return (
       <section className="agent-grid active-agent-grid">
@@ -471,6 +485,8 @@ function AgentDesk({
           error={endCallError}
           onDropVoicemail={handleDropVoicemail}
           onHangUp={hangUp}
+          onSendDtmf={handleSendDtmf}
+          dtmfPending={dtmfPending}
           pending={endCallPending}
         />
         <AgentStatusPanel
@@ -666,12 +682,6 @@ function AgentStatusPanel({
         <Metric label="Calls today" value={desk.metrics.todayCalls} icon={PhoneForwarded} />
         <Metric label="Blocked numbers" value={desk.metrics.suppressed} icon={Ban} />
       </div>
-      {!desk.activeCall && (
-        <div className="empty-call-panel">
-          <h3>No live call</h3>
-          <p>When a call starts, this panel shows timer, lead information, voicemail controls, and call outcome options.</p>
-        </div>
-      )}
     </article>
   );
 }
@@ -846,16 +856,20 @@ function CheckRow({
 function ActiveCall({
   desk,
   dropPending,
+  dtmfPending,
   error,
   onDropVoicemail,
   onHangUp,
+  onSendDtmf,
   pending
 }: {
   desk: AgentDeskResponse;
   dropPending: boolean;
+  dtmfPending: boolean;
   error: string | null;
   onDropVoicemail: (callId: string) => Promise<void>;
   onHangUp: (callId: string) => Promise<void>;
+  onSendDtmf: (callId: string, digit: string) => Promise<void>;
   pending: boolean;
 }) {
   const activeCall = desk.activeCall;
@@ -898,6 +912,15 @@ function ActiveCall({
         </button>
       </div>
       {error && <p className="form-error">{error}</p>}
+      <div className="dtmf-panel">
+        <div className="dtmf-pad" aria-label="DTMF keypad">
+          {["1", "2", "3", "4", "5", "6", "7", "8", "9", "*", "0", "#"].map((digit) => (
+            <button disabled={dtmfPending} key={digit} onClick={() => void onSendDtmf(activeCall.id, digit)} type="button">
+              {digit}
+            </button>
+          ))}
+        </div>
+      </div>
       <div className="signal-strip">
         <div className={`voicemail-signal ${activeCall.voicemailSignal}`}>
           <span>VM/beep signal</span>
