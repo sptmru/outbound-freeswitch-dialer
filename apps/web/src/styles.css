@@ -446,13 +446,16 @@ input[type="checkbox"] {
 }
 
 .recommended-call {
+  align-items: center;
   background: #ddf7f2;
   border: 1px solid #0f766e;
   border-radius: 8px;
-  display: grid;
-  gap: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  justify-content: space-between;
   margin-top: 12px;
-  min-height: 196px;
+  min-height: 82px;
   padding: 14px;
 }
 
@@ -470,6 +473,11 @@ input[type="checkbox"] {
   font-size: 13px;
   line-height: 1.45;
   margin: 0;
+}
+
+.recommended-call p {
+  flex: 1 1 180px;
+  overflow-wrap: anywhere;
 }
 
 .large-empty-state {

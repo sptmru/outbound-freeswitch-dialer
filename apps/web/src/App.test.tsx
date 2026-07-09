@@ -63,6 +63,31 @@ describe("App Agent Desk empty states", () => {
     expect(screen.getByText("Callable leads")).toBeInTheDocument();
     expect(screen.queryByText(/Recommended next:/)).not.toBeInTheDocument();
   });
+
+  it("renders the simplified next lead recommendation", async () => {
+    apiMocks.fetchAgentDesk.mockResolvedValue(
+      deskResponse({
+        leads: [
+          {
+            id: "22222222-2222-4222-8222-222222222222",
+            name: "Avery Johnson",
+            company: "Solar Follow-up",
+            phoneNumber: "+15551234567",
+            status: "ready",
+            fields: [{ label: "Voicemail", value: "Intro voicemail" }]
+          }
+        ]
+      })
+    );
+
+    render(<App />);
+
+    expect(await screen.findByText("Next lead")).toBeInTheDocument();
+    expect(screen.getByText("Avery Johnson, +15551234567")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Start next call/ })).toBeInTheDocument();
+    expect(screen.queryByText(/Recommended next:/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Default voicemail/)).not.toBeInTheDocument();
+  });
 });
 
 function userRow(overrides: Partial<PublicUser> = {}): PublicUser {

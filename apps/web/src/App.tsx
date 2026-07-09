@@ -645,9 +645,9 @@ function LeadQueue({
       </div>
       {showRecommendedCall && recommended && (
         <div className="recommended-call">
-          <h3>Recommended next: {recommended.name}</h3>
+          <h3>Next lead</h3>
           <p>
-            {recommended.company}. Default voicemail: {recommended.fields[0]?.value ?? "campaign default"}.
+            {recommended.name}, {recommended.phoneNumber}
           </p>
           <button className="primary-action teal-action" disabled={pending || !canStartCalls} onClick={onCallNext} type="button">
             <PhoneCall size={17} />
