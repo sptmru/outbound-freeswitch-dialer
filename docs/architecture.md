@@ -32,7 +32,7 @@ FreeSWITCH
 PostgreSQL
   - Users and agents
   - Campaigns and contacts/leads
-  - CSV imports and field mappings
+  - CSV imports for the current `name` and `phone` contract
   - Calls and legs
   - Call events
   - Recordings
@@ -51,7 +51,7 @@ SIP trunk provider
 - Local username/password auth with `agent` and `admin` roles.
 - Agents get SIP credentials automatically when they are created.
 - Campaigns and CSV lead import are in scope.
-- CSV imports require field mapping.
+- CSV imports currently require recognized `name` and `phone` columns; flexible field mapping is deferred.
 - DNCR/suppression checks are mandatory before customer-leg origination.
 - Agents may type arbitrary numbers only when an admin setting enables manual dialing.
 - Call recording must be supported and can be enabled or disabled.

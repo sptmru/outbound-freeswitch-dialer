@@ -27,7 +27,7 @@ The system is a single-tenant outbound dialer with a Web UI softphone. Agents wo
 
 - Campaigns are in scope for the first version.
 - Contacts/leads are imported from CSV.
-- CSV import must support field mapping because files can have different column names and shapes.
+- The current CSV workflow requires only `name` and `phone` columns. Interactive field mapping is deferred until client CSV samples require it.
 - Agents can call campaign contacts/leads.
 - Agents may also type arbitrary phone numbers when an admin setting allows manual dialing.
 - Manual dialing must still pass backend authorization and suppression checks.
@@ -48,6 +48,8 @@ Initial call outcomes should include:
 
 The implementation may add lower-level technical reason codes, but the UI should keep agent-facing dispositions concise.
 
+Outcomes are determined automatically from the call lifecycle for the current version. A mandatory agent-selected post-call disposition is deferred pending client feedback.
+
 ## DNCR And Suppression
 
 - DNCR/suppression-list handling is in scope for MVP.
@@ -66,6 +68,7 @@ The implementation may add lower-level technical reason codes, but the UI should
 
 - Use local username/password authentication.
 - Roles for the first version are `agent` and `admin`.
+- Admins primarily manage the system but may also open and use Agent Desk.
 - Agent SIP credentials should be created automatically when an agent is created.
 - Dynamic short-lived SIP credentials are not required for the first version unless needed for security hardening later.
 
@@ -85,11 +88,11 @@ The implementation may add lower-level technical reason codes, but the UI should
 
 - No existing brand/style guide.
 - Single-tenant UI for the first version.
-- During a call, agents should see all available lead information.
+- During a call, agents should see the lead name and phone number. Additional imported lead fields can be added when the CSV scope expands.
 - If VM/beep detection signals are available, the active call UI must show them.
 - Required admin screens should be derived from project scope:
   - Campaigns.
-  - CSV imports and field mappings.
+  - CSV imports for the current `name` and `phone` contract.
   - Recordings.
   - Users/agents.
   - Suppression list.

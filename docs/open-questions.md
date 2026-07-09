@@ -20,14 +20,15 @@ This file tracks remaining unknowns only. Confirmed decisions are captured in [r
 
 ## CSV And Campaigns
 
-- What sample CSV files can be used to design field mapping?
-- Which lead fields are required vs optional?
+- Which additional lead fields, beyond the current required `name` and `phone`, will future client CSV files contain?
+- When real CSV samples require more fields, should the product add interactive field mapping or a fixed client-specific schema?
 - Can the same contact appear in multiple campaigns?
 - Should duplicate phone numbers be deduplicated globally or per campaign?
 - What campaign states are needed for MVP: draft, active, paused, completed?
 
 ## Outcomes And Reporting
 
+- Should agents be allowed to override automatically determined outcomes in a later version?
 - Should `voicemail_detected` and `voicemail_dropped` be separate reportable outcomes?
 - What is the exact mapping from SIP/FreeSWITCH hangup causes to agent-facing dispositions?
 - Should suppressed calls appear in agent call history or only admin reports?

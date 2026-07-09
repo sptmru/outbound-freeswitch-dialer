@@ -42,7 +42,7 @@ Figma will be used as the source for visual design before implementation of prod
    - Call failed.
 5. Design admin screens:
    - Campaigns.
-   - CSV import and field mapping.
+   - CSV import for the current `name` and `phone` contract.
    - Recordings list.
    - Recording upload/edit.
    - Users and roles.
@@ -73,7 +73,7 @@ Primary layout:
   - Current call panel.
 - Current call panel:
   - Contact name and phone number.
-  - All imported lead fields.
+  - Additional imported lead fields when supported by the active CSV contract.
   - Call state.
   - Timer.
   - Hangup.
@@ -114,11 +114,10 @@ The UI should expose these states as operational signals, not as developer jargo
 ### CSV Imports
 
 - Upload CSV files.
-- Preview rows.
-- Map CSV columns to lead fields.
+- Import the current `name` and `phone` contract directly.
 - Validate phone numbers.
 - Review import errors.
-- Reuse mappings when the same CSV shape appears again.
+- Defer preview, interactive field mapping, and reusable mappings until client CSV samples require them.
 
 ### Recordings
 
@@ -138,6 +137,7 @@ The UI should expose these states as operational signals, not as developer jargo
 - Add/edit/deactivate agents.
 - Assign role.
 - See agent registration status.
+- Allow admins to open Agent Desk, while avoiding microphone and softphone startup on management screens.
 
 ### Call History
 
@@ -196,7 +196,7 @@ The first client-review board is `Outbound Dialer - Client Design v1`:
 - Call History and Operations.
 - Settings and Suppression.
 
-The board is designed as a product walkthrough: import CSV, map fields, call lead, surface VM/beep signal, drop voicemail, release agent, finish playback, and log outcome.
+The board is designed as a product walkthrough: import CSV leads, call a lead, surface VM/beep signal, drop voicemail, release the agent, finish playback, and log the automatic outcome.
 
 Applied revisions before client review:
 
@@ -213,5 +213,5 @@ Applied revisions before client review:
 - Agent can complete click-to-call and voicemail drop without reading documentation.
 - UI state maps directly to backend call-state transitions.
 - Admin can manage recordings without filesystem access.
-- Admin can import CSV leads and map fields without developer help.
+- Admin can import CSV leads containing `name` and `phone` without developer help.
 - Admin can manage campaigns, suppression entries, users, and call-recording/manual-dialing settings.

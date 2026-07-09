@@ -14,6 +14,7 @@ The product target is an agent dashboard that supports click-to-call, live call 
 - [Open questions](docs/open-questions.md) - remaining unknowns after the first scope clarification.
 - [ADR 0001](docs/adr/0001-initial-architecture.md) - initial architecture decision record.
 - [ADR 0002](docs/adr/0002-product-scope-decisions.md) - first product-scope decisions after requirement clarification.
+- [ADR 0003](docs/adr/0003-near-term-ux-scope.md) - near-term admin, automatic outcome, and CSV usability scope.
 
 ## Proposed Repository Shape
 
@@ -98,6 +99,7 @@ POST /agent/call-next
 POST /agent/leads/:contactId/call
 POST /agent/calls/:callId/end
 GET /admin/overview
+GET /admin/calls/:callId
 GET /admin/csv-imports
 GET /admin/csv-imports/:importId
 GET /admin/campaigns/:campaignId/contacts

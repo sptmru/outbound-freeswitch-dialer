@@ -23,7 +23,7 @@ Build the first version with these assumptions:
 - Customer leg hangs up automatically after voicemail playback completes.
 - Voicemail recordings are global, with one global default recording.
 - Admins upload WAV/MP3 recordings; the system transcodes them for FreeSWITCH.
-- Campaigns and CSV lead import with field mapping are in scope.
+- Campaigns and CSV lead import are in scope. ADR 0003 supersedes the immediate field-mapping requirement with a `name` and `phone` contract.
 - DNCR/suppression-list enforcement is in scope.
 - Agents may type arbitrary numbers only when admins enable manual dialing.
 - Call recording is in scope and can be enabled or disabled.
@@ -35,7 +35,7 @@ Build the first version with these assumptions:
 
 - Supporting both SIP trunk modes avoids blocking development on provider details.
 - Manual voicemail drop satisfies the client requirement while VM/beep visibility creates evidence for future automation.
-- Campaigns, CSV field mapping, and suppression are needed for a usable outbound workflow rather than a raw dial pad.
+- Campaigns, validated CSV import, and suppression are needed for a usable outbound workflow rather than a raw dial pad. Flexible field mapping is deferred by ADR 0003.
 - Local auth and single-tenancy keep the first implementation focused.
 - Global recordings with a default reduce agent friction while preserving recording choice.
 - Runtime trunk configuration avoids exposing sensitive telephony settings in the first admin UI.

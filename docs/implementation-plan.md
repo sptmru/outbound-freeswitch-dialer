@@ -8,7 +8,7 @@ Build a production-ready outbound dialer where agents use a browser softphone fo
 - Manual "Drop Voicemail" action during an active call.
 - Agent release from the call once voicemail playback starts.
 - Prerecorded voicemail audio played into the active customer leg.
-- Campaigns with CSV lead import and field mapping.
+- Campaigns with CSV lead import for the current `name` and `phone` contract.
 - DNCR/suppression checks before dialing.
 - Optional manual number entry controlled by admin settings.
 - Optional call recording controlled by configuration/admin settings.
@@ -46,8 +46,8 @@ Build a production-ready outbound dialer where agents use a browser softphone fo
 - Confirm data inputs:
   - Contacts/leads come from CSV import.
   - Campaigns are in scope.
-  - CSV field mapping is required for different source formats.
-  - Required call outcomes and dispositions.
+  - Flexible CSV field mapping is deferred until client source formats require it.
+  - Required automatically determined call outcomes.
 
 ### Deliverables
 
@@ -86,7 +86,7 @@ Build a production-ready outbound dialer where agents use a browser softphone fo
   - Campaigns.
   - Contacts/leads.
   - CSV import jobs.
-  - CSV field mappings.
+  - Validation for recognized `name` and `phone` columns.
   - Recordings.
   - Call recording settings and metadata.
   - Suppression entries.
@@ -221,7 +221,7 @@ Build a production-ready outbound dialer where agents use a browser softphone fo
   - `voicemail_playback_started`.
   - `agent_released`.
   - `voicemail_playback_completed`.
-  - Final call disposition.
+  - Final automatically determined call outcome.
 - Add defensive handling:
   - Button disabled until a bridged customer leg exists.
   - Idempotent drop request.
@@ -248,7 +248,7 @@ Build a production-ready outbound dialer where agents use a browser softphone fo
   - Agent call log.
   - Admin call log.
   - Per-call timeline with ESL/API events.
-- Implement dispositions/outcomes:
+- Implement automatic outcomes:
   - Answered.
   - Not answered.
   - Busy.
@@ -312,7 +312,7 @@ Build a production-ready outbound dialer where agents use a browser softphone fo
   - Lead detail panel with all available imported fields.
   - VM/beep detection signal display.
   - Campaign list and campaign workspace.
-  - CSV upload and field mapping.
+  - CSV upload and `name`/`phone` validation.
   - Call history.
   - Admin recordings.
   - Admin users.
