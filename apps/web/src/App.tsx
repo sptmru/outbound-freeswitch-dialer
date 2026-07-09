@@ -50,11 +50,13 @@ import {
   login,
   runFreeSwitchSafeTest,
   setStoredToken,
+  setDefaultRecording,
   startLeadCall,
   startManualCall,
   startNextCall,
   suppressContact,
   updateCampaign,
+  uploadRecording,
   validateManualDial
 } from "./api";
 import { useSoftphoneRegistration } from "./softphone";
@@ -79,7 +81,7 @@ type View = "desk" | "campaigns" | "recordings" | "history" | "settings";
 const navItems: Array<{ id: View; label: string; icon: typeof BarChart3 }> = [
   { id: "desk", label: "Agent Desk", icon: BarChart3 },
   { id: "campaigns", label: "Campaigns", icon: Upload },
-  { id: "recordings", label: "Recordings", icon: FileAudio },
+  { id: "recordings", label: "Voicemail", icon: FileAudio },
   { id: "history", label: "Call History", icon: History },
   { id: "settings", label: "Settings", icon: Shield }
 ];
@@ -1017,7 +1019,7 @@ function AdminView({
 
   const content = {
     campaigns: <Campaigns admin={admin} csvImports={csvImports} onChanged={onChanged} onManualDial={onManualDial} />,
-    recordings: <Recordings admin={admin} />,
+    recordings: <Recordings admin={admin} onChanged={onChanged} />,
     history: <HistoryView admin={admin} />,
     settings: <SettingsView admin={admin} onChanged={onChanged} />,
     desk: null
@@ -1637,20 +1639,117 @@ function CreateContactForm({
   );
 }
 
-function Recordings({ admin }: { admin: AdminOverviewResponse }) {
+function Recordings({ admin, onChanged }: { admin: AdminOverviewResponse; onChanged: () => Promise<void> }) {
+  const [file, setFile] = useState<File | null>(null);
+  const [name, setName] = useState("");
+  const [makeDefault, setMakeDefault] = useState(true);
+  const [pending, setPending] = useState(false);
+  const [defaultPendingId, setDefaultPendingId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!file) {
+      setError("Choose a WAV or MP3 file");
+      return;
+    }
+
+    setPending(true);
+    setError(null);
+    try {
+      await uploadRecording({
+        file,
+        name: name.trim() || file.name.replace(/\.[^.]+$/, ""),
+        makeDefault
+      });
+      setFile(null);
+      setName("");
+      setMakeDefault(true);
+      event.currentTarget.reset();
+      await onChanged();
+    } catch (uploadError) {
+      setError(uploadError instanceof Error ? uploadError.message : "Unable to upload recording");
+    } finally {
+      setPending(false);
+    }
+  }
+
+  async function makeRecordingDefault(recordingId: string) {
+    setDefaultPendingId(recordingId);
+    setError(null);
+    try {
+      await setDefaultRecording(recordingId);
+      await onChanged();
+    } catch (defaultError) {
+      setError(defaultError instanceof Error ? defaultError.message : "Unable to set default recording");
+    } finally {
+      setDefaultPendingId(null);
+    }
+  }
+
   return (
-    <article className="panel wide-panel">
-      <PanelHeader icon={FileAudio} title="Recordings" meta={`${admin.recordings.length} files`} />
-      <div className="table-list">
-        {admin.recordings.map((recording) => (
-          <div className="table-row" key={recording.id}>
-            <strong>{recording.name}</strong>
-            <span>{recording.durationSeconds}s</span>
-            <b>{recording.status}</b>
+    <>
+      <article className="panel form-panel">
+        <PanelHeader icon={Upload} title="Upload voicemail" meta="WAV or MP3" />
+        <form className="stack-form" onSubmit={submit}>
+          <label>
+            Voicemail file
+            <input
+              accept=".wav,.mp3,audio/wav,audio/mpeg"
+              onChange={(event) => {
+                const nextFile = event.target.files?.[0] ?? null;
+                setFile(nextFile);
+                if (nextFile && !name.trim()) {
+                  setName(nextFile.name.replace(/\.[^.]+$/, ""));
+                }
+              }}
+              required
+              type="file"
+            />
+          </label>
+          <label>
+            Voicemail name
+            <input onChange={(event) => setName(event.target.value)} placeholder="Solar Intro v3" value={name} />
+          </label>
+          <div className="toggle-row">
+            <label>
+              <input checked={makeDefault} onChange={(event) => setMakeDefault(event.target.checked)} type="checkbox" />
+              Make default
+            </label>
           </div>
-        ))}
-      </div>
-    </article>
+          {error && <p className="form-error">{error}</p>}
+          <button className="primary-action" disabled={pending || !file} type="submit">
+            <Upload size={17} />
+            {pending ? "Uploading" : "Upload voicemail"}
+          </button>
+        </form>
+      </article>
+      <article className="panel wide-panel">
+        <PanelHeader icon={FileAudio} title="Voicemail recordings" meta={`${admin.recordings.length} files`} />
+        <div className="table-list">
+          {admin.recordings.map((recording) => (
+            <div className="table-row recording-row" key={recording.id}>
+              <div>
+                <strong>{recording.name}</strong>
+                <small>{recording.runtimeFilePath}</small>
+              </div>
+              <span>{recording.durationSeconds ? `${recording.durationSeconds}s` : "Duration pending"}</span>
+              <b>{recording.status}</b>
+              <button
+                className="secondary-action compact-action"
+                disabled={recording.status === "default" || defaultPendingId === recording.id}
+                onClick={() => void makeRecordingDefault(recording.id)}
+                type="button"
+              >
+                <CheckCircle2 size={16} />
+                {defaultPendingId === recording.id ? "Saving" : "Default"}
+              </button>
+            </div>
+          ))}
+          {!admin.recordings.length && <p className="empty-state">No voicemail recordings uploaded yet.</p>}
+        </div>
+      </article>
+    </>
   );
 }
 
@@ -1787,6 +1886,9 @@ function HistoryView({ admin }: { admin: AdminOverviewResponse }) {
             <strong>{call.leadName}</strong>
             <span>{call.agentName}</span>
             <span>{call.durationSeconds}s</span>
+            <span title={call.callRecordingPath ?? undefined}>
+              {call.callRecordingPath ? "Recording saved" : "No recording"}
+            </span>
             <b>{call.outcome}</b>
           </div>
         ))}

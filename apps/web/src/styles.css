@@ -1150,6 +1150,26 @@ input[type="checkbox"] {
   grid-template-columns: minmax(140px, 1fr) minmax(120px, 1fr) auto;
 }
 
+.recording-row {
+  grid-template-columns: minmax(220px, 1.3fr) minmax(120px, 0.7fr) auto auto;
+}
+
+.recording-row small {
+  color: #667789;
+  display: block;
+  font-size: 12px;
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+}
+
+.empty-state {
+  border: 1px dashed #c9d5e2;
+  border-radius: 8px;
+  color: #607086;
+  margin: 0;
+  padding: 14px;
+}
+
 button.table-row {
   background: #ffffff;
   color: inherit;
@@ -1163,7 +1183,7 @@ button.table-row {
 }
 
 .history-row {
-  grid-template-columns: minmax(140px, 1fr) minmax(120px, 1fr) 80px auto;
+  grid-template-columns: minmax(140px, 1fr) minmax(120px, 1fr) 80px minmax(130px, 0.8fr) auto;
 }
 
 .import-row {

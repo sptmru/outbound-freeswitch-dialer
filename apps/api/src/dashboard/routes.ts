@@ -1,4 +1,9 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import { createWriteStream } from "node:fs";
+import { mkdir, unlink } from "node:fs/promises";
+import { basename, extname, join } from "node:path";
+import { pipeline } from "node:stream/promises";
+import { randomUUID } from "node:crypto";
 import { isSupportedCountry, parsePhoneNumberFromString } from "libphonenumber-js";
 import type { CountryCode } from "libphonenumber-js";
 import type pg from "pg";
@@ -12,6 +17,7 @@ import type {
   CampaignContactsResponse,
   CreateCampaignRequest,
   CreateContactRequest,
+  CreateRecordingResponse,
   CreateSuppressionRequest,
   CsvImportDetailResponse,
   CsvImportFailure,
@@ -105,6 +111,10 @@ const campaignParamsSchema = z.object({
 
 const suppressionParamsSchema = z.object({
   suppressionId: z.string().uuid()
+});
+
+const recordingParamsSchema = z.object({
+  recordingId: z.string().uuid()
 });
 
 const agentDeskQuerySchema = z.object({
@@ -424,6 +434,64 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
     }
     return { ok: true };
   });
+
+  app.post(
+    "/admin/recordings",
+    async (request, reply): Promise<CreateRecordingResponse | void> => {
+      const user = await requireAdmin(request, reply, config, pool);
+      if (!user) {
+        return;
+      }
+
+      const file = await request.file();
+      if (!file) {
+        return reply.code(400).send({ message: "Recording file is required" });
+      }
+
+      const extension = getSupportedRecordingExtension(file.filename);
+      if (!extension) {
+        return reply.code(400).send({ message: "Recording must be a WAV or MP3 file" });
+      }
+
+      const name = normalizeRecordingName(getMultipartFieldValue(file.fields.name), file.filename);
+      const makeDefault = parseBooleanField(getMultipartFieldValue(file.fields.makeDefault));
+      const storedFilename = `${randomUUID()}${extension}`;
+      const storagePath = join(config.VOICEMAIL_RECORDINGS_STORAGE_DIR, storedFilename);
+
+      await mkdir(config.VOICEMAIL_RECORDINGS_STORAGE_DIR, { recursive: true });
+      await pipeline(file.file, createWriteStream(storagePath, { flags: "wx" }));
+
+      try {
+        const item = await createRecording(pool, {
+          name,
+          filePath: storagePath,
+          runtimeFilePath: storagePath,
+          makeDefault
+        });
+        return reply.code(201).send({ item });
+      } catch (error) {
+        await unlink(storagePath).catch(() => undefined);
+        throw error;
+      }
+    }
+  );
+
+  app.patch(
+    "/admin/recordings/:recordingId/default",
+    async (request, reply): Promise<MutationResponse<AdminOverviewResponse["recordings"][number]> | void> => {
+      const user = await requireAdmin(request, reply, config, pool);
+      if (!user) {
+        return;
+      }
+
+      const params = recordingParamsSchema.parse(request.params);
+      const item = await setDefaultRecording(pool, params.recordingId);
+      if (!item) {
+        return reply.code(404).send({ message: "Recording not found" });
+      }
+      return { item };
+    }
+  );
 
   app.post(
     "/admin/contacts",
@@ -2083,21 +2151,132 @@ async function getRecordings(pool: pg.Pool): Promise<AdminOverviewResponse["reco
   const result = await pool.query<{
     id: string;
     name: string;
+    runtime_file_path: string;
     is_default: boolean;
     is_active: boolean;
   }>(`
-    select id, name, is_default, is_active
+    select id, name, runtime_file_path, is_default, is_active
     from recordings
     order by is_default desc, created_at desc
     limit 12
   `);
 
-  return result.rows.map((row) => ({
+  return result.rows.map(mapRecordingRow);
+}
+
+async function createRecording(
+  pool: pg.Pool,
+  input: {
+    name: string;
+    filePath: string;
+    runtimeFilePath: string;
+    makeDefault: boolean;
+  }
+): Promise<AdminOverviewResponse["recordings"][number]> {
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const countResult = await client.query<{ count: string }>("select count(*) from recordings");
+    const shouldMakeDefault = input.makeDefault || Number(countResult.rows[0]?.count ?? 0) === 0;
+
+    if (shouldMakeDefault) {
+      await client.query("update recordings set is_default = false, updated_at = now()");
+    }
+
+    const result = await client.query<RecordingRow>(
+      `
+        insert into recordings (name, file_path, runtime_file_path, is_default, is_active)
+        values ($1, $2, $3, $4, true)
+        returning id, name, runtime_file_path, is_default, is_active
+      `,
+      [input.name, input.filePath, input.runtimeFilePath, shouldMakeDefault]
+    );
+    await client.query("commit");
+    return mapRecordingRow(result.rows[0]);
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function setDefaultRecording(
+  pool: pg.Pool,
+  recordingId: string
+): Promise<AdminOverviewResponse["recordings"][number] | null> {
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const exists = await client.query<{ id: string }>(
+      "select id from recordings where id = $1 and is_active = true",
+      [recordingId]
+    );
+    if (!exists.rowCount) {
+      await client.query("rollback");
+      return null;
+    }
+
+    await client.query("update recordings set is_default = false, updated_at = now()");
+    const result = await client.query<RecordingRow>(
+      `
+        update recordings
+        set is_default = true, updated_at = now()
+        where id = $1
+        returning id, name, runtime_file_path, is_default, is_active
+      `,
+      [recordingId]
+    );
+    await client.query("commit");
+    return mapRecordingRow(result.rows[0]);
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+type RecordingRow = {
+  id: string;
+  name: string;
+  runtime_file_path: string;
+  is_default: boolean;
+  is_active: boolean;
+};
+
+function mapRecordingRow(row: RecordingRow): AdminOverviewResponse["recordings"][number] {
+  return {
     id: row.id,
     name: row.name,
     durationSeconds: 0,
+    runtimeFilePath: row.runtime_file_path,
     status: row.is_default ? "default" : row.is_active ? "ready" : "inactive"
-  }));
+  };
+}
+
+function getSupportedRecordingExtension(filename: string): ".mp3" | ".wav" | null {
+  const extension = extname(filename).toLowerCase();
+  return extension === ".mp3" || extension === ".wav" ? extension : null;
+}
+
+function normalizeRecordingName(value: string | undefined, filename: string): string {
+  const rawName = value?.trim() || basename(filename, extname(filename));
+  return rawName.replace(/\s+/g, " ").slice(0, 160) || "Voicemail recording";
+}
+
+function getMultipartFieldValue(field: unknown): string | undefined {
+  if (Array.isArray(field)) {
+    return getMultipartFieldValue(field[0]);
+  }
+  if (field && typeof field === "object" && "value" in field && typeof field.value === "string") {
+    return field.value;
+  }
+  return undefined;
+}
+
+function parseBooleanField(value: string | undefined): boolean {
+  return value === "true" || value === "1" || value === "on";
 }
 
 async function getUsers(pool: pg.Pool): Promise<PublicUser[]> {
@@ -2117,12 +2296,14 @@ async function getCallHistory(pool: pg.Pool): Promise<AdminOverviewResponse["cal
     agent_name: string | null;
     outcome: CallOutcome | null;
     duration_seconds: number | null;
+    call_recording_path: string | null;
   }>(`
     select
       calls.id,
       contacts.display_name as lead_name,
       users.name as agent_name,
       calls.outcome,
+      calls.call_recording_path,
       extract(epoch from (coalesce(calls.ended_at, now()) - coalesce(calls.answered_at, calls.started_at, calls.created_at)))::int as duration_seconds
     from calls
     left join contacts on contacts.id = calls.contact_id
@@ -2137,7 +2318,8 @@ async function getCallHistory(pool: pg.Pool): Promise<AdminOverviewResponse["cal
     leadName: row.lead_name ?? "Manual dial",
     agentName: row.agent_name ?? "Unassigned",
     outcome: row.outcome ?? "failed",
-    durationSeconds: row.duration_seconds ?? 0
+    durationSeconds: row.duration_seconds ?? 0,
+    callRecordingPath: row.call_recording_path
   }));
 }
 

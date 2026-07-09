@@ -5,6 +5,7 @@ import type {
   CampaignContactsResponse,
   CreateCampaignRequest,
   CreateContactRequest,
+  CreateRecordingResponse,
   CreateSuppressionRequest,
   CreateUserRequest,
   CreateUserResponse,
@@ -187,6 +188,33 @@ export async function updateCampaign(
     method: "PATCH",
     body: JSON.stringify(input)
   });
+}
+
+export async function uploadRecording(input: {
+  file: File;
+  name: string;
+  makeDefault: boolean;
+}): Promise<CreateRecordingResponse> {
+  const formData = new FormData();
+  formData.set("file", input.file);
+  formData.set("name", input.name);
+  formData.set("makeDefault", String(input.makeDefault));
+
+  return apiFetch<CreateRecordingResponse>("/admin/recordings", {
+    method: "POST",
+    body: formData
+  });
+}
+
+export async function setDefaultRecording(
+  recordingId: string
+): Promise<MutationResponse<AdminOverviewResponse["recordings"][number]>> {
+  return apiFetch<MutationResponse<AdminOverviewResponse["recordings"][number]>>(
+    `/admin/recordings/${recordingId}/default`,
+    {
+      method: "PATCH"
+    }
+  );
 }
 
 export async function createUser(input: CreateUserRequest): Promise<CreateUserResponse> {

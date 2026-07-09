@@ -5,6 +5,7 @@ export type {
   CampaignContactListItem,
   CreateCampaignRequest,
   CreateContactRequest,
+  CreateRecordingResponse,
   CreateSuppressionRequest,
   CreateUserRequest,
   CreateUserResponse,

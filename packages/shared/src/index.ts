@@ -138,6 +138,7 @@ export interface AdminOverviewResponse {
     id: string;
     name: string;
     durationSeconds: number;
+    runtimeFilePath: string;
     status: string;
   }>;
   users: PublicUser[];
@@ -147,12 +148,17 @@ export interface AdminOverviewResponse {
     agentName: string;
     outcome: CallOutcome;
     durationSeconds: number;
+    callRecordingPath: string | null;
   }>;
   suppression: Array<{
     id: string;
     phoneNumber: string;
     reason: string;
   }>;
+}
+
+export interface CreateRecordingResponse {
+  item: AdminOverviewResponse["recordings"][number];
 }
 
 export interface CreateCampaignRequest {
