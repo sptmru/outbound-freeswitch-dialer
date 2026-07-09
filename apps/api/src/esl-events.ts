@@ -16,13 +16,15 @@ interface EslFrame {
 
 const EVENT_NAMES = [
   "BACKGROUND_JOB",
-  "CUSTOM",
   "CHANNEL_CREATE",
   "CHANNEL_ANSWER",
   "CHANNEL_BRIDGE",
   "CHANNEL_HANGUP",
   "CHANNEL_HANGUP_COMPLETE",
-  "CHANNEL_DESTROY"
+  "CHANNEL_DESTROY",
+  // FreeSWITCH treats every token after CUSTOM as a custom event subclass.
+  // Keep it last so CHANNEL_* names remain regular event subscriptions.
+  "CUSTOM"
 ].join(" ");
 
 const AGENT_SIP_PROFILE = "internal-webrtc";
@@ -67,7 +69,7 @@ export function startFreeSwitchEventListener(config: AppConfig, pool: pg.Pool, l
     nextSocket.setKeepAlive(true, 15000);
 
     let buffer = "";
-    let stage: "auth_request" | "auth_reply" | "connect_reply" | "subscribe_reply" | "events" = "auth_request";
+    let stage: "auth_request" | "auth_reply" | "subscribe_reply" | "events" = "auth_request";
 
     nextSocket.on("data", (chunk) => {
       buffer += chunk.toString("utf8");
@@ -85,31 +87,42 @@ export function startFreeSwitchEventListener(config: AppConfig, pool: pg.Pool, l
 
         if (stage === "auth_reply") {
           if (frame.headers["reply-text"]?.startsWith("+OK")) {
-            nextSocket.write("connect\n\n");
-            stage = "connect_reply";
+            nextSocket.write(`event plain ${EVENT_NAMES}\n\n`);
+            stage = "subscribe_reply";
             continue;
           }
           nextSocket.destroy(new Error(frame.headers["reply-text"] ?? "FreeSWITCH ESL auth failed"));
           continue;
         }
 
-        if (stage === "connect_reply") {
-          nextSocket.write(`event plain ${EVENT_NAMES}\n\n`);
-          stage = "subscribe_reply";
+        if (stage === "subscribe_reply") {
+          if (
+            frame.headers["content-type"] === "command/reply" &&
+            frame.headers["reply-text"]?.startsWith("+OK")
+          ) {
+            nextSocket.setTimeout(0);
+            stage = "events";
+            logger.info({ events: EVENT_NAMES }, "FreeSWITCH event listener subscribed");
+            continue;
+          }
+          nextSocket.destroy(new Error(frame.headers["reply-text"] ?? "FreeSWITCH ESL event subscription failed"));
           continue;
         }
 
-        if (stage === "subscribe_reply") {
-          if (frame.headers["content-type"] === "command/reply") {
-            nextSocket.setTimeout(0);
-            stage = "events";
-            continue;
-          }
-          nextSocket.setTimeout(0);
-          stage = "events";
-        }
-
         if (stage === "events") {
+          const callId = frame.headers["variable_outbound_dialer_call_id"];
+          if (callId) {
+            logger.info(
+              {
+                callId,
+                eventName: frame.headers["event-name"] ?? null,
+                eventSubclass: frame.headers["event-subclass"] ?? null,
+                legType: frame.headers["variable_outbound_dialer_leg_type"] ?? null,
+                legUuid: frame.headers["unique-id"] ?? frame.headers["variable_uuid"] ?? null
+              },
+              "FreeSWITCH tagged event received"
+            );
+          }
           void persistFreeSwitchEvent(config, pool, frame).catch((error: unknown) => {
             logger.error(error, "failed to persist FreeSWITCH event");
           });
@@ -612,14 +625,40 @@ function extractFrames(buffer: string): { frames: EslFrame[]; rest: string } {
       break;
     }
 
-    frames.push({
+    const frame = {
       headers,
       body: contentLength > 0 ? rest.slice(bodyStart, bodyEnd) : headers["reply-text"] ?? ""
-    });
+    };
+    frames.push(unwrapPlainEvent(frame));
     rest = rest.slice(contentLength > 0 ? bodyEnd : bodyStart);
   }
 
   return { frames, rest };
+}
+
+function unwrapPlainEvent(frame: EslFrame): EslFrame {
+  if (frame.headers["content-type"] !== "text/event-plain") {
+    return frame;
+  }
+
+  const separator = frame.body.includes("\r\n\r\n") ? "\r\n\r\n" : "\n\n";
+  const headerEnd = frame.body.indexOf(separator);
+  if (headerEnd === -1) {
+    return frame;
+  }
+
+  const eventHeaders = parseHeaders(frame.body.slice(0, headerEnd));
+  if (!eventHeaders["event-name"]) {
+    return frame;
+  }
+
+  return {
+    headers: {
+      ...frame.headers,
+      ...eventHeaders
+    },
+    body: frame.body.slice(headerEnd + separator.length)
+  };
 }
 
 function parseHeaders(value: string): Record<string, string> {

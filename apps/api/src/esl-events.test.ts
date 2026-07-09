@@ -28,6 +28,34 @@ describe("FreeSWITCH event helpers", () => {
     assert.equal(result.rest, "Content-Type: text/event-plain\nContent-Length: 5\n\npa");
   });
 
+  it("unwraps headers and payload from text/event-plain event bodies", () => {
+    const eventBody =
+      "Event-Name: CUSTOM\n" +
+      "Event-Subclass: avmd::beep\n" +
+      "Unique-ID: 9f64cb9e-69df-4303-a68a-9f15b44ebfe7\n" +
+      "variable_outbound_dialer_call_id: 1444bab4-e920-49df-b748-fa82feafce1a\n" +
+      "Content-Length: 8\n\n" +
+      "detected";
+    const input =
+      `Content-Type: text/event-plain\nContent-Length: ${Buffer.byteLength(eventBody)}\n\n` + eventBody;
+
+    const result = __testing.extractFrames(input);
+
+    assert.equal(result.frames.length, 1);
+    assert.deepEqual(result.frames[0], {
+      body: "detected",
+      headers: {
+        "content-length": "8",
+        "content-type": "text/event-plain",
+        "event-name": "CUSTOM",
+        "event-subclass": "avmd::beep",
+        "unique-id": "9f64cb9e-69df-4303-a68a-9f15b44ebfe7",
+        variable_outbound_dialer_call_id: "1444bab4-e920-49df-b748-fa82feafce1a"
+      }
+    });
+    assert.equal(result.rest, "");
+  });
+
   it("maps terminal events including CHANNEL_DESTROY to terminal call states", () => {
     assert.equal(__testing.mapEventToCallState("CHANNEL_HANGUP", "NORMAL_CLEARING"), "completed");
     assert.equal(__testing.mapEventToCallState("CHANNEL_HANGUP_COMPLETE", "USER_BUSY"), "completed");
