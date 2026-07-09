@@ -10,6 +10,7 @@ import type {
   CreateUserRequest,
   CreateUserResponse,
   DeleteResponse,
+  DropVoicemailRequest,
   CsvImportDetailResponse,
   CsvImportHistoryResponse,
   EndCallRequest,
@@ -160,6 +161,13 @@ export async function startLeadCall(contactId: string): Promise<AgentDeskRespons
 
 export async function endCall(callId: string, input: EndCallRequest = {}): Promise<AgentDeskResponse> {
   return apiFetch<AgentDeskResponse>(`/agent/calls/${callId}/end`, {
+    method: "POST",
+    body: JSON.stringify(input)
+  });
+}
+
+export async function dropVoicemail(callId: string, input: DropVoicemailRequest = {}): Promise<AgentDeskResponse> {
+  return apiFetch<AgentDeskResponse>(`/agent/calls/${callId}/drop-voicemail`, {
     method: "POST",
     body: JSON.stringify(input)
   });

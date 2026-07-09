@@ -282,6 +282,10 @@ export interface EndCallRequest {
   campaignId?: string;
 }
 
+export interface DropVoicemailRequest {
+  campaignId?: string;
+}
+
 export interface MutationResponse<T> {
   item: T;
 }

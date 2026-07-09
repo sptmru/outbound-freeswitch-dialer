@@ -268,7 +268,7 @@ async function persistFreeSwitchEvent(config: AppConfig, pool: pg.Pool, frame: E
     }
   }
 
-  if (eventName === "CHANNEL_HANGUP_COMPLETE") {
+  if (eventName === "CHANNEL_HANGUP" || eventName === "CHANNEL_HANGUP_COMPLETE") {
     const outcome = mapHangupCauseToOutcome(frame.headers["hangup-cause"]);
     const terminalState = outcome === "failed" ? "failed" : "completed";
     await pool.query(

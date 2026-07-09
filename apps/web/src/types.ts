@@ -10,6 +10,7 @@ export type {
   CreateUserRequest,
   CreateUserResponse,
   DeleteResponse,
+  DropVoicemailRequest,
   CsvImportDetailResponse,
   CsvImportHistoryResponse,
   EndCallRequest,

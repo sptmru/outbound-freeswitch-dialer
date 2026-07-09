@@ -39,6 +39,7 @@ import {
   deleteRecording,
   deleteSuppression,
   deleteUser,
+  dropVoicemail,
   endCall,
   fetchAdminOverview,
   fetchCampaignContacts,
@@ -387,6 +388,7 @@ function AgentDesk({
   const [callNextPending, setCallNextPending] = useState(false);
   const [callNextError, setCallNextError] = useState<string | null>(null);
   const [endCallPending, setEndCallPending] = useState(false);
+  const [dropVoicemailPending, setDropVoicemailPending] = useState(false);
   const [endCallError, setEndCallError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -439,6 +441,18 @@ function AgentDesk({
     }
   }
 
+  async function handleDropVoicemail(callId: string) {
+    setDropVoicemailPending(true);
+    setEndCallError(null);
+    try {
+      onDeskChanged(await dropVoicemail(callId, { campaignId: desk.campaign.id }));
+    } catch (error) {
+      setEndCallError(error instanceof Error ? error.message : "Could not drop voicemail");
+    } finally {
+      setDropVoicemailPending(false);
+    }
+  }
+
   if (desk.activeCall) {
     return (
       <section className="agent-grid active-agent-grid">
@@ -451,7 +465,14 @@ function AgentDesk({
           pending={callNextPending}
           showRecommendedCall={false}
         />
-        <ActiveCall desk={desk} error={endCallError} onHangUp={hangUp} pending={endCallPending} />
+        <ActiveCall
+          desk={desk}
+          dropPending={dropVoicemailPending}
+          error={endCallError}
+          onDropVoicemail={handleDropVoicemail}
+          onHangUp={hangUp}
+          pending={endCallPending}
+        />
         <AgentStatusPanel
           desk={desk}
           mode="active"
@@ -824,12 +845,16 @@ function CheckRow({
 
 function ActiveCall({
   desk,
+  dropPending,
   error,
+  onDropVoicemail,
   onHangUp,
   pending
 }: {
   desk: AgentDeskResponse;
+  dropPending: boolean;
   error: string | null;
+  onDropVoicemail: (callId: string) => Promise<void>;
   onHangUp: (callId: string) => Promise<void>;
   pending: boolean;
 }) {
@@ -862,9 +887,14 @@ function ActiveCall({
           <PhoneOff size={17} />
           {pending ? "Ending" : "Hang up"}
         </button>
-        <button className="primary-action" type="button">
+        <button
+          className="primary-action"
+          disabled={pending || dropPending}
+          onClick={() => onDropVoicemail(activeCall.id)}
+          type="button"
+        >
           <Voicemail size={17} />
-          Drop voicemail
+          {dropPending ? "Dropping" : "Drop voicemail"}
         </button>
       </div>
       {error && <p className="form-error">{error}</p>}

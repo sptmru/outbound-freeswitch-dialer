@@ -21,6 +21,7 @@ import type {
   CsvImportFailure,
   CsvImportHistoryResponse,
   DeleteResponse,
+  DropVoicemailRequest,
   EndCallRequest,
   FreeSwitchDiagnosticsResponse,
   FreeSwitchSafeTestResponse,
@@ -64,6 +65,10 @@ const endCallSchema = z.object({
   outcome: z.enum(callOutcomes).optional(),
   campaignId: z.string().uuid().optional()
 }) satisfies z.ZodType<EndCallRequest>;
+
+const dropVoicemailSchema = z.object({
+  campaignId: z.string().uuid().optional()
+}) satisfies z.ZodType<DropVoicemailRequest>;
 
 const createCampaignSchema = z.object({
   name: z.string().min(1).max(160),
@@ -353,6 +358,23 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
     const ended = await endDialerCall(pool, config, publicUser.id, params.callId, input.outcome ?? "agent_canceled");
     if (!ended) {
       return reply.code(404).send({ message: "Active call not found" });
+    }
+
+    return buildAgentDeskResponse(pool, publicUser, input.campaignId);
+  });
+
+  app.post("/agent/calls/:callId/drop-voicemail", async (request, reply): Promise<AgentDeskResponse | void> => {
+    const user = await requireUser(request, config, pool);
+    if (!user) {
+      return reply.code(401).send({ message: "Unauthorized" });
+    }
+
+    const publicUser = toPublicUser(user);
+    const params = z.object({ callId: z.string().uuid() }).parse(request.params);
+    const input = dropVoicemailSchema.parse(request.body ?? {});
+    const dropped = await dropVoicemailForCall(pool, config, publicUser.id, params.callId);
+    if (!dropped.ok) {
+      return reply.code(dropped.statusCode).send({ message: dropped.message });
     }
 
     return buildAgentDeskResponse(pool, publicUser, input.campaignId);
@@ -1672,6 +1694,159 @@ async function insertCallEvent(
       JSON.stringify(input.raw)
     ]
   );
+}
+
+async function dropVoicemailForCall(
+  pool: pg.Pool,
+  config: AppConfig,
+  userId: string,
+  callId: string
+): Promise<{ ok: true } | { ok: false; statusCode: 404 | 409 | 502; message: string }> {
+  const result = await pool.query<{
+    agent_id: string;
+    contact_id: string | null;
+    agent_leg_uuid: string | null;
+    customer_leg_uuid: string | null;
+    runtime_file_path: string | null;
+  }>(
+    `
+      select
+        calls.agent_id,
+        calls.contact_id,
+        agent_leg.freeswitch_uuid as agent_leg_uuid,
+        customer_leg.freeswitch_uuid as customer_leg_uuid,
+        recordings.runtime_file_path
+      from calls
+      join agents on agents.id = calls.agent_id
+      left join call_legs agent_leg on agent_leg.call_id = calls.id and agent_leg.type = 'agent'
+      left join call_legs customer_leg on customer_leg.call_id = calls.id and customer_leg.type = 'customer'
+      left join recordings on recordings.id = calls.recording_id and recordings.is_active = true
+      where calls.id = $1
+        and agents.user_id = $2
+        and calls.ended_at is null
+        and calls.state not in ('completed', 'failed', 'canceled')
+      limit 1
+    `,
+    [callId, userId]
+  );
+  const row = result.rows[0];
+  if (!row) {
+    return { ok: false, statusCode: 404, message: "Active call not found" };
+  }
+  if (!row.customer_leg_uuid) {
+    return { ok: false, statusCode: 409, message: "Customer leg is not ready for voicemail drop" };
+  }
+  if (!row.runtime_file_path) {
+    return { ok: false, statusCode: 409, message: "No voicemail recording is assigned to this call" };
+  }
+
+  try {
+    const customerLegUuid = assertFreeSwitchApiArgument(row.customer_leg_uuid, "customer leg UUID");
+    const voicemailPath = assertFreeSwitchApiArgument(row.runtime_file_path, "voicemail recording path");
+    await sendFreeSwitchApiCommand(config, `uuid_setvar ${customerLegUuid} voicemail_drop_file ${voicemailPath}`);
+    await sendFreeSwitchApiCommand(config, `uuid_transfer ${customerLegUuid} voicemail_drop XML default`);
+  } catch (error) {
+    await insertCallEvent(pool, {
+      agentId: row.agent_id,
+      callId,
+      eventType: "voicemail_drop_failed",
+      state: "bridged",
+      apiCommandName: "uuid_transfer",
+      agentLegUuid: row.agent_leg_uuid ?? undefined,
+      customerLegUuid: row.customer_leg_uuid,
+      raw: {
+        message: error instanceof Error ? error.message : "FreeSWITCH voicemail drop failed",
+        recordingPath: row.runtime_file_path
+      }
+    });
+    return { ok: false, statusCode: 502, message: "FreeSWITCH could not start voicemail playback" };
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const updated = await client.query(
+      `
+        update calls
+        set state = 'completed',
+            outcome = 'voicemail_dropped',
+            ended_at = now(),
+            updated_at = now()
+        where id = $1
+          and ended_at is null
+          and state not in ('completed', 'failed', 'canceled')
+      `,
+      [callId]
+    );
+    if (!updated.rowCount) {
+      await client.query("rollback");
+      return { ok: false, statusCode: 404, message: "Active call not found" };
+    }
+    await client.query(
+      `
+        insert into call_events (call_id, agent_id, event_type, state, api_command_name, agent_leg_uuid, customer_leg_uuid, raw_json)
+        values
+          ($1, $2, 'voicemail_drop_requested', 'voicemail_drop_requested', 'uuid_setvar', $3, $4, $5::jsonb),
+          ($1, $2, 'voicemail_playback_started', 'voicemail_playback_started', 'uuid_transfer', $3, $4, $5::jsonb),
+          ($1, $2, 'agent_released', 'agent_released', null, $3, $4, $5::jsonb)
+      `,
+      [
+        callId,
+        row.agent_id,
+        row.agent_leg_uuid,
+        row.customer_leg_uuid,
+        JSON.stringify({ recordingPath: row.runtime_file_path })
+      ]
+    );
+    await client.query(
+      `
+        update call_legs
+        set state = 'ended',
+            ended_at = coalesce(ended_at, now())
+        where call_id = $1
+      `,
+      [callId]
+    );
+    await client.query(
+      `
+        update agents
+        set status = 'ready',
+            updated_at = now()
+        where id = $1
+      `,
+      [row.agent_id]
+    );
+    if (row.contact_id) {
+      await client.query(
+        `
+          update contacts
+          set status = 'completed',
+              updated_at = now()
+          where id = $1
+            and status = 'calling'
+        `,
+        [row.contact_id]
+      );
+    }
+    await client.query("commit");
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
+  } finally {
+    client.release();
+  }
+
+  if (row.agent_leg_uuid) {
+    await killFreeSwitchLeg(pool, config, callId, row.agent_id, { type: "agent", uuid: row.agent_leg_uuid });
+  }
+  return { ok: true };
+}
+
+function assertFreeSwitchApiArgument(value: string, label: string): string {
+  if (/\s/.test(value)) {
+    throw new Error(`${label} contains whitespace and cannot be used in a FreeSWITCH API command`);
+  }
+  return value;
 }
 
 async function endDialerCall(
