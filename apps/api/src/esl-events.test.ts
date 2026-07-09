@@ -60,7 +60,80 @@ describe("FreeSWITCH event helpers", () => {
     assert.equal(__testing.mapEventToCallState("CHANNEL_HANGUP", "NORMAL_CLEARING"), "completed");
     assert.equal(__testing.mapEventToCallState("CHANNEL_HANGUP_COMPLETE", "USER_BUSY"), "completed");
     assert.equal(__testing.mapEventToCallState("CHANNEL_DESTROY"), "failed");
+    assert.equal(__testing.mapEventToCallState("CHANNEL_HANGUP", "NORMAL_CLEARING", "agent"), "agent_released");
     assert.equal(__testing.mapEventToLegState("CHANNEL_DESTROY"), "ended");
+  });
+
+  it("resolves customer hangups using answer and voicemail context", () => {
+    assert.equal(
+      __testing.resolveCustomerHangupOutcome({ answered: false, hangupCause: "USER_BUSY", voicemailDetected: false }),
+      "busy"
+    );
+    assert.equal(
+      __testing.resolveCustomerHangupOutcome({ answered: false, hangupCause: "NO_ANSWER", voicemailDetected: false }),
+      "not_answered"
+    );
+    assert.equal(
+      __testing.resolveCustomerHangupOutcome({ answered: true, hangupCause: "NORMAL_CLEARING", voicemailDetected: false }),
+      "customer_hung_up"
+    );
+    assert.equal(
+      __testing.resolveCustomerHangupOutcome({ answered: true, hangupCause: "NORMAL_CLEARING", voicemailDetected: true }),
+      "voicemail_detected"
+    );
+  });
+
+  it("does not finalize a call when the agent leg emits a terminal event", async () => {
+    const queries: Array<{ params: readonly unknown[]; sql: string }> = [];
+    const pool = createQueryPool((sql, params) => {
+      queries.push({ sql, params });
+      return rows([]);
+    });
+
+    await __testing.persistFreeSwitchEvent(config, pool, {
+      body: "",
+      headers: {
+        "event-name": "CHANNEL_HANGUP",
+        "hangup-cause": "NORMAL_CLEARING",
+        "unique-id": "22222222-2222-4222-8222-222222222222",
+        variable_outbound_dialer_leg_type: "agent",
+        variable_outbound_dialer_call_id: "11111111-1111-4111-8111-111111111111"
+      }
+    });
+
+    assert.ok(queries.some((query) => query.sql.includes("insert into call_events")));
+    assert.ok(queries.some((query) => query.sql.includes("update call_legs")));
+    assert.ok(!queries.some((query) => /update\s+calls/.test(query.sql)));
+    assert.ok(!queries.some((query) => /update\s+agents/.test(query.sql)));
+  });
+
+  it("finalizes a customer hangup with the persisted call context", async () => {
+    const queries: Array<{ params: readonly unknown[]; sql: string }> = [];
+    const pool = createQueryPool((sql, params) => {
+      queries.push({ sql, params });
+      if (sql.includes("select answered_at, voicemail_signal_status")) {
+        return rows([{ answered_at: new Date(), voicemail_signal_status: null }]);
+      }
+      if (sql.includes("update calls") && sql.includes("returning agent_id")) {
+        return rows([{ agent_id: "agent-1" }]);
+      }
+      return rows([]);
+    });
+
+    await __testing.persistFreeSwitchEvent(config, pool, {
+      body: "",
+      headers: {
+        "event-name": "CHANNEL_HANGUP",
+        "hangup-cause": "NORMAL_CLEARING",
+        "unique-id": "22222222-2222-4222-8222-222222222222",
+        variable_outbound_dialer_leg_type: "customer",
+        variable_outbound_dialer_call_id: "11111111-1111-4111-8111-111111111111"
+      }
+    });
+
+    const update = queries.find((query) => query.sql.includes("update calls") && query.sql.includes("returning agent_id"));
+    assert.deepEqual(update?.params, ["11111111-1111-4111-8111-111111111111", "completed", "customer_hung_up"]);
+    assert.ok(queries.some((query) => /update\s+agents/.test(query.sql)));
   });
 
   it("maps agent and customer answer events to the correct call states", () => {

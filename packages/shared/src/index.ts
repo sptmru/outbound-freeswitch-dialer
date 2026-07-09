@@ -111,8 +111,17 @@ export interface AgentDeskResponse {
     voicemailSignal: "none" | "possible" | "detected";
     recordingId: string | null;
     recordingName: string;
+    actions: {
+      dropVoicemail: CallActionAvailability;
+      sendDtmf: CallActionAvailability;
+    };
     timeline: Array<{ at: string; label: string }>;
   } | null;
+}
+
+export interface CallActionAvailability {
+  allowed: boolean;
+  reason: string | null;
 }
 
 export interface SoftphoneProvisioningResponse {
@@ -153,7 +162,11 @@ export interface AdminOverviewResponse {
     id: string;
     leadName: string;
     agentName: string;
-    outcome: CallOutcome;
+    phoneNumber: string;
+    campaignName: string;
+    state: CallState;
+    outcome: CallOutcome | null;
+    createdAt: string;
     durationSeconds: number;
     callRecordingPath: string | null;
   }>;
@@ -161,6 +174,21 @@ export interface AdminOverviewResponse {
     id: string;
     phoneNumber: string;
     reason: string;
+  }>;
+}
+
+export interface CallDetailResponse {
+  call: AdminOverviewResponse["callHistory"][number] & {
+    startedAt: string | null;
+    answeredAt: string | null;
+    endedAt: string | null;
+    manualDial: boolean;
+  };
+  timeline: Array<{
+    at: string;
+    eventType: string;
+    state: string;
+    label: string;
   }>;
 }
 
@@ -284,7 +312,6 @@ export interface StartNextCallRequest {
 }
 
 export interface EndCallRequest {
-  outcome?: CallOutcome;
   campaignId?: string;
 }
 

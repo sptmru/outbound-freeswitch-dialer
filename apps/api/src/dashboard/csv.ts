@@ -22,6 +22,9 @@ export async function importContactsFromCsv(
   }
 
   const nameIndex = findColumn(parsed.headers, ["name", "full_name", "contact", "display_name"]);
+  if (nameIndex === -1) {
+    throw new CsvImportError("CSV must include a name column");
+  }
   const companyIndex = findColumn(parsed.headers, ["company", "business", "organization", "org"]);
 
   const client = await pool.connect();
@@ -38,7 +41,7 @@ export async function importContactsFromCsv(
         filename,
         JSON.stringify({
           phone: parsed.headers[phoneIndex],
-          name: nameIndex >= 0 ? parsed.headers[nameIndex] : null,
+          name: parsed.headers[nameIndex],
           company: companyIndex >= 0 ? parsed.headers[companyIndex] : null
         }),
         parsed.rows.length
@@ -53,23 +56,23 @@ export async function importContactsFromCsv(
     for (const [rowIndex, row] of parsed.rows.entries()) {
       const rowNumber = rowIndex + 2;
       const phoneNumber = (row[phoneIndex] ?? "").trim();
+      const displayName = (row[nameIndex] ?? "").trim();
       const normalized = normalizePhoneNumber(phoneNumber, defaultCountryCode);
       const mappedFields = Object.fromEntries(
         parsed.headers.map((header, index) => [header, (row[index] ?? "").trim()])
       );
+
+      if (!displayName) {
+        await insertCsvImportFailure(client, importId, rowNumber, "Name is required", mappedFields);
+        failedRows += 1;
+        continue;
+      }
 
       if (!normalized.ok) {
         await insertCsvImportFailure(client, importId, rowNumber, normalized.reason, mappedFields);
         failedRows += 1;
         continue;
       }
-
-      const displayName =
-        nameIndex >= 0 && row[nameIndex]?.trim()
-          ? row[nameIndex].trim()
-          : companyIndex >= 0 && row[companyIndex]?.trim()
-            ? row[companyIndex].trim()
-            : phoneNumber;
 
       const insertResult = await client.query(
         `
@@ -200,9 +203,15 @@ export function parseCsv(input: string): ParsedCsv {
     rows.push(row);
   }
 
-  const headers = (rows.shift() ?? []).map((header) => header.trim()).filter(Boolean);
+  const headers = (rows.shift() ?? []).map((header, index) => {
+    const trimmed = header.trim();
+    return index === 0 ? trimmed.replace(/^\uFEFF/, "") : trimmed;
+  });
   if (!headers.length) {
     throw new CsvImportError("CSV header row is required");
+  }
+  if (headers.some((header) => !header)) {
+    throw new CsvImportError("CSV header names cannot be blank");
   }
 
   return {

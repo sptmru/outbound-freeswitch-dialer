@@ -3,6 +3,7 @@ import type {
   AgentDeskResponse,
   CampaignContactListItem,
   CampaignContactsResponse,
+  CallDetailResponse,
   CreateCampaignRequest,
   CreateContactRequest,
   CreateRecordingResponse,
@@ -118,6 +119,10 @@ export async function fetchSoftphoneProvisioning(): Promise<SoftphoneProvisionin
 
 export async function fetchAdminOverview(): Promise<AdminOverviewResponse> {
   return apiFetch<AdminOverviewResponse>("/admin/overview");
+}
+
+export async function fetchCallDetail(callId: string): Promise<CallDetailResponse> {
+  return apiFetch<CallDetailResponse>(`/admin/calls/${callId}`);
 }
 
 export async function fetchFreeSwitchDiagnostics(): Promise<FreeSwitchDiagnosticsResponse> {

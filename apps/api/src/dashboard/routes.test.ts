@@ -4,8 +4,14 @@ import type { PublicUser } from "@outbound-dialer/shared";
 import type pg from "pg";
 import type { AppConfig } from "../config.js";
 import { getAgentCampaign, getAgentCampaignForDialerAction } from "./campaigns.js";
-import { createDialerCall, createDialerCallFailureMessage, syncFreeSwitchOriginate } from "./calls.js";
-import { parseCsv } from "./csv.js";
+import {
+  createDialerCall,
+  createDialerCallFailureMessage,
+  dropVoicemailForCall,
+  sendDtmfForCall,
+  syncFreeSwitchOriginate
+} from "./calls.js";
+import { CsvImportError, importContactsFromCsv, parseCsv } from "./csv.js";
 import { validateDialableNumber } from "./manual-dial.js";
 import { normalizePhoneNumber } from "./phone.js";
 import { __testing } from "./routes.js";
@@ -22,6 +28,58 @@ describe("dashboard route helpers", () => {
 
     assert.deepEqual(parsed.headers, ["Name", "Phone", "Company"]);
     assert.deepEqual(parsed.rows, [["Doe, Jane", "+1 415 555 0100", 'Acme "Labs"']]);
+  });
+
+  it("parses BOM-prefixed CRLF CSV without shifting columns", () => {
+    const parsed = parseCsv("\uFEFFname,phone\r\nJane,+14155550100\r\n");
+
+    assert.deepEqual(parsed.headers, ["name", "phone"]);
+    assert.deepEqual(parsed.rows, [["Jane", "+14155550100"]]);
+  });
+
+  it("rejects blank CSV headers instead of shifting row values", () => {
+    assert.throws(() => parseCsv("name,,phone\nJane,ignored,+14155550100"), {
+      message: "CSV header names cannot be blank"
+    });
+  });
+
+  it("requires both name and phone CSV columns", async () => {
+    const pool = createTransactionalPool({ clientHandler: () => rows([]) });
+
+    await assert.rejects(
+      importContactsFromCsv(pool, selectedCampaignId, "contacts.csv", parseCsv("phone\n+14155550100"), "US"),
+      (error: unknown) => error instanceof CsvImportError && error.message === "CSV must include a name column"
+    );
+    await assert.rejects(
+      importContactsFromCsv(pool, selectedCampaignId, "contacts.csv", parseCsv("name\nJane"), "US"),
+      (error: unknown) => error instanceof CsvImportError && error.message === "CSV must include a phone column"
+    );
+  });
+
+  it("reports blank CSV names as row failures", async () => {
+    const queries: Array<{ params: readonly unknown[]; sql: string }> = [];
+    const pool = createTransactionalPool({
+      clientHandler: (sql, params) => {
+        queries.push({ sql, params });
+        if (sql.includes("insert into csv_imports")) {
+          return rows([{ id: "import-1" }]);
+        }
+        return rows([]);
+      }
+    });
+
+    const result = await importContactsFromCsv(
+      pool,
+      selectedCampaignId,
+      "contacts.csv",
+      parseCsv("name,phone\n,+14155550100"),
+      "US"
+    );
+
+    assert.equal(result.failedRows, 1);
+    assert.equal(result.importedRows, 0);
+    assert.ok(queries.some((query) => query.sql.includes("insert into csv_import_failures") && query.params[2] === "Name is required"));
+    assert.ok(!queries.some((query) => query.sql.includes("insert into contacts")));
   });
 
   it("normalizes international phone numbers with 00 prefix", () => {
@@ -221,6 +279,89 @@ describe("dashboard route helpers", () => {
     assert.equal(createDialerCallFailureMessage("active_call"), "An active call is already in progress");
     assert.equal(createDialerCallFailureMessage("no_callable_contacts"), "No callable contacts are available");
     assert.equal(createDialerCallFailureMessage("lead_not_callable"), "Lead is not callable");
+  });
+
+  it("infers agent-ended outcomes from the persisted call state", () => {
+    assert.equal(__testing.inferAgentEndOutcome("customer_ringing"), "agent_canceled");
+    assert.equal(__testing.inferAgentEndOutcome("bridged"), "answered");
+    assert.equal(__testing.inferAgentEndOutcome("voicemail_signal_detected"), "answered");
+  });
+
+  it("only enables customer media actions for a connected customer leg", () => {
+    assert.deepEqual(__testing.getActiveCallActions("customer_ringing", "customer-uuid"), {
+      dropVoicemail: { allowed: false, reason: "Available after the customer answers" },
+      sendDtmf: { allowed: false, reason: "Available after the customer answers" }
+    });
+    assert.deepEqual(__testing.getActiveCallActions("bridged", null), {
+      dropVoicemail: { allowed: false, reason: "Waiting for the customer connection" },
+      sendDtmf: { allowed: false, reason: "Waiting for the customer connection" }
+    });
+    assert.deepEqual(__testing.getActiveCallActions("bridged", "customer-uuid"), {
+      dropVoicemail: { allowed: true, reason: null },
+      sendDtmf: { allowed: true, reason: null }
+    });
+  });
+
+  it("enforces customer media action eligibility in the mutation helpers", async () => {
+    const pool = createQueryPool(() => rows([{
+      agent_id: "agent-1",
+      contact_id: null,
+      agent_leg_uuid: "agent-leg",
+      customer_leg_uuid: "customer-leg",
+      state: "customer_ringing",
+      selected_recording_id: null,
+      runtime_file_path: "/recordings/default.wav"
+    }]));
+
+    assert.deepEqual(
+      await dropVoicemailForCall(pool, config, userRow().id, "44444444-4444-4444-8444-444444444444"),
+      { ok: false, statusCode: 409, message: "Voicemail drop is available after the customer answers" }
+    );
+    assert.deepEqual(
+      await sendDtmfForCall(pool, config, userRow().id, "44444444-4444-4444-8444-444444444444", "1"),
+      { ok: false, statusCode: 409, message: "DTMF is available after the customer answers" }
+    );
+  });
+
+  it("builds an admin call detail with an ordered event timeline", async () => {
+    const createdAt = new Date("2026-07-10T08:00:00.000Z");
+    const endedAt = new Date("2026-07-10T08:01:00.000Z");
+    const pool = createQueryPool((sql, params) => {
+      assert.deepEqual(params, ["44444444-4444-4444-8444-444444444444"]);
+      if (sql.includes("from calls")) {
+        return rows([{
+          id: "44444444-4444-4444-8444-444444444444",
+          lead_name: "Jane",
+          agent_name: "Alex",
+          phone_number: "+14155550100",
+          campaign_name: "Follow-up",
+          state: "completed",
+          outcome: "answered",
+          created_at: createdAt,
+          started_at: createdAt,
+          answered_at: createdAt,
+          ended_at: endedAt,
+          manual_dial: false,
+          duration_seconds: 60,
+          call_recording_path: null
+        }]);
+      }
+      if (sql.includes("from call_events")) {
+        return rows([{ event_type: "freeswitch_channel_answer", state: "bridged", created_at: createdAt }]);
+      }
+      throw new Error(`Unexpected query: ${sql}`);
+    });
+
+    const detail = await __testing.getCallDetail(pool, "44444444-4444-4444-8444-444444444444");
+
+    assert.equal(detail?.call.outcome, "answered");
+    assert.equal(detail?.call.phoneNumber, "+14155550100");
+    assert.deepEqual(detail?.timeline, [{
+      at: createdAt.toISOString(),
+      eventType: "freeswitch_channel_answer",
+      state: "bridged",
+      label: "Freeswitch Channel Answer"
+    }]);
   });
 
   it("returns an explicit empty desk state instead of demo campaign data", async () => {

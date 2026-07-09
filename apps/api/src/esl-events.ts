@@ -293,10 +293,32 @@ async function persistFreeSwitchEvent(config: AppConfig, pool: pg.Pool, frame: E
     }
   }
 
-  if (eventName === "CHANNEL_HANGUP" || eventName === "CHANNEL_HANGUP_COMPLETE" || eventName === "CHANNEL_DESTROY") {
-    const outcome = mapHangupCauseToOutcome(frame.headers["hangup-cause"]);
+  if (isTerminalEvent(eventName) && legType === "customer") {
+    const call = await pool.query<{
+      answered_at: Date | null;
+      voicemail_signal_status: string | null;
+    }>(
+      `
+        select answered_at, voicemail_signal_status
+        from calls
+        where id = $1
+          and ended_at is null
+          and state not in ('completed', 'failed', 'canceled')
+        limit 1
+      `,
+      [callId]
+    );
+    const current = call.rows[0];
+    if (!current) {
+      return;
+    }
+    const outcome = resolveCustomerHangupOutcome({
+      answered: Boolean(current.answered_at),
+      hangupCause: frame.headers["hangup-cause"],
+      voicemailDetected: current.voicemail_signal_status === "detected"
+    });
     const terminalState = outcome === "failed" ? "failed" : "completed";
-    await pool.query(
+    const updated = await pool.query(
       `
         update calls
         set state = $2,
@@ -305,9 +327,13 @@ async function persistFreeSwitchEvent(config: AppConfig, pool: pg.Pool, frame: E
             updated_at = now()
         where id = $1
           and state not in ('completed', 'failed', 'canceled')
+        returning agent_id
       `,
       [callId, terminalState, outcome]
     );
+    if (!updated.rowCount) {
+      return;
+    }
     await pool.query(
       `
         update agents
@@ -815,6 +841,9 @@ function mapEventToCallState(eventName: string, hangupCause?: string, legType = 
     return "bridged";
   }
   if (isTerminalEvent(eventName)) {
+    if (legType === "agent") {
+      return "agent_released";
+    }
     return mapHangupCauseToOutcome(hangupCause) === "failed" ? "failed" : "completed";
   }
   return "customer_dialing";
@@ -844,6 +873,24 @@ function mapHangupCauseToOutcome(hangupCause?: string): string {
   return "failed";
 }
 
+function resolveCustomerHangupOutcome(input: {
+  answered: boolean;
+  hangupCause?: string;
+  voicemailDetected: boolean;
+}): "busy" | "customer_hung_up" | "failed" | "not_answered" | "voicemail_detected" {
+  const normalized = input.hangupCause?.toUpperCase() ?? "";
+  if (input.answered) {
+    return input.voicemailDetected ? "voicemail_detected" : "customer_hung_up";
+  }
+  if (normalized === "USER_BUSY") {
+    return "busy";
+  }
+  if (["NO_ANSWER", "NO_USER_RESPONSE", "CALL_REJECTED", "ORIGINATOR_CANCEL"].includes(normalized)) {
+    return "not_answered";
+  }
+  return "failed";
+}
+
 function isFailedBackgroundJob(frame: EslFrame): boolean {
   return frame.body.trimStart().startsWith("-ERR");
 }
@@ -867,6 +914,7 @@ export const __testing = {
   mapEventToCallState,
   mapEventToLegState,
   mapHangupCauseToOutcome,
+  resolveCustomerHangupOutcome,
   persistFreeSwitchEvent,
   mapVoicemailDetectionSignal,
   parseConfidence,

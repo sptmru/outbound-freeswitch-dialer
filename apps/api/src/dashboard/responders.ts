@@ -2,6 +2,8 @@ import type pg from "pg";
 import type {
   AdminOverviewResponse,
   AgentDeskResponse,
+  CallActionAvailability,
+  CallDetailResponse,
   CallOutcome,
   CallState,
   LeadSummary,
@@ -141,6 +143,7 @@ async function getActiveCall(pool: pg.Pool, userId: string): Promise<AgentDeskRe
     voicemail_signal_status: string | null;
     recording_id: string | null;
     recording_name: string | null;
+    customer_leg_uuid: string | null;
   }>(
     `
       select
@@ -152,11 +155,13 @@ async function getActiveCall(pool: pg.Pool, userId: string): Promise<AgentDeskRe
         calls.answered_at,
         calls.voicemail_signal_status,
         calls.recording_id,
-        recordings.name as recording_name
+        recordings.name as recording_name,
+        customer_leg.freeswitch_uuid as customer_leg_uuid
       from calls
       join agents on agents.id = calls.agent_id
       left join contacts on contacts.id = calls.contact_id
       left join recordings on recordings.id = calls.recording_id
+      left join call_legs customer_leg on customer_leg.call_id = calls.id and customer_leg.type = 'customer'
       where agents.user_id = $1
         and calls.ended_at is null
         and calls.state not in ('completed', 'failed', 'canceled')
@@ -184,8 +189,30 @@ async function getActiveCall(pool: pg.Pool, userId: string): Promise<AgentDeskRe
     voicemailSignal: mapVoicemailSignal(row.voicemail_signal_status),
     recordingId: row.recording_id,
     recordingName: row.recording_name ?? "No default recording",
+    actions: getActiveCallActions(row.state, row.customer_leg_uuid),
     timeline: await getCallTimeline(pool, row.id)
   };
+}
+
+export function getActiveCallActions(
+  state: CallState,
+  customerLegUuid: string | null
+): NonNullable<AgentDeskResponse["activeCall"]>["actions"] {
+  const availability = getCustomerMediaActionAvailability(state, customerLegUuid);
+  return {
+    dropVoicemail: availability,
+    sendDtmf: availability
+  };
+}
+
+function getCustomerMediaActionAvailability(state: CallState, customerLegUuid: string | null): CallActionAvailability {
+  if (!customerLegUuid) {
+    return { allowed: false, reason: "Waiting for the customer connection" };
+  }
+  if (state !== "bridged" && state !== "voicemail_signal_detected") {
+    return { allowed: false, reason: "Available after the customer answers" };
+  }
+  return { allowed: true, reason: null };
 }
 
 async function getCallTimeline(pool: pg.Pool, callId: string): Promise<Array<{ at: string; label: string }>> {
@@ -281,7 +308,11 @@ async function getCallHistory(pool: pg.Pool): Promise<AdminOverviewResponse["cal
     id: string;
     lead_name: string | null;
     agent_name: string | null;
+    phone_number: string;
+    campaign_name: string | null;
+    state: CallState;
     outcome: CallOutcome | null;
+    created_at: Date;
     duration_seconds: number | null;
     call_recording_path: string | null;
   }>(`
@@ -289,13 +320,18 @@ async function getCallHistory(pool: pg.Pool): Promise<AdminOverviewResponse["cal
       calls.id,
       contacts.display_name as lead_name,
       users.name as agent_name,
+      calls.destination_number as phone_number,
+      campaigns.name as campaign_name,
+      calls.state,
       calls.outcome,
+      calls.created_at,
       calls.call_recording_path,
       extract(epoch from (coalesce(calls.ended_at, now()) - coalesce(calls.answered_at, calls.started_at, calls.created_at)))::int as duration_seconds
     from calls
     left join contacts on contacts.id = calls.contact_id
     left join agents on agents.id = calls.agent_id
     left join users on users.id = agents.user_id
+    left join campaigns on campaigns.id = calls.campaign_id
     order by calls.created_at desc
     limit 20
   `);
@@ -304,10 +340,99 @@ async function getCallHistory(pool: pg.Pool): Promise<AdminOverviewResponse["cal
     id: row.id,
     leadName: row.lead_name ?? "Manual dial",
     agentName: row.agent_name ?? "Unassigned",
-    outcome: row.outcome ?? "failed",
+    phoneNumber: row.phone_number,
+    campaignName: row.campaign_name ?? "No campaign",
+    state: row.state,
+    outcome: row.outcome,
+    createdAt: row.created_at.toISOString(),
     durationSeconds: row.duration_seconds ?? 0,
     callRecordingPath: row.call_recording_path
   }));
+}
+
+export async function getCallDetail(pool: pg.Pool, callId: string): Promise<CallDetailResponse | null> {
+  const result = await pool.query<{
+    id: string;
+    lead_name: string | null;
+    agent_name: string | null;
+    phone_number: string;
+    campaign_name: string | null;
+    state: CallState;
+    outcome: CallOutcome | null;
+    created_at: Date;
+    started_at: Date | null;
+    answered_at: Date | null;
+    ended_at: Date | null;
+    manual_dial: boolean;
+    duration_seconds: number | null;
+    call_recording_path: string | null;
+  }>(
+    `
+      select
+        calls.id,
+        contacts.display_name as lead_name,
+        users.name as agent_name,
+        calls.destination_number as phone_number,
+        campaigns.name as campaign_name,
+        calls.state,
+        calls.outcome,
+        calls.created_at,
+        calls.started_at,
+        calls.answered_at,
+        calls.ended_at,
+        calls.manual_dial,
+        calls.call_recording_path,
+        extract(epoch from (coalesce(calls.ended_at, now()) - coalesce(calls.answered_at, calls.started_at, calls.created_at)))::int as duration_seconds
+      from calls
+      left join contacts on contacts.id = calls.contact_id
+      left join agents on agents.id = calls.agent_id
+      left join users on users.id = agents.user_id
+      left join campaigns on campaigns.id = calls.campaign_id
+      where calls.id = $1
+      limit 1
+    `,
+    [callId]
+  );
+  const row = result.rows[0];
+  if (!row) {
+    return null;
+  }
+
+  const events = await pool.query<{ event_type: string; state: string; created_at: Date }>(
+    `
+      select event_type, state, created_at
+      from call_events
+      where call_id = $1
+      order by created_at asc
+      limit 100
+    `,
+    [callId]
+  );
+
+  return {
+    call: {
+      id: row.id,
+      leadName: row.lead_name ?? "Manual dial",
+      agentName: row.agent_name ?? "Unassigned",
+      phoneNumber: row.phone_number,
+      campaignName: row.campaign_name ?? "No campaign",
+      state: row.state,
+      outcome: row.outcome,
+      createdAt: row.created_at.toISOString(),
+      startedAt: row.started_at?.toISOString() ?? null,
+      answeredAt: row.answered_at?.toISOString() ?? null,
+      endedAt: row.ended_at?.toISOString() ?? null,
+      manualDial: row.manual_dial,
+      durationSeconds: row.duration_seconds ?? 0,
+      callRecordingPath: row.call_recording_path
+    },
+    timeline: events.rows.map((event) => ({
+      at: event.created_at.toISOString(),
+      eventType: event.event_type,
+      state: event.state,
+      label: humanize(event.event_type)
+    }))
+  };
 }
 
 async function getSuppression(pool: pg.Pool): Promise<AdminOverviewResponse["suppression"]> {

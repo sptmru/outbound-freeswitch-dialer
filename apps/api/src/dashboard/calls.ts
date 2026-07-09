@@ -695,12 +695,14 @@ export async function dropVoicemailForCall(
     contact_id: string | null;
     agent_leg_uuid: string | null;
     customer_leg_uuid: string | null;
+    state: CallState;
     selected_recording_id: string | null;
     runtime_file_path: string | null;
   }>(
     `
       select
         calls.agent_id,
+        calls.state,
         calls.contact_id,
         agent_leg.freeswitch_uuid as agent_leg_uuid,
         customer_leg.freeswitch_uuid as customer_leg_uuid,
@@ -730,6 +732,9 @@ export async function dropVoicemailForCall(
   if (!row.customer_leg_uuid) {
     return { ok: false, statusCode: 409, message: "Customer leg is not ready for voicemail drop" };
   }
+  if (row.state !== "bridged" && row.state !== "voicemail_signal_detected") {
+    return { ok: false, statusCode: 409, message: "Voicemail drop is available after the customer answers" };
+  }
   if (!row.runtime_file_path) {
     return { ok: false, statusCode: 409, message: "No voicemail recording is assigned to this call" };
   }
@@ -753,7 +758,7 @@ export async function dropVoicemailForCall(
         recordingPath: row.runtime_file_path
       }
     });
-    return { ok: false, statusCode: 502, message: "FreeSWITCH could not start voicemail playback" };
+    return { ok: false, statusCode: 502, message: "The calling service could not start voicemail playback" };
   }
 
   const client = await pool.connect();
@@ -875,6 +880,9 @@ export async function sendDtmfForCall(
   if (!row.customer_leg_uuid) {
     return { ok: false, statusCode: 409, message: "Customer leg is not ready for DTMF" };
   }
+  if (row.state !== "bridged" && row.state !== "voicemail_signal_detected") {
+    return { ok: false, statusCode: 409, message: "DTMF is available after the customer answers" };
+  }
 
   try {
     const customerLegUuid = assertFreeSwitchApiArgument(row.customer_leg_uuid, "customer leg UUID");
@@ -893,7 +901,7 @@ export async function sendDtmfForCall(
         message: error instanceof Error ? error.message : "FreeSWITCH DTMF failed"
       }
     });
-    return { ok: false, statusCode: 502, message: "FreeSWITCH could not send DTMF" };
+    return { ok: false, statusCode: 502, message: "The calling service could not send the keypad tone" };
   }
 
   await insertCallEvent(pool, {
@@ -920,8 +928,7 @@ export async function endDialerCall(
   pool: pg.Pool,
   config: AppConfig,
   userId: string,
-  callId: string,
-  outcome: CallOutcome
+  callId: string
 ): Promise<boolean> {
   const client = await pool.connect();
   try {
@@ -932,12 +939,14 @@ export async function endDialerCall(
       contact_id: string | null;
       agent_leg_uuid: string | null;
       customer_leg_uuid: string | null;
+      state: CallState;
     }>(
       `
         select
           calls.id,
           calls.agent_id,
           calls.contact_id,
+          calls.state,
           agent_leg.freeswitch_uuid as agent_leg_uuid,
           customer_leg.freeswitch_uuid as customer_leg_uuid
         from calls
@@ -958,6 +967,7 @@ export async function endDialerCall(
       await client.query("rollback");
       return false;
     }
+    const outcome = inferAgentEndOutcome(row.state);
 
     await client.query(
       `
@@ -1018,4 +1028,8 @@ export async function endDialerCall(
   } finally {
     client.release();
   }
+}
+
+export function inferAgentEndOutcome(state: CallState): CallOutcome {
+  return state === "bridged" || state === "voicemail_signal_detected" ? "answered" : "agent_canceled";
 }

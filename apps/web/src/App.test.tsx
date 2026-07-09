@@ -1,13 +1,18 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
-import type { AgentDeskResponse, PublicUser } from "./types";
+import type { AdminOverviewResponse, AgentDeskResponse, PublicUser } from "./types";
 
 const apiMocks = vi.hoisted(() => ({
   dropVoicemail: vi.fn(),
+  endCall: vi.fn(),
+  fetchAdminOverview: vi.fn(),
   fetchAgentDesk: vi.fn(),
+  fetchCallDetail: vi.fn(),
+  fetchCsvImports: vi.fn(),
   fetchMe: vi.fn(),
-  getStoredToken: vi.fn()
+  getStoredToken: vi.fn(),
+  useSoftphoneRegistration: vi.fn()
 }));
 
 vi.mock("./api", async () => {
@@ -15,14 +20,21 @@ vi.mock("./api", async () => {
   return {
     ...actual,
     dropVoicemail: apiMocks.dropVoicemail,
+    endCall: apiMocks.endCall,
+    fetchAdminOverview: apiMocks.fetchAdminOverview,
     fetchAgentDesk: apiMocks.fetchAgentDesk,
+    fetchCallDetail: apiMocks.fetchCallDetail,
+    fetchCsvImports: apiMocks.fetchCsvImports,
     fetchMe: apiMocks.fetchMe,
     getStoredToken: apiMocks.getStoredToken
   };
 });
 
 vi.mock("./softphone", () => ({
-  useSoftphoneRegistration: () => ({
+  useSoftphoneRegistration: apiMocks.useSoftphoneRegistration
+}));
+
+const softphoneRuntime = {
     registered: false,
     microphoneAllowed: true,
     state: "idle",
@@ -34,14 +46,16 @@ vi.mock("./softphone", () => ({
     answerIncomingCall: async () => undefined,
     declineIncomingCall: async () => undefined,
     hangUpSoftphoneCall: async () => undefined
-  })
-}));
+  };
 
 describe("App Agent Desk empty states", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     apiMocks.getStoredToken.mockReturnValue("test-token");
     apiMocks.fetchMe.mockResolvedValue({ user: userRow() });
+    apiMocks.fetchCsvImports.mockResolvedValue({ imports: [] });
+    apiMocks.fetchAdminOverview.mockResolvedValue(adminResponse());
+    apiMocks.useSoftphoneRegistration.mockReturnValue(softphoneRuntime);
   });
 
   it("renders an explicit no-campaign state instead of demo data", async () => {
@@ -93,7 +107,7 @@ describe("App Agent Desk empty states", () => {
 
   it("drops voicemail with the selected active-call recording", async () => {
     const activeDesk = deskResponse({
-      activeCall: {
+      activeCall: activeCallRow({
         id: "33333333-3333-4333-8333-333333333333",
         state: "bridged",
         leadName: "Avery Johnson",
@@ -102,9 +116,8 @@ describe("App Agent Desk empty states", () => {
         status: "bridged",
         voicemailSignal: "detected",
         recordingId: "44444444-4444-4444-8444-444444444444",
-        recordingName: "Default voicemail",
-        timeline: []
-      },
+        recordingName: "Default voicemail"
+      }),
       recordings: [
         recordingRow({
           id: "44444444-4444-4444-8444-444444444444",
@@ -133,6 +146,87 @@ describe("App Agent Desk empty states", () => {
         recordingId: "55555555-5555-4555-8555-555555555555"
       });
     });
+  });
+
+  it("disables unavailable call actions and formats the call timer", async () => {
+    apiMocks.fetchAgentDesk.mockResolvedValue(
+      deskResponse({
+        activeCall: activeCallRow({
+          durationSeconds: 72,
+          state: "customer_ringing",
+          status: "ringing",
+          actions: {
+            dropVoicemail: { allowed: false, reason: "Wait until the customer is connected" },
+            sendDtmf: { allowed: false, reason: "DTMF is available after the customer connects" }
+          }
+        })
+      })
+    );
+
+    render(<App />);
+
+    expect(await screen.findByLabelText("Call duration 01:12")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Drop voicemail/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "1" })).toBeDisabled();
+    expect(screen.getByText("Wait until the customer is connected")).toBeInTheDocument();
+  });
+
+  it("ends a call without forcing an agent-selected outcome", async () => {
+    apiMocks.fetchAgentDesk.mockResolvedValue(deskResponse({ activeCall: activeCallRow() }));
+    apiMocks.endCall.mockResolvedValue(deskResponse({ activeCall: null }));
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Hang up" }));
+
+    await waitFor(() => {
+      expect(apiMocks.endCall).toHaveBeenCalledWith("33333333-3333-4333-8333-333333333333", {
+        campaignId: "11111111-1111-4111-8111-111111111111"
+      });
+    });
+  });
+
+  it("stops softphone registration and hides phone status outside Agent Desk", async () => {
+    const admin = userRow({ role: "admin" });
+    apiMocks.fetchMe.mockResolvedValue({ user: admin });
+    apiMocks.fetchAgentDesk.mockResolvedValue(deskResponse({ user: admin }));
+
+    render(<App />);
+    const campaigns = await screen.findByRole("button", { name: "Campaigns" });
+    fireEvent.click(campaigns);
+
+    await waitFor(() => expect(apiMocks.useSoftphoneRegistration).toHaveBeenLastCalledWith(null));
+    expect(screen.queryByText("Phone offline")).not.toBeInTheDocument();
+    expect(screen.queryByText("Mic ready")).not.toBeInTheDocument();
+  });
+
+  it("keeps admin on Agent Desk while a call is active", async () => {
+    const admin = userRow({ role: "admin" });
+    apiMocks.fetchMe.mockResolvedValue({ user: admin });
+    apiMocks.fetchAgentDesk.mockResolvedValue(deskResponse({ user: admin, activeCall: activeCallRow() }));
+
+    render(<App />);
+
+    expect(await screen.findByRole("button", { name: "Campaigns" })).toBeDisabled();
+    expect(screen.getAllByTitle("Finish the active call first")).toHaveLength(4);
+  });
+
+  it("opens a call history entry with its event timeline", async () => {
+    const admin = userRow({ role: "admin" });
+    const call = callHistoryRow();
+    apiMocks.fetchMe.mockResolvedValue({ user: admin });
+    apiMocks.fetchAgentDesk.mockResolvedValue(deskResponse({ user: admin }));
+    apiMocks.fetchAdminOverview.mockResolvedValue(adminResponse({ callHistory: [call] }));
+    apiMocks.fetchCallDetail.mockResolvedValue({
+      call: { ...call, startedAt: call.createdAt, answeredAt: call.createdAt, endedAt: call.createdAt, manualDial: false },
+      timeline: [{ at: call.createdAt, eventType: "CHANNEL_ANSWER", state: "bridged", label: "Customer connected" }]
+    });
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Call History" }));
+    fireEvent.click(await screen.findByRole("button", { name: /Avery Johnson/ }));
+
+    expect(await screen.findByText("Customer connected")).toBeInTheDocument();
+    expect(apiMocks.fetchCallDetail).toHaveBeenCalledWith(call.id);
   });
 });
 
@@ -192,5 +286,55 @@ function recordingRow(
     name: "Default voicemail",
     status: "default",
     ...overrides
+  };
+}
+
+function activeCallRow(
+  overrides: Partial<NonNullable<AgentDeskResponse["activeCall"]>> = {}
+): NonNullable<AgentDeskResponse["activeCall"]> {
+  return {
+    id: "33333333-3333-4333-8333-333333333333",
+    state: "bridged",
+    leadName: "Avery Johnson",
+    phoneNumber: "+15551234567",
+    durationSeconds: 12,
+    status: "bridged",
+    voicemailSignal: "detected",
+    recordingId: "44444444-4444-4444-8444-444444444444",
+    recordingName: "Default voicemail",
+    actions: {
+      dropVoicemail: { allowed: true, reason: null },
+      sendDtmf: { allowed: true, reason: null }
+    },
+    timeline: [],
+    ...overrides
+  };
+}
+
+function adminResponse(overrides: Partial<AdminOverviewResponse> = {}): AdminOverviewResponse {
+  return {
+    user: userRow({ role: "admin" }),
+    stats: { campaigns: 0, activeAgents: 0, callsToday: 0, suppressionEntries: 0, liveCalls: 0 },
+    campaigns: [],
+    recordings: [],
+    users: [],
+    callHistory: [],
+    suppression: [],
+    ...overrides
+  };
+}
+
+function callHistoryRow(): AdminOverviewResponse["callHistory"][number] {
+  return {
+    id: "66666666-6666-4666-8666-666666666666",
+    leadName: "Avery Johnson",
+    agentName: "Agent Example",
+    phoneNumber: "+15551234567",
+    campaignName: "Selected campaign",
+    state: "completed",
+    outcome: "answered",
+    createdAt: "2026-07-10T08:00:00.000Z",
+    durationSeconds: 72,
+    callRecordingPath: null
   };
 }

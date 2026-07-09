@@ -44,6 +44,7 @@ import {
   endCall,
   fetchAdminOverview,
   fetchCampaignContacts,
+  fetchCallDetail,
   fetchCsvImports,
   fetchCsvImportDetail,
   fetchAgentDesk,
@@ -74,6 +75,7 @@ import type {
   CampaignContactsResponse,
   CsvImportDetailResponse,
   CsvImportSummary,
+  CallDetailResponse,
   FreeSwitchDiagnosticsResponse,
   FreeSwitchSafeTestResponse,
   ImportCsvResponse,
@@ -95,6 +97,19 @@ const navItems: Array<{ id: View; label: string; icon: typeof BarChart3 }> = [
 
 function getErrorMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback;
+}
+
+function getPhoneStatusCopy(softphone: SoftphoneRuntime): { detail: string; label: string } {
+  if (softphone.registered) {
+    return { label: "Phone ready", detail: "Calls will connect in this browser." };
+  }
+  if (!softphone.microphoneAllowed) {
+    return { label: "Microphone access needed", detail: "Allow microphone access in your browser, then reload this page." };
+  }
+  if (softphone.state === "requesting_microphone" || softphone.state === "registering") {
+    return { label: "Connecting phone", detail: "This usually takes a few seconds." };
+  }
+  return { label: "Phone unavailable", detail: "Reload the page. If it stays offline, contact an administrator." };
 }
 
 export function App() {
@@ -203,7 +218,9 @@ export function App() {
     };
   }, [desk?.activeCall?.id, desk?.campaign?.id, selectedCampaignId, user]);
 
-  const softphoneRuntime = useSoftphoneRegistration(user);
+  const isAgentOnly = user?.role === "agent";
+  const activeView: View = isAgentOnly ? "desk" : view;
+  const softphoneRuntime = useSoftphoneRegistration(user && activeView === "desk" ? user : null);
 
   if (!tokenReady) {
     return <div className="boot-screen">Loading dialer</div>;
@@ -212,9 +229,6 @@ export function App() {
   if (!user || !desk) {
     return <LoginScreen error={error} onLogin={handleLogin} />;
   }
-
-  const isAgentOnly = user.role === "agent";
-  const activeView = isAgentOnly ? "desk" : view;
 
   return (
     <div className={isAgentOnly ? "app-shell agent-shell" : "app-shell"}>
@@ -235,10 +249,11 @@ export function App() {
               return (
                 <button
                   className={item.id === activeView ? "nav-item active" : "nav-item"}
+                  disabled={Boolean(desk.activeCall && activeView === "desk" && item.id !== "desk")}
                   key={item.id}
                   onClick={() => setView(item.id)}
                   type="button"
-                  title={item.label}
+                  title={desk.activeCall && activeView === "desk" && item.id !== "desk" ? "Finish the active call first" : item.label}
                 >
                   <Icon size={18} />
                   <span>{item.label}</span>
@@ -254,7 +269,13 @@ export function App() {
       )}
 
       <main className="workspace">
-        <TopBar desk={desk} softphone={softphoneRuntime} user={user} onLogout={handleLogout} />
+        <TopBar
+          desk={desk}
+          showSoftphoneStatus={activeView === "desk"}
+          softphone={softphoneRuntime}
+          user={user}
+          onLogout={handleLogout}
+        />
         {activeView === "desk" && (
           <AgentDesk
             desk={desk}
@@ -290,7 +311,7 @@ function LoginScreen({
   error: string | null;
   onLogin: (email: string, password: string) => Promise<void>;
 }) {
-  const [email, setEmail] = useState("admin@example.com");
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [pending, setPending] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
@@ -353,11 +374,13 @@ function LoginScreen({
 function TopBar({
   desk,
   onLogout,
+  showSoftphoneStatus,
   softphone,
   user
 }: {
   desk: AgentDeskResponse;
   onLogout: () => void;
+  showSoftphoneStatus: boolean;
   softphone: SoftphoneRuntime;
   user: PublicUser;
 }) {
@@ -365,14 +388,18 @@ function TopBar({
     <header className="topbar">
       <p>{desk.campaign?.name ?? "No active campaign"}</p>
       <div className="topbar-actions">
-        <StatusBadge
-          label={softphone.registered ? "app registered" : "app offline"}
-          tone={softphone.registered ? "good" : "bad"}
-        />
-        <StatusBadge
-          label={softphone.microphoneAllowed ? "Mic allowed" : "Mic blocked"}
-          tone={softphone.microphoneAllowed ? "good" : "bad"}
-        />
+        {showSoftphoneStatus && (
+          <>
+            <StatusBadge
+              label={softphone.registered ? "Phone ready" : "Phone offline"}
+              tone={softphone.registered ? "good" : "bad"}
+            />
+            <StatusBadge
+              label={softphone.microphoneAllowed ? "Mic ready" : "Mic blocked"}
+              tone={softphone.microphoneAllowed ? "good" : "bad"}
+            />
+          </>
+        )}
         <div className="user-pill">
           <Headphones size={16} />
           <span>{user.name}</span>
@@ -421,7 +448,7 @@ function AgentDesk({
       return;
     }
     if (!softphone.registered) {
-      setCallNextError("Softphone must be registered before starting a call");
+      setCallNextError("The browser phone is not ready yet");
       return;
     }
     setCallNextPending(true);
@@ -437,7 +464,7 @@ function AgentDesk({
 
   async function callLead(lead: LeadSummary) {
     if (!softphone.registered) {
-      setCallNextError("Softphone must be registered before starting a call");
+      setCallNextError("The browser phone is not ready yet");
       return;
     }
     setCallNextPending(true);
@@ -455,7 +482,7 @@ function AgentDesk({
     setEndCallPending(true);
     setEndCallError(null);
     try {
-      onDeskChanged(await endCall(callId, { campaignId: campaign?.id, outcome: "agent_canceled" }));
+      onDeskChanged(await endCall(callId, { campaignId: campaign?.id }));
     } catch (error) {
       setEndCallError(error instanceof Error ? error.message : "Could not end call");
     } finally {
@@ -631,14 +658,14 @@ function LeadQueue({
         <div className="lead-table-row lead-table-head" role="row">
           <span>Lead</span>
           <span>Phone</span>
-          <span>Best time</span>
+          <span>Company</span>
           <span>Action</span>
         </div>
         {leads.map((lead) => (
           <div className="lead-table-row" key={lead.id} role="row">
             <strong>{lead.name}</strong>
             <span>{lead.phoneNumber}</span>
-            <span>{lead.status === "ready" ? "Now" : lead.status}</span>
+            <span>{lead.company || "—"}</span>
             <button
               className="pill-action"
               disabled={pending || lead.status !== "ready" || !canStartCalls}
@@ -674,6 +701,7 @@ function AgentStatusPanel({
 }) {
   const [campaignPending, setCampaignPending] = useState(false);
   const [campaignError, setCampaignError] = useState<string | null>(null);
+  const phoneStatus = getPhoneStatusCopy(softphone);
 
   async function changeCampaign(campaignId: string) {
     setCampaignPending(true);
@@ -719,8 +747,8 @@ function AgentStatusPanel({
           <Mic size={17} />
         </div>
         <div>
-          <strong>{softphone.label}</strong>
-          <span>{softphone.error ?? softphone.detail}</span>
+          <strong>{phoneStatus.label}</strong>
+          <span>{phoneStatus.detail}</span>
         </div>
       </div>
       <div className="softphone-actions">
@@ -747,6 +775,7 @@ function AgentStatusPanel({
 }
 
 function AgentNoCampaignStatus({ desk, softphone }: { desk: AgentDeskResponse; softphone: SoftphoneRuntime }) {
+  const phoneStatus = getPhoneStatusCopy(softphone);
   return (
     <article className="panel agent-status-panel">
       <div className="surface-heading">
@@ -761,8 +790,8 @@ function AgentNoCampaignStatus({ desk, softphone }: { desk: AgentDeskResponse; s
           <Mic size={17} />
         </div>
         <div>
-          <strong>{softphone.label}</strong>
-          <span>{softphone.error ?? softphone.detail}</span>
+          <strong>{phoneStatus.label}</strong>
+          <span>{phoneStatus.detail}</span>
         </div>
       </div>
       <div className="status-metric-list">
@@ -814,7 +843,7 @@ function ManualDialSurface({
 
   async function startCall() {
     if (!softphone.registered) {
-      setError("Softphone must be registered before starting a call");
+      setError("The browser phone is not ready yet");
       return;
     }
     setStartPending(true);
@@ -900,7 +929,12 @@ function ManualDialSurface({
           {checks.map((check) => (
             <CheckRow detail={check.detail} key={check.label} label={check.label} status={check.status} />
           ))}
-          <CheckRow detail="Campaign default" label="Recording default" status="pass" value="Solar Intro v3" />
+          <CheckRow
+            detail={desk.recordings[0] ? "Selected by the campaign" : "Upload a voicemail recording to enable drop"}
+            label="Voicemail recording"
+            status={desk.recordings[0] ? "pass" : "warn"}
+            value={desk.recordings[0]?.name}
+          />
           <CheckRow
             detail={desk.campaign.callRecordingEnabled ? "On for this campaign" : "Off for this campaign"}
             label="Call recording"
@@ -961,7 +995,7 @@ function ActiveCall({
   onSendDtmf: (callId: string, digit: string) => Promise<void>;
   pending: boolean;
 }) {
-  const activeCall = desk.activeCall;
+  const activeCall = desk.activeCall as ActiveCallUi | null;
   const defaultRecordingId = activeCall?.recordingId ?? desk.recordings[0]?.id ?? "";
   const [selectedRecordingId, setSelectedRecordingId] = useState(defaultRecordingId);
   useEffect(() => {
@@ -977,21 +1011,28 @@ function ActiveCall({
     );
   }
 
-  const durationLabel = activeCall.status === "bridged" ? "connected" : activeCall.status;
+  const durationLabel = formatCallStatus(activeCall.status);
   const voicemailSignal = formatVoicemailSignal(activeCall.voicemailSignal);
   const selectedRecording = desk.recordings.find((recording) => recording.id === selectedRecordingId);
   const dropRecordingId = selectedRecording?.id ?? activeCall.recordingId ?? undefined;
+  const dropEligibility = activeCall.actions?.dropVoicemail ?? {
+    allowed: activeCall.status === "bridged",
+    reason: activeCall.status === "bridged" ? null : "Wait until the customer is connected"
+  };
+  const dtmfEligibility = activeCall.actions?.sendDtmf ?? {
+    allowed: activeCall.status === "bridged",
+    reason: activeCall.status === "bridged" ? null : "DTMF is available after the customer connects"
+  };
   return (
     <article className="panel active-call">
-      <PanelHeader icon={PhoneCall} title="Active call" meta={activeCall.status} />
+      <PanelHeader icon={PhoneCall} title="Active call" meta={durationLabel} />
       <div className="call-hero">
         <div>
           <h2>{activeCall.leadName}</h2>
           <p>{activeCall.phoneNumber}</p>
+          {activeCall.campaignName && <small>{activeCall.campaignName}</small>}
         </div>
-        <span>
-          {activeCall.durationSeconds}s {durationLabel}
-        </span>
+        <span aria-label={`Call duration ${formatDuration(activeCall.durationSeconds)}`}>{formatDuration(activeCall.durationSeconds)}</span>
       </div>
       <div className="call-actions">
         <button className="danger-action" disabled={pending} onClick={() => onHangUp(activeCall.id)} type="button">
@@ -1000,24 +1041,33 @@ function ActiveCall({
         </button>
         <button
           className="primary-action"
-          disabled={pending || dropPending || !dropRecordingId}
+          disabled={pending || dropPending || !dropRecordingId || !dropEligibility.allowed}
           onClick={() => onDropVoicemail(activeCall.id, dropRecordingId)}
+          title={!dropEligibility.allowed ? dropEligibility.reason ?? "Voicemail drop is not available yet" : undefined}
           type="button"
         >
           <Voicemail size={17} />
           {dropPending ? "Dropping" : "Drop voicemail"}
         </button>
       </div>
+      {!dropEligibility.allowed && dropEligibility.reason && <p className="action-hint">{dropEligibility.reason}</p>}
       {error && <p className="form-error">{error}</p>}
       <div className="dtmf-panel">
         <div className="dtmf-pad" aria-label="DTMF keypad">
           {["1", "2", "3", "4", "5", "6", "7", "8", "9", "*", "0", "#"].map((digit) => (
-            <button disabled={dtmfPending} key={digit} onClick={() => void onSendDtmf(activeCall.id, digit)} type="button">
+            <button
+              disabled={dtmfPending || !dtmfEligibility.allowed}
+              key={digit}
+              onClick={() => void onSendDtmf(activeCall.id, digit)}
+              title={!dtmfEligibility.allowed ? dtmfEligibility.reason ?? "DTMF is not available yet" : undefined}
+              type="button"
+            >
               {digit}
             </button>
           ))}
         </div>
       </div>
+      {!dtmfEligibility.allowed && dtmfEligibility.reason && <p className="action-hint">{dtmfEligibility.reason}</p>}
       <div className="signal-strip">
         <div className={`voicemail-signal ${activeCall.voicemailSignal}`}>
           <span>VM/beep signal</span>
@@ -1053,6 +1103,32 @@ function ActiveCall({
       </div>
     </article>
   );
+}
+
+type ActiveCallUi = NonNullable<AgentDeskResponse["activeCall"]> & {
+  actions?: {
+    dropVoicemail: { allowed: boolean; reason: string | null };
+    sendDtmf: { allowed: boolean; reason: string | null };
+  };
+  campaignName?: string;
+};
+
+function formatDuration(totalSeconds: number): string {
+  const safeSeconds = Math.max(0, Math.floor(totalSeconds));
+  const minutes = Math.floor(safeSeconds / 60);
+  const seconds = safeSeconds % 60;
+  return `${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`;
+}
+
+function formatCallStatus(status: NonNullable<AgentDeskResponse["activeCall"]>["status"]): string {
+  const labels: Record<NonNullable<AgentDeskResponse["activeCall"]>["status"], string> = {
+    dialing: "Dialing",
+    ringing: "Ringing",
+    bridged: "Connected",
+    voicemail_drop: "Dropping voicemail",
+    completed: "Completed"
+  };
+  return labels[status];
 }
 
 function formatVoicemailSignal(signal: NonNullable<AgentDeskResponse["activeCall"]>["voicemailSignal"]): {
@@ -1452,8 +1528,9 @@ function CsvImportForm({
 
   return (
     <article className="panel form-panel">
-      <PanelHeader icon={Upload} title="CSV import" meta="Bulk" />
+      <PanelHeader icon={Upload} title="CSV import" meta="Name + phone" />
       <form className="stack-form" onSubmit={submit}>
+        <p className="form-help">Upload a CSV with <strong>name</strong> and <strong>phone</strong> columns. Phone is required for every imported lead.</p>
         <label>
           Campaign
           <select
@@ -1473,16 +1550,23 @@ function CsvImportForm({
           CSV file
           <input
             accept=".csv,text/csv"
-            onChange={(event) => setFile(event.target.files?.[0] ?? null)}
+            onChange={(event) => {
+              setFile(event.target.files?.[0] ?? null);
+              setError(null);
+              setResult(null);
+            }}
             type="file"
           />
         </label>
+        {file && <p className="selected-file">Ready to import: <strong>{file.name}</strong></p>}
         {error && <p className="form-error">{error}</p>}
         {result && (
-          <div className="import-result">
-            <strong>{result.importedRows} imported</strong>
+          <div className={result.failedRows ? "import-result has-failures" : "import-result success"} role="status">
+            <strong>{result.importedRows} lead{result.importedRows === 1 ? "" : "s"} imported</strong>
             <span>
-              {result.failedRows} failed from {result.totalRows} rows
+              {result.failedRows
+                ? `${result.failedRows} row${result.failedRows === 1 ? "" : "s"} could not be imported from ${result.totalRows} total`
+                : `All ${result.totalRows} rows were accepted`}
             </span>
           </div>
         )}
@@ -1818,7 +1902,7 @@ function Recordings({ admin, onChanged }: { admin: AdminOverviewResponse; onChan
           </label>
           <label>
             Voicemail name
-            <input onChange={(event) => setName(event.target.value)} placeholder="Solar Intro v3" value={name} />
+            <input onChange={(event) => setName(event.target.value)} placeholder="Main voicemail" value={name} />
           </label>
           <div className="toggle-row">
             <label>
@@ -1841,7 +1925,7 @@ function Recordings({ admin, onChanged }: { admin: AdminOverviewResponse; onChan
               <div className="table-row recording-row">
                 <div>
                   <strong>{recording.name}</strong>
-                  <small>{recording.runtimeFilePath}</small>
+                  <small>{recording.status === "default" ? "Used by default" : "Available for calls"}</small>
                 </div>
                 <span>
                   {recording.durationSeconds ? `${recording.durationSeconds}s` : "Duration pending"} ·{" "}
@@ -2037,24 +2121,127 @@ function CreateUserForm({ onChanged }: { onChanged: () => Promise<void> }) {
 }
 
 function HistoryView({ admin }: { admin: AdminOverviewResponse }) {
+  const [selectedCallId, setSelectedCallId] = useState<string | null>(null);
+  const [detail, setDetail] = useState<CallDetailResponse | null>(null);
+  const [pendingId, setPendingId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function toggleCall(callId: string) {
+    if (selectedCallId === callId) {
+      setSelectedCallId(null);
+      setDetail(null);
+      return;
+    }
+    setSelectedCallId(callId);
+    setDetail(null);
+    setPendingId(callId);
+    setError(null);
+    try {
+      setDetail(await fetchCallDetail(callId));
+    } catch (detailError) {
+      setError(getErrorMessage(detailError, "Could not load call details"));
+    } finally {
+      setPendingId(null);
+    }
+  }
+
   return (
     <article className="panel wide-panel">
       <PanelHeader icon={History} title="Call history" meta={`${admin.callHistory.length} recent`} />
+      <div className="history-head" aria-hidden="true">
+        <span>Lead</span>
+        <span>Campaign</span>
+        <span>Agent</span>
+        <span>Started</span>
+        <span>Outcome</span>
+      </div>
       <div className="table-list">
         {admin.callHistory.map((call) => (
-          <div className="table-row history-row" key={call.id}>
-            <strong>{call.leadName}</strong>
-            <span>{call.agentName}</span>
-            <span>{call.durationSeconds}s</span>
-            <span title={call.callRecordingPath ?? undefined}>
-              {call.callRecordingPath ? "Recording saved" : "No recording"}
-            </span>
-            <b>{call.outcome}</b>
+          <div className="history-entry" key={call.id}>
+            <button
+              aria-expanded={selectedCallId === call.id}
+              className="table-row history-row clickable-row"
+              onClick={() => void toggleCall(call.id)}
+              type="button"
+            >
+              <span className="history-lead">
+                <strong>{call.leadName}</strong>
+                <small>{call.phoneNumber}</small>
+              </span>
+              <span>{call.campaignName}</span>
+              <span>{call.agentName}</span>
+              <span>
+                {formatDateTime(call.createdAt)}
+                <small>{formatDuration(call.durationSeconds)}</small>
+              </span>
+              <b className={`outcome-badge outcome-${call.outcome ?? call.state}`}>
+                {formatOutcome(call.outcome, call.state)}
+              </b>
+            </button>
+            {selectedCallId === call.id && (
+              <div className="call-detail">
+                {pendingId === call.id && <p>Loading call details…</p>}
+                {error && <p className="form-error">{error}</p>}
+                {detail?.call.id === call.id && (
+                  <>
+                    <div className="call-detail-summary">
+                      <span><strong>Type</strong>{detail.call.manualDial ? "Manual dial" : "Campaign lead"}</span>
+                      <span><strong>Answered</strong>{detail.call.answeredAt ? formatDateTime(detail.call.answeredAt) : "Not answered"}</span>
+                      <span><strong>Ended</strong>{detail.call.endedAt ? formatDateTime(detail.call.endedAt) : "In progress"}</span>
+                      <span><strong>Recording</strong>{detail.call.callRecordingPath ? "Saved" : "Not available"}</span>
+                    </div>
+                    <div className="history-timeline">
+                      {detail.timeline.map((item) => (
+                        <div className="timeline-item" key={`${item.at}-${item.eventType}-${item.state}`}>
+                          <span>{formatDateTime(item.at)}</span>
+                          <p>{item.label}</p>
+                        </div>
+                      ))}
+                      {!detail.timeline.length && <p className="empty-state">No call events recorded.</p>}
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
           </div>
         ))}
+        {!admin.callHistory.length && <div className="empty-row">No calls yet</div>}
       </div>
     </article>
   );
+}
+
+function formatDateTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short"
+  }).format(date);
+}
+
+function formatOutcome(
+  outcome: AdminOverviewResponse["callHistory"][number]["outcome"],
+  state: AdminOverviewResponse["callHistory"][number]["state"]
+): string {
+  const value = outcome ?? state;
+  const labels: Record<string, string> = {
+    answered: "Answered",
+    busy: "Busy",
+    not_answered: "No answer",
+    voicemail_dropped: "VM dropped",
+    failed: "Failed",
+    agent_canceled: "Canceled",
+    dialing: "Dialing",
+    ringing: "Ringing",
+    bridged: "Connected",
+    voicemail_drop: "Dropping VM",
+    completed: "Completed",
+    canceled: "Canceled"
+  };
+  return labels[value] ?? value.replaceAll("_", " ");
 }
 
 function SettingsView({ admin, onChanged }: { admin: AdminOverviewResponse; onChanged: () => Promise<void> }) {

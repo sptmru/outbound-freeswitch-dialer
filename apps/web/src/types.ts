@@ -3,6 +3,7 @@ export type {
   AgentDeskResponse,
   CampaignContactsResponse,
   CampaignContactListItem,
+  CallDetailResponse,
   CreateCampaignRequest,
   CreateContactRequest,
   CreateRecordingResponse,

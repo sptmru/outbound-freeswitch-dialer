@@ -3,12 +3,10 @@ import { mkdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type pg from "pg";
-import { callOutcomes } from "@outbound-dialer/shared";
 import type {
   AdminOverviewResponse,
   AgentDeskResponse,
-  CallOutcome,
-  CallState,
+  CallDetailResponse,
   CampaignContactListItem,
   CampaignContactsResponse,
   CreateCampaignRequest,
@@ -63,6 +61,7 @@ import {
   createDialerCallFailureMessage,
   dropVoicemailForCall,
   endDialerCall,
+  inferAgentEndOutcome,
   sendDtmfForCall,
   syncFreeSwitchOriginate
 } from "./calls.js";
@@ -86,6 +85,8 @@ import {
   buildAdminOverviewResponse,
   buildAgentDeskResponse,
   formatElapsed,
+  getActiveCallActions,
+  getCallDetail,
   mapCallStatus,
   mapVoicemailSignal
 } from "./responders.js";
@@ -101,7 +102,6 @@ const startNextCallSchema = z.object({
 }) satisfies z.ZodType<StartNextCallRequest>;
 
 const endCallSchema = z.object({
-  outcome: z.enum(callOutcomes).optional(),
   campaignId: z.string().uuid().optional()
 }) satisfies z.ZodType<EndCallRequest>;
 
@@ -204,6 +204,20 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
     }
 
     return buildAdminOverviewResponse(pool, toPublicUser(user));
+  });
+
+  app.get("/admin/calls/:callId", async (request, reply): Promise<CallDetailResponse | void> => {
+    const user = await requireAdmin(request, reply, config, pool);
+    if (!user) {
+      return;
+    }
+
+    const params = z.object({ callId: z.string().uuid() }).parse(request.params);
+    const detail = await getCallDetail(pool, params.callId);
+    if (!detail) {
+      return reply.code(404).send({ message: "Call not found" });
+    }
+    return detail;
   });
 
   app.get(
@@ -380,7 +394,7 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
     const publicUser = toPublicUser(user);
     const params = z.object({ callId: z.string().uuid() }).parse(request.params);
     const input = endCallSchema.parse(request.body ?? {});
-    const ended = await endDialerCall(pool, config, publicUser.id, params.callId, input.outcome ?? "agent_canceled");
+    const ended = await endDialerCall(pool, config, publicUser.id, params.callId);
     if (!ended) {
       return reply.code(404).send({ message: "Active call not found" });
     }
@@ -1383,8 +1397,11 @@ export const __testing = {
   buildAgentDeskResponse,
   createDialerCall,
   formatElapsed,
+  getActiveCallActions,
+  getCallDetail,
   getAgentCampaign,
   getAgentCampaignForDialerAction,
+  inferAgentEndOutcome,
   mapCallStatus,
   mapVoicemailSignal,
   normalizePhoneNumber,
