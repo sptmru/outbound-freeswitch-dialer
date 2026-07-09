@@ -7,6 +7,8 @@
   <X-PRE-PROCESS cmd="set" data="internal_sip_port=__FREESWITCH_INTERNAL_SIP_PORT__"/>
   <X-PRE-PROCESS cmd="set" data="external_sip_port=__FREESWITCH_EXTERNAL_PROFILE_SIP_PORT__"/>
   <X-PRE-PROCESS cmd="set" data="external_tls_port=__FREESWITCH_EXTERNAL_PROFILE_TLS_PORT__"/>
+  <X-PRE-PROCESS cmd="set" data="global_codec_prefs=PCMU,PCMA,G729"/>
+  <X-PRE-PROCESS cmd="set" data="outbound_codec_prefs=PCMU,PCMA,G729"/>
   <X-PRE-PROCESS cmd="set" data="outbound_trunk_mode=__SIP_TRUNK_MODE__"/>
   <X-PRE-PROCESS cmd="set" data="outbound_sip_proxy=__SIP_TRUNK_PROXY__"/>
   <X-PRE-PROCESS cmd="set" data="outbound_caller_id=__SIP_TRUNK_CALLER_ID__"/>

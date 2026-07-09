@@ -164,7 +164,7 @@ FreeSWITCH runtime config is rendered at container startup from templates in `in
 - ESL password and ACL.
 - Global domain, RTP range, and advertised SIP/RTP IPs.
 - Internal WebRTC SIP profile.
-- Codec preference is `PCMU,PCMA,G729` (`ulaw`, `alaw`, `g729`); the FreeSWITCH image build fails if `mod_g729.so` is not present.
+- Codec preference is `PCMU,PCMA,G729` (`ulaw`, `alaw`, `g729`) for both internal and external SIP profiles; the FreeSWITCH image build fails if `mod_g729.so` is not present.
 - Optional SIP trunk registration gateway when `SIP_TRUNK_MODE=registration` and trunk credentials are present.
 - IP-auth outbound routing skeleton for `SIP_TRUNK_MODE=ip_auth`.
 - Manual voicemail-drop dialplan context.
