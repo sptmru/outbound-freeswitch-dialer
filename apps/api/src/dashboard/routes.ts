@@ -234,7 +234,7 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
     }
 
     const input = manualDialValidationSchema.parse(request.body);
-    return validateDialableNumber(pool, config, input.phoneNumber);
+    return validateDialableNumber(pool, config, input.phoneNumber, input.campaignId);
   });
 
   app.post("/agent/manual-dial/start", async (request, reply): Promise<AgentDeskResponse | void> => {
@@ -250,7 +250,7 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
       return reply.code(400).send({ message: validation.reason });
     }
 
-    const campaign = await getAgentCampaign(pool, input.campaignId);
+    const campaign = await getAgentCampaignForDialerAction(pool, input.campaignId);
     if (!campaign) {
       return reply.code(409).send({ message: "No campaign is available" });
     }
@@ -292,7 +292,7 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
       return reply.code(409).send({ message: "An active call is already in progress" });
     }
 
-    const campaign = await getAgentCampaign(pool, input.campaignId);
+    const campaign = await getAgentCampaignForDialerAction(pool, input.campaignId);
     if (!campaign) {
       return reply.code(409).send({ message: "No campaign is available" });
     }
@@ -1172,11 +1172,15 @@ function isCsvImportCampaignForeignKeyError(error: unknown): error is { code: st
 async function validateDialableNumber(
   pool: pg.Pool,
   config: AppConfig,
-  phoneNumber: string
+  phoneNumber: string,
+  campaignId?: string
 ): Promise<ManualDialValidationResponse> {
   const normalized = normalizePhoneNumber(phoneNumber, config.DEFAULT_PHONE_COUNTRY_CODE);
-  const suppression = normalized.ok ? await findSuppression(pool, normalized.number) : null;
-  const allowed = normalized.ok && !suppression;
+  const [suppression, manualDialing] = await Promise.all([
+    normalized.ok ? findSuppression(pool, normalized.number) : Promise.resolve(null),
+    getManualDialingCheck(pool, campaignId)
+  ]);
+  const allowed = normalized.ok && !suppression && manualDialing.status !== "fail";
   const normalizedFailureReason = normalized.ok ? "" : normalized.reason;
 
   return {
@@ -1184,9 +1188,13 @@ async function validateDialableNumber(
     allowed,
     reason: allowed
       ? "Number is callable"
+      : !normalized.ok
+        ? normalizedFailureReason
       : suppression
         ? suppression.reason ?? "Number is suppressed"
-        : normalizedFailureReason,
+        : manualDialing.status === "fail"
+          ? manualDialing.detail
+          : "Number is not callable",
     checks: [
       {
         label: "Phone number",
@@ -1200,11 +1208,29 @@ async function validateDialableNumber(
       },
       {
         label: "Manual dialing",
-        status: "pass",
-        detail: "Allowed for this campaign"
+        status: manualDialing.status,
+        detail: manualDialing.detail
       }
     ]
   };
+}
+
+async function getManualDialingCheck(
+  pool: pg.Pool,
+  campaignId?: string
+): Promise<{ status: "pass" | "warn" | "fail"; detail: string }> {
+  if (!campaignId) {
+    return { status: "warn", detail: "Campaign was not checked" };
+  }
+
+  const campaign = await getAgentCampaign(pool, campaignId, { allowFallback: false });
+  if (!campaign) {
+    return { status: "fail", detail: "Selected campaign is not active" };
+  }
+  if (!campaign.manual_dialing_enabled) {
+    return { status: "fail", detail: "Manual dialing is disabled for this campaign" };
+  }
+  return { status: "pass", detail: "Manual dialing allowed" };
 }
 
 async function getNextCallableContact(
@@ -1406,11 +1432,9 @@ async function syncFreeSwitchOriginate(
   input: { agentId: string; callId: string; destinationNumber: string; sipUsername: string }
 ): Promise<void> {
   if (!canOriginateCustomerLeg(config)) {
-    await insertCallEvent(pool, {
-      agentId: input.agentId,
-      callId: input.callId,
+    await failDialerCallFromFreeSwitch(pool, input.agentId, input.callId, null, {
       eventType: "freeswitch_originate_skipped",
-      state: "customer_dialing",
+      apiCommandName: "bgapi originate",
       raw: {
         reason: "SIP trunk is not configured",
         destinationNumber: input.destinationNumber
@@ -1474,6 +1498,7 @@ async function syncFreeSwitchOriginate(
     );
     scheduleOriginateWatchdog(pool, config, {
       agentId: input.agentId,
+      agentLegUuid: originate.agentLegUuid,
       callId: input.callId,
       customerLegUuid: originate.customerLegUuid,
       jobUuid: originate.jobUuid
@@ -1529,20 +1554,50 @@ async function syncFreeSwitchOriginate(
 function scheduleOriginateWatchdog(
   pool: pg.Pool,
   config: AppConfig,
-  input: { agentId: string; callId: string; customerLegUuid: string; jobUuid: string }
+  input: { agentId: string; agentLegUuid: string; callId: string; customerLegUuid: string; jobUuid: string },
+  phase: "agent" | "customer" = "agent"
 ): void {
   const timer = setTimeout(() => {
-    void closeMissingOriginateLeg(pool, config, input);
-  }, 3000);
+    void closeMissingOriginateLeg(pool, config, input, phase);
+  }, phase === "agent" ? 3000 : 35_000);
   timer.unref?.();
 }
 
 async function closeMissingOriginateLeg(
   pool: pg.Pool,
   config: AppConfig,
-  input: { agentId: string; callId: string; customerLegUuid: string; jobUuid: string }
+  input: { agentId: string; agentLegUuid: string; callId: string; customerLegUuid: string; jobUuid: string },
+  phase: "agent" | "customer"
 ): Promise<void> {
   try {
+    const call = await pool.query<{ state: CallState; ended_at: Date | null }>(
+      "select state, ended_at from calls where id = $1",
+      [input.callId]
+    );
+    const row = call.rows[0];
+    if (!row || row.ended_at || ["completed", "failed", "canceled"].includes(row.state)) {
+      return;
+    }
+
+    if (phase === "agent") {
+      const response = await sendFreeSwitchApiCommand(config, `uuid_exists ${input.agentLegUuid}`);
+      if (response.body.trim().toLowerCase().startsWith("true")) {
+        scheduleOriginateWatchdog(pool, config, input, "customer");
+        return;
+      }
+      await failDialerCallFromFreeSwitch(pool, input.agentId, input.callId, input.customerLegUuid, {
+        eventType: "freeswitch_originate_agent_leg_missing",
+        apiCommandName: "uuid_exists",
+        raw: {
+          agentLegUuid: input.agentLegUuid,
+          customerLegUuid: input.customerLegUuid,
+          jobUuid: input.jobUuid,
+          response: response.body.trim() || response.headers["reply-text"] || ""
+        }
+      });
+      return;
+    }
+
     const response = await sendFreeSwitchApiCommand(config, `uuid_exists ${input.customerLegUuid}`);
     if (response.body.trim().toLowerCase().startsWith("true")) {
       return;
@@ -1553,6 +1608,7 @@ async function closeMissingOriginateLeg(
       raw: {
         customerLegUuid: input.customerLegUuid,
         jobUuid: input.jobUuid,
+        phase,
         response: response.body.trim() || response.headers["reply-text"] || ""
       }
     });
@@ -1567,6 +1623,7 @@ async function closeMissingOriginateLeg(
       raw: {
         customerLegUuid: input.customerLegUuid,
         jobUuid: input.jobUuid,
+        phase,
         message: error instanceof Error ? error.message : "FreeSWITCH originate watchdog failed"
       }
     });
@@ -1577,7 +1634,7 @@ async function failDialerCallFromFreeSwitch(
   pool: pg.Pool,
   agentId: string,
   callId: string,
-  customerLegUuid: string,
+  customerLegUuid: string | null,
   event: { eventType: string; apiCommandName: string; raw: Record<string, unknown> }
 ): Promise<void> {
   const updated = await pool.query(
@@ -1604,7 +1661,6 @@ async function failDialerCallFromFreeSwitch(
       set state = 'ended',
           ended_at = coalesce(ended_at, now())
       where call_id = $1
-        and type = 'customer'
     `,
     [callId]
   );
@@ -1633,7 +1689,7 @@ async function failDialerCallFromFreeSwitch(
     eventType: event.eventType,
     state: "failed",
     apiCommandName: event.apiCommandName,
-    customerLegUuid,
+    customerLegUuid: customerLegUuid ?? undefined,
     raw: event.raw
   });
 }
@@ -2334,7 +2390,8 @@ async function buildAdminOverviewResponse(pool: pg.Pool, user: PublicUser): Prom
 
 async function getAgentCampaign(
   pool: pg.Pool,
-  selectedCampaignId?: string
+  selectedCampaignId?: string,
+  options: { allowFallback?: boolean } = {}
 ): Promise<{
   id: string;
   name: string;
@@ -2352,7 +2409,8 @@ async function getAgentCampaign(
     call_recording_enabled: boolean;
     callable_leads: string;
     agent_registered: boolean;
-  }>(`
+  }>(
+    `
     select
       campaigns.id,
       campaigns.name,
@@ -2372,14 +2430,27 @@ async function getAgentCampaign(
     left join contacts on contacts.campaign_id = campaigns.id
     left join suppression_entries on suppression_entries.normalized_phone_number = contacts.normalized_phone_number
     where campaigns.status = 'active'
+      and ($2::boolean = true or campaigns.id = $1)
     group by campaigns.id
     order by
       case when campaigns.id = $1 then 0 else 1 end,
       campaigns.created_at desc
     limit 1
-  `, [selectedCampaignId ?? null]);
+  `,
+    [selectedCampaignId ?? null, options.allowFallback ?? true]
+  );
 
   return result.rows[0] ?? null;
+}
+
+async function getAgentCampaignForDialerAction(
+  pool: pg.Pool,
+  selectedCampaignId?: string
+): ReturnType<typeof getAgentCampaign> {
+  if (!selectedCampaignId) {
+    return getAgentCampaign(pool);
+  }
+  return getAgentCampaign(pool, selectedCampaignId, { allowFallback: false });
 }
 
 async function getAgentCampaigns(pool: pg.Pool): Promise<AgentDeskResponse["availableCampaigns"]> {
@@ -3527,3 +3598,15 @@ function normalizeCountryCode(value?: string): CountryCode | undefined {
   const countryCode = value.trim().toUpperCase();
   return isSupportedCountry(countryCode) ? (countryCode as CountryCode) : undefined;
 }
+
+export const __testing = {
+  formatElapsed,
+  getAgentCampaign,
+  getAgentCampaignForDialerAction,
+  mapCallStatus,
+  mapVoicemailSignal,
+  normalizePhoneNumber,
+  parseCsv,
+  syncFreeSwitchOriginate,
+  validateDialableNumber
+};

@@ -117,6 +117,12 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
     let registerer: Registerer | null = null;
     let registrationTimer: number | null = null;
     let userAgent: UserAgent | null = null;
+    const clearRegistrationTimer = () => {
+      if (registrationTimer) {
+        window.clearTimeout(registrationTimer);
+        registrationTimer = null;
+      }
+    };
     const getActions = () => ({
       answerIncomingCall,
       declineIncomingCall,
@@ -145,6 +151,8 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
         if (cancelled) {
           return;
         }
+        mediaStream.getTracks().forEach((track) => track.stop());
+        mediaStream = null;
 
         setRuntime({
           registered: false,
@@ -193,6 +201,7 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
                 }
                 if (state === SessionState.Terminated) {
                   invitationRef.current = null;
+                  clearRemoteAudio();
                   setRuntime((current) => ({
                     ...current,
                     callState: "none",
@@ -235,10 +244,7 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
           }
 
           if (state === RegistererState.Registered) {
-            if (registrationTimer) {
-              window.clearTimeout(registrationTimer);
-              registrationTimer = null;
-            }
+            clearRegistrationTimer();
             setRuntime((current) => ({
               ...current,
               registered: true,
@@ -302,6 +308,7 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
               if (cancelled) {
                 return;
               }
+              clearRegistrationTimer();
               const statusCode = response.message.statusCode;
               const reasonPhrase = response.message.reasonPhrase;
               setRuntime((current) => ({
@@ -337,6 +344,7 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
         if (cancelled) {
           return;
         }
+        clearRegistrationTimer();
         setRuntime({
           registered: false,
           microphoneAllowed: Boolean(mediaStream),
@@ -355,18 +363,11 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
 
     return () => {
       cancelled = true;
-      if (registrationTimer) {
-        window.clearTimeout(registrationTimer);
-        registrationTimer = null;
-      }
+      clearRegistrationTimer();
       void invitationRef.current?.bye().catch(() => undefined);
       invitationRef.current = null;
       mediaStream?.getTracks().forEach((track) => track.stop());
-      if (remoteAudioRef.current) {
-        remoteAudioRef.current.srcObject = null;
-        remoteAudioRef.current.remove();
-        remoteAudioRef.current = null;
-      }
+      clearRemoteAudio();
       void registerer?.unregister().catch(() => undefined);
       void userAgent?.stop().catch(() => undefined);
     };
@@ -401,5 +402,14 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
       remoteAudioRef.current = audio;
     }
     void audio.play().catch(() => undefined);
+  }
+
+  function clearRemoteAudio() {
+    if (!remoteAudioRef.current) {
+      return;
+    }
+    remoteAudioRef.current.srcObject = null;
+    remoteAudioRef.current.remove();
+    remoteAudioRef.current = null;
   }
 }

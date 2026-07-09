@@ -241,3 +241,13 @@ function parseHeaders(value: string): Record<string, string> {
       .filter((entry): entry is [string, string] => Boolean(entry))
   );
 }
+
+export const __testing = {
+  buildCustomerDialString,
+  buildOriginateVariables,
+  escapeOriginateVariable,
+  normalizeDestinationForDialString,
+  parseEslResponse,
+  parseHeaders,
+  parseJobUuid
+};

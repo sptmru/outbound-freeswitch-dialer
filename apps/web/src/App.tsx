@@ -717,7 +717,7 @@ function ManualDialSurface({
     setPending(true);
     setError(null);
     try {
-      setResult(await validateManualDial(phoneNumber));
+      setResult(await validateManualDial(phoneNumber, desk.campaign.id));
     } catch (validateError) {
       setError(validateError instanceof Error ? validateError.message : "Could not validate number");
     } finally {
@@ -789,7 +789,13 @@ function ManualDialSurface({
             </button>
             <button
               className="primary-action teal-action"
-              disabled={startPending || !phoneNumber.trim() || !softphone.registered}
+              disabled={
+                startPending ||
+                !phoneNumber.trim() ||
+                !softphone.registered ||
+                !desk.campaign.manualDialingEnabled ||
+                result?.allowed === false
+              }
               onClick={startCall}
               type="button"
             >
@@ -1028,7 +1034,7 @@ function ManualDial({
     setPending(true);
     setError(null);
     try {
-      setResult(await validateManualDial(phoneNumber));
+      setResult(await validateManualDial(phoneNumber, campaignId));
     } catch (validateError) {
       setError(validateError instanceof Error ? validateError.message : "Could not validate number");
     } finally {

@@ -133,10 +133,13 @@ export async function fetchCampaignContacts(
   return apiFetch<CampaignContactsResponse>(`/admin/campaigns/${campaignId}/contacts${query ? `?${query}` : ""}`);
 }
 
-export async function validateManualDial(phoneNumber: string): Promise<ManualDialValidationResponse> {
+export async function validateManualDial(
+  phoneNumber: string,
+  campaignId?: string
+): Promise<ManualDialValidationResponse> {
   return apiFetch<ManualDialValidationResponse>("/agent/manual-dial/validate", {
     method: "POST",
-    body: JSON.stringify({ phoneNumber })
+    body: JSON.stringify({ phoneNumber, campaignId })
   });
 }
 

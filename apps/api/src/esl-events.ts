@@ -268,7 +268,7 @@ async function persistFreeSwitchEvent(config: AppConfig, pool: pg.Pool, frame: E
     }
   }
 
-  if (eventName === "CHANNEL_HANGUP" || eventName === "CHANNEL_HANGUP_COMPLETE") {
+  if (eventName === "CHANNEL_HANGUP" || eventName === "CHANNEL_HANGUP_COMPLETE" || eventName === "CHANNEL_DESTROY") {
     const outcome = mapHangupCauseToOutcome(frame.headers["hangup-cause"]);
     const terminalState = outcome === "failed" ? "failed" : "completed";
     await pool.query(
@@ -677,7 +677,7 @@ function mapEventToCallState(eventName: string, hangupCause?: string, legType = 
   if ((eventName === "CHANNEL_ANSWER" && legType === "customer") || eventName === "CHANNEL_BRIDGE") {
     return "bridged";
   }
-  if (eventName === "CHANNEL_HANGUP_COMPLETE") {
+  if (isTerminalEvent(eventName)) {
     return mapHangupCauseToOutcome(hangupCause) === "failed" ? "failed" : "completed";
   }
   return "customer_dialing";
@@ -718,3 +718,17 @@ function isTerminalEvent(eventName: string): boolean {
 function isUuid(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
+
+export const __testing = {
+  extractFrames,
+  isFailedBackgroundJob,
+  isTerminalEvent,
+  isUuid,
+  isVoicemailDetectionEvent,
+  mapEventToCallState,
+  mapEventToLegState,
+  mapHangupCauseToOutcome,
+  mapVoicemailDetectionSignal,
+  parseConfidence,
+  parseHeaders
+};
