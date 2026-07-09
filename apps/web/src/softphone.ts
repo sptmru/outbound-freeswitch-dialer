@@ -40,6 +40,33 @@ const idleRuntime: SoftphoneRuntime = {
 
 const registrationTimeoutMs = 20_000;
 
+function toRegistrationFailureRuntime(current: SoftphoneRuntime, detail: string, error: string): SoftphoneRuntime {
+  return {
+    ...current,
+    registered: false,
+    state: "failed",
+    callState: "none",
+    label: "Softphone offline",
+    detail,
+    error,
+    incomingCallLabel: null
+  };
+}
+
+function toCallIdleRuntime(current: SoftphoneRuntime, registeredDetail: string): SoftphoneRuntime {
+  return {
+    ...current,
+    callState: "none",
+    label: current.registered ? "Softphone registered" : current.label,
+    detail: current.registered ? registeredDetail : current.detail,
+    incomingCallLabel: null
+  };
+}
+
+function formatRegisterRejectError(statusCode?: number, reasonPhrase?: string): string {
+  return `REGISTER rejected${statusCode ? ` ${statusCode}` : ""}${reasonPhrase ? ` ${reasonPhrase}` : ""}`;
+}
+
 export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRuntime {
   const invitationRef = useRef<Invitation | null>(null);
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -78,13 +105,8 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
     }
     await invitation.reject();
     invitationRef.current = null;
-    setRuntime((current) => ({
-      ...current,
-      callState: "none",
-      label: current.registered ? "Softphone registered" : current.label,
-      detail: current.registered ? "Ready for calls" : current.detail,
-      incomingCallLabel: null
-    }));
+    clearRemoteAudio();
+    setRuntime((current) => toCallIdleRuntime(current, "Ready for calls"));
   }
 
   async function hangUpSoftphoneCall() {
@@ -96,13 +118,8 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
       await invitation.reject().catch(() => undefined);
     });
     invitationRef.current = null;
-    setRuntime((current) => ({
-      ...current,
-      callState: "none",
-      label: current.registered ? "Softphone registered" : current.label,
-      detail: current.registered ? "Ready for calls" : current.detail,
-      incomingCallLabel: null
-    }));
+    clearRemoteAudio();
+    setRuntime((current) => toCallIdleRuntime(current, "Ready for calls"));
   }
 
   useEffect(() => {
@@ -114,6 +131,7 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
 
     let cancelled = false;
     let mediaStream: MediaStream | null = null;
+    let microphoneAllowed = false;
     let registerer: Registerer | null = null;
     let registrationTimer: number | null = null;
     let userAgent: UserAgent | null = null;
@@ -128,6 +146,17 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
       declineIncomingCall,
       hangUpSoftphoneCall
     });
+    const failRegistration = (detail: string, error: string, options: { preserveExistingError?: boolean } = {}) => {
+      clearRegistrationTimer();
+      invitationRef.current = null;
+      clearRemoteAudio();
+      setRuntime((current) => {
+        if (options.preserveExistingError && current.state === "failed" && current.error) {
+          return current;
+        }
+        return toRegistrationFailureRuntime(current, detail, error);
+      });
+    };
 
     async function register() {
       try {
@@ -148,6 +177,7 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
         }
 
         mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        microphoneAllowed = true;
         if (cancelled) {
           return;
         }
@@ -202,27 +232,28 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
                 if (state === SessionState.Terminated) {
                   invitationRef.current = null;
                   clearRemoteAudio();
-                  setRuntime((current) => ({
-                    ...current,
-                    callState: "none",
-                    label: current.registered ? "Softphone registered" : current.label,
-                    detail: current.registered ? `${provisioning.sipUsername}@${provisioning.domain}` : current.detail,
-                    incomingCallLabel: null
-                  }));
+                  setRuntime((current) => toCallIdleRuntime(current, `${provisioning.sipUsername}@${provisioning.domain}`));
                 }
               });
 
               void acceptInvitation(invitation, incomingCallLabel).catch((error: unknown) => {
                 invitationRef.current = null;
+                clearRemoteAudio();
                 setRuntime((current) => ({
-                  ...current,
-                  callState: "none",
-                  label: current.registered ? "Softphone registered" : current.label,
-                  detail: current.registered ? `${provisioning.sipUsername}@${provisioning.domain}` : current.detail,
-                  error: error instanceof Error ? error.message : "Softphone call failed",
-                  incomingCallLabel: null
+                  ...toCallIdleRuntime(current, `${provisioning.sipUsername}@${provisioning.domain}`),
+                  error: error instanceof Error ? error.message : "Softphone call failed"
                 }));
               });
+            },
+            onDisconnect: (error) => {
+              if (cancelled) {
+                return;
+              }
+              failRegistration(
+                "SIP transport disconnected",
+                error instanceof Error ? error.message : "WebSocket connection to FreeSWITCH closed",
+                { preserveExistingError: true }
+              );
             }
           },
           transportOptions: {
@@ -258,13 +289,17 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
           }
 
           if (state === RegistererState.Unregistered || state === RegistererState.Terminated) {
-            setRuntime((current) => ({
-              ...current,
-              registered: false,
-              state: current.state === "failed" ? current.state : "registering",
-              label: current.state === "failed" ? current.label : "Softphone offline",
-              detail: current.state === "failed" ? current.detail : "Waiting for accepted SIP registration"
-            }));
+            if (state === RegistererState.Terminated) {
+              failRegistration("SIP registration terminated", "SIP.js registerer terminated before this browser was registered", {
+                preserveExistingError: true
+              });
+              return;
+            }
+            failRegistration(
+              "SIP registration did not complete",
+              "FreeSWITCH did not keep this browser registered. Check SIP.js logs.",
+              { preserveExistingError: true }
+            );
           }
         });
         await userAgent.start();
@@ -308,17 +343,10 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
               if (cancelled) {
                 return;
               }
-              clearRegistrationTimer();
-              const statusCode = response.message.statusCode;
-              const reasonPhrase = response.message.reasonPhrase;
-              setRuntime((current) => ({
-                ...current,
-                registered: false,
-                state: "failed",
-                label: "Softphone offline",
-                detail: "SIP registration rejected",
-                error: `REGISTER rejected${statusCode ? ` ${statusCode}` : ""}${reasonPhrase ? ` ${reasonPhrase}` : ""}`
-              }));
+              failRegistration(
+                "SIP registration rejected",
+                formatRegisterRejectError(response.message.statusCode, response.message.reasonPhrase)
+              );
             }
           }
         });
@@ -347,7 +375,7 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
         clearRegistrationTimer();
         setRuntime({
           registered: false,
-          microphoneAllowed: Boolean(mediaStream),
+          microphoneAllowed,
           state: "failed",
           callState: "none",
           label: "Softphone offline",
@@ -413,3 +441,9 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
     remoteAudioRef.current = null;
   }
 }
+
+export const __testing = {
+  formatRegisterRejectError,
+  toCallIdleRuntime,
+  toRegistrationFailureRuntime
+};

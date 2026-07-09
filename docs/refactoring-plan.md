@@ -18,6 +18,7 @@ This plan is based on the July 2026 audit of the API, FreeSWITCH event handling,
   - FreeSWITCH event state mapping, including `CHANNEL_DESTROY`.
   - FreeSWITCH SIP registration event mapping for browser agents.
   - FreeSWITCH generated agent XML recreation/deletion.
+  - Web softphone registration failure and call idle runtime helpers.
 - Verification commands:
   - `npm --workspace @outbound-dialer/api test`
   - `npm --workspace @outbound-dialer/web test`
@@ -48,6 +49,7 @@ This plan is based on the July 2026 audit of the API, FreeSWITCH event handling,
   - the non-persisted manual dial note field was removed.
   - Vitest, jsdom, and React Testing Library were added for web tests.
   - Agent Desk no-campaign and empty-lead states are covered by web tests.
+  - SIP registration failures clear pending timeout state and remote call audio cleanup is centralized.
 - Phase 6 deployment surface cleanup:
   - direct web nginx now proxies `/api/` to the API service instead of serving the SPA fallback.
   - `scripts/smoke-web.sh` verifies the published web root and `/api/health` proxy.
@@ -133,7 +135,7 @@ Goal: make async UI state deterministic and testable.
 - Done: add latest-request guards for:
   - active-call polling.
   - campaign contacts search/filter requests.
-- Clear SIP registration timeout on reject/failure and keep remote audio cleanup on session termination.
+- Done: clear SIP registration timeout on reject/failure and keep remote audio cleanup on session termination.
 - Done: remove unused `SoftphonePanel` and legacy `ManualDial`.
 - Done: remove the manual dial "Lead name or note" field because it was not persisted.
 
@@ -147,5 +149,4 @@ Goal: direct container ports and proxied production paths should behave consiste
 
 ## Suggested Order
 
-1. Clear SIP registration timeout on reject/failure and keep remote audio cleanup on session termination.
-2. Split contact/suppression mutation handlers or add Fastify route grouping only if `routes.ts` grows again.
+1. Split contact/suppression mutation handlers or add Fastify route grouping only if `routes.ts` grows again.
