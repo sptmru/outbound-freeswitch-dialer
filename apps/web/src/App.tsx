@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import {
   Activity,
@@ -1651,7 +1651,15 @@ function Recordings({ admin, onChanged }: { admin: AdminOverviewResponse; onChan
   const [defaultPendingId, setDefaultPendingId] = useState<string | null>(null);
   const [deletePendingId, setDeletePendingId] = useState<string | null>(null);
   const [preview, setPreview] = useState<{ id: string; url: string } | null>(null);
+  const previewAudioRef = useRef<HTMLAudioElement | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!preview) {
+      return;
+    }
+    previewAudioRef.current?.play().catch(() => undefined);
+  }, [preview]);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -1810,7 +1818,15 @@ function Recordings({ admin, onChanged }: { admin: AdminOverviewResponse; onChan
                   <Trash2 size={16} />
                 </button>
               </div>
-              {preview?.id === recording.id && <audio className="recording-preview" controls src={preview.url} />}
+              {preview?.id === recording.id && (
+                <audio
+                  autoPlay
+                  className="recording-preview"
+                  controls
+                  ref={previewAudioRef}
+                  src={preview.url}
+                />
+              )}
             </div>
           ))}
           {!admin.recordings.length && <p className="empty-state">No voicemail recordings uploaded yet.</p>}
