@@ -1397,6 +1397,12 @@ async function syncFreeSwitchOriginate(
         jobUuid: originate.jobUuid
       }
     });
+    scheduleOriginateWatchdog(pool, config, {
+      agentId: input.agentId,
+      callId: input.callId,
+      customerLegUuid: originate.legUuid,
+      jobUuid: originate.jobUuid
+    });
   } catch (error) {
     await pool.query(
       `
@@ -1443,6 +1449,118 @@ async function syncFreeSwitchOriginate(
       }
     });
   }
+}
+
+function scheduleOriginateWatchdog(
+  pool: pg.Pool,
+  config: AppConfig,
+  input: { agentId: string; callId: string; customerLegUuid: string; jobUuid: string }
+): void {
+  const timer = setTimeout(() => {
+    void closeMissingOriginateLeg(pool, config, input);
+  }, 3000);
+  timer.unref?.();
+}
+
+async function closeMissingOriginateLeg(
+  pool: pg.Pool,
+  config: AppConfig,
+  input: { agentId: string; callId: string; customerLegUuid: string; jobUuid: string }
+): Promise<void> {
+  try {
+    const response = await sendFreeSwitchApiCommand(config, `uuid_exists ${input.customerLegUuid}`);
+    if (response.body.trim().toLowerCase().startsWith("true")) {
+      return;
+    }
+    await failDialerCallFromFreeSwitch(pool, input.agentId, input.callId, input.customerLegUuid, {
+      eventType: "freeswitch_originate_leg_missing",
+      apiCommandName: "uuid_exists",
+      raw: {
+        customerLegUuid: input.customerLegUuid,
+        jobUuid: input.jobUuid,
+        response: response.body.trim() || response.headers["reply-text"] || ""
+      }
+    });
+  } catch (error) {
+    await insertCallEvent(pool, {
+      agentId: input.agentId,
+      callId: input.callId,
+      eventType: "freeswitch_originate_watchdog_failed",
+      state: "customer_dialing",
+      apiCommandName: "uuid_exists",
+      customerLegUuid: input.customerLegUuid,
+      raw: {
+        customerLegUuid: input.customerLegUuid,
+        jobUuid: input.jobUuid,
+        message: error instanceof Error ? error.message : "FreeSWITCH originate watchdog failed"
+      }
+    });
+  }
+}
+
+async function failDialerCallFromFreeSwitch(
+  pool: pg.Pool,
+  agentId: string,
+  callId: string,
+  customerLegUuid: string,
+  event: { eventType: string; apiCommandName: string; raw: Record<string, unknown> }
+): Promise<void> {
+  const updated = await pool.query(
+    `
+      update calls
+      set state = 'failed',
+          outcome = 'failed',
+          ended_at = coalesce(ended_at, now()),
+          updated_at = now()
+      where id = $1
+        and ended_at is null
+        and state not in ('completed', 'failed', 'canceled')
+      returning contact_id
+    `,
+    [callId]
+  );
+  if (!updated.rowCount) {
+    return;
+  }
+
+  await pool.query(
+    `
+      update call_legs
+      set state = 'ended',
+          ended_at = coalesce(ended_at, now())
+      where call_id = $1
+        and type = 'customer'
+    `,
+    [callId]
+  );
+  await pool.query(
+    `
+      update agents
+      set status = 'ready',
+          updated_at = now()
+      where id = $1
+    `,
+    [agentId]
+  );
+  await pool.query(
+    `
+      update contacts
+      set status = 'new',
+          updated_at = now()
+      where id = $1
+        and status = 'calling'
+    `,
+    [updated.rows[0]?.contact_id]
+  );
+  await insertCallEvent(pool, {
+    agentId,
+    callId,
+    eventType: event.eventType,
+    state: "failed",
+    apiCommandName: event.apiCommandName,
+    customerLegUuid,
+    raw: event.raw
+  });
 }
 
 async function killFreeSwitchLeg(

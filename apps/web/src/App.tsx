@@ -855,6 +855,7 @@ function ActiveCall({
     );
   }
 
+  const durationLabel = activeCall.status === "bridged" ? "connected" : activeCall.status;
   return (
     <article className="panel active-call">
       <PanelHeader icon={PhoneCall} title="Active call" meta={activeCall.status} />
@@ -863,7 +864,9 @@ function ActiveCall({
           <h2>{activeCall.leadName}</h2>
           <p>{activeCall.phoneNumber}</p>
         </div>
-        <span>{activeCall.durationSeconds}s connected</span>
+        <span>
+          {activeCall.durationSeconds}s {durationLabel}
+        </span>
       </div>
       <div className="call-actions">
         <button className="danger-action" disabled={pending} onClick={() => onHangUp(activeCall.id)} type="button">
