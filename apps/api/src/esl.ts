@@ -14,6 +14,14 @@ export interface OriginateCustomerLegInput {
   legUuid: string;
 }
 
+export interface OriginateAgentBridgeCallInput {
+  agentLegUuid: string;
+  callId: string;
+  customerLegUuid: string;
+  destinationNumber: string;
+  sipUsername: string;
+}
+
 export async function checkFreeSwitchEsl(config: AppConfig): Promise<string> {
   if (!config.FREESWITCH_ESL_ENABLED) {
     return "disabled by FREESWITCH_ESL_ENABLED=false";
@@ -50,6 +58,41 @@ export async function originateCustomerLeg(
     command,
     jobUuid: parseJobUuid(response),
     legUuid: input.legUuid
+  };
+}
+
+export async function originateAgentBridgeCall(
+  config: AppConfig,
+  input: OriginateAgentBridgeCallInput
+): Promise<{ agentLegUuid: string; command: string; customerLegUuid: string; jobUuid: string }> {
+  const customerDialString = buildCustomerDialString(config, input.destinationNumber);
+  const agentVariables = buildOriginateVariables([
+    `origination_uuid=${input.agentLegUuid}`,
+    `outbound_dialer_call_id=${input.callId}`,
+    "outbound_dialer_leg_type=agent",
+    "originate_timeout=30",
+    "bridge_early_media=true",
+    "instant_ringback=true",
+    "hangup_after_bridge=true",
+    "continue_on_fail=false"
+  ]);
+  const customerVariables = buildOriginateVariables([
+    `origination_uuid=${input.customerLegUuid}`,
+    `outbound_dialer_call_id=${input.callId}`,
+    "outbound_dialer_leg_type=customer",
+    "ignore_early_media=false",
+    "originate_timeout=45",
+    config.SIP_TRUNK_CALLER_ID
+      ? `origination_caller_id_number=${escapeOriginateVariable(config.SIP_TRUNK_CALLER_ID)}`
+      : null
+  ]);
+  const command = `originate {${agentVariables}}user/${input.sipUsername}@${config.FREESWITCH_DOMAIN} &bridge({${customerVariables}}${customerDialString})`;
+  const response = await sendFreeSwitchBgapiCommand(config, command);
+  return {
+    agentLegUuid: input.agentLegUuid,
+    command,
+    customerLegUuid: input.customerLegUuid,
+    jobUuid: parseJobUuid(response)
   };
 }
 
@@ -153,6 +196,10 @@ function normalizeDestinationForDialString(value: string): string {
   const trimmed = value.trim();
   // Some SIP trunks reject E.164 user parts with a leading plus.
   return trimmed.replace(/\D/g, "");
+}
+
+function buildOriginateVariables(values: Array<string | null>): string {
+  return values.filter(Boolean).join(",");
 }
 
 function escapeOriginateVariable(value: string): string {

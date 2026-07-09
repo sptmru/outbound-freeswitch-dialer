@@ -157,9 +157,10 @@ async function persistFreeSwitchEvent(pool: pg.Pool, frame: EslFrame): Promise<v
     return;
   }
 
-  const customerLegUuid =
+  const legUuid =
     frame.headers["unique-id"] ?? frame.headers["variable_uuid"] ?? frame.headers["variable_origination_uuid"] ?? null;
-  const state = mapEventToCallState(eventName, frame.headers["hangup-cause"]);
+  const legType = frame.headers["variable_outbound_dialer_leg_type"] === "agent" ? "agent" : "customer";
+  const state = mapEventToCallState(eventName, frame.headers["hangup-cause"], legType);
   const eventType = `freeswitch_${eventName.toLowerCase()}`;
   const raw = JSON.stringify({
     headers: frame.headers,
@@ -174,6 +175,7 @@ async function persistFreeSwitchEvent(pool: pg.Pool, frame: EslFrame): Promise<v
         event_type,
         state,
         freeswitch_event_name,
+        agent_leg_uuid,
         customer_leg_uuid,
         raw_json
       )
@@ -184,13 +186,14 @@ async function persistFreeSwitchEvent(pool: pg.Pool, frame: EslFrame): Promise<v
         $3,
         $4,
         $5,
-        $6::jsonb
+        $6,
+        $7::jsonb
       )
     `,
-    [callId, eventType, state, eventName, customerLegUuid, raw]
+    [callId, eventType, state, eventName, legType === "agent" ? legUuid : null, legType === "customer" ? legUuid : null, raw]
   );
 
-  if (customerLegUuid) {
+  if (legUuid) {
     await pool.query(
       `
         update call_legs
@@ -199,13 +202,20 @@ async function persistFreeSwitchEvent(pool: pg.Pool, frame: EslFrame): Promise<v
             answered_at = case when $4 then coalesce(answered_at, now()) else answered_at end,
             ended_at = case when $5 then coalesce(ended_at, now()) else ended_at end
         where call_id = $1
-          and type = 'customer'
+          and type = $6
       `,
-      [callId, customerLegUuid, mapEventToLegState(eventName), eventName === "CHANNEL_ANSWER", isTerminalEvent(eventName)]
+      [
+        callId,
+        legUuid,
+        mapEventToLegState(eventName),
+        eventName === "CHANNEL_ANSWER",
+        isTerminalEvent(eventName),
+        legType
+      ]
     );
   }
 
-  if (eventName === "CHANNEL_CREATE") {
+  if (eventName === "CHANNEL_CREATE" && legType === "customer") {
     await pool.query(
       `
         update calls
@@ -218,7 +228,20 @@ async function persistFreeSwitchEvent(pool: pg.Pool, frame: EslFrame): Promise<v
     );
   }
 
-  if (eventName === "CHANNEL_ANSWER" || eventName === "CHANNEL_BRIDGE") {
+  if (eventName === "CHANNEL_ANSWER" && legType === "agent") {
+    await pool.query(
+      `
+        update calls
+        set state = 'agent_answered',
+            updated_at = now()
+        where id = $1
+          and state not in ('completed', 'failed', 'canceled', 'bridged')
+      `,
+      [callId]
+    );
+  }
+
+  if ((eventName === "CHANNEL_ANSWER" && legType === "customer") || eventName === "CHANNEL_BRIDGE") {
     await pool.query(
       `
         update calls
@@ -292,7 +315,7 @@ async function persistBackgroundJobEvent(pool: pg.Pool, frame: EslFrame): Promis
       from call_events
       join calls on calls.id = call_events.call_id
       left join call_legs on call_legs.call_id = calls.id and call_legs.type = 'customer'
-      where call_events.event_type = 'freeswitch_originate_queued'
+      where call_events.event_type in ('freeswitch_originate_queued', 'freeswitch_agent_bridge_originate_queued')
         and call_events.raw_json ->> 'jobUuid' = $1
         and calls.ended_at is null
         and calls.state not in ('completed', 'failed', 'canceled')
@@ -345,7 +368,6 @@ async function persistBackgroundJobEvent(pool: pg.Pool, frame: EslFrame): Promis
       set state = 'ended',
           ended_at = coalesce(ended_at, now())
       where call_id = $1
-        and type = 'customer'
     `,
     [row.call_id]
   );
@@ -417,8 +439,11 @@ function parseHeaders(value: string): Record<string, string> {
   );
 }
 
-function mapEventToCallState(eventName: string, hangupCause?: string): string {
-  if (eventName === "CHANNEL_ANSWER" || eventName === "CHANNEL_BRIDGE") {
+function mapEventToCallState(eventName: string, hangupCause?: string, legType = "customer"): string {
+  if (eventName === "CHANNEL_ANSWER" && legType === "agent") {
+    return "agent_answered";
+  }
+  if ((eventName === "CHANNEL_ANSWER" && legType === "customer") || eventName === "CHANNEL_BRIDGE") {
     return "bridged";
   }
   if (eventName === "CHANNEL_HANGUP_COMPLETE") {

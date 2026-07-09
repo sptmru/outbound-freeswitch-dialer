@@ -45,7 +45,7 @@ import {
   canOriginateCustomerLeg,
   checkFreeSwitchEsl,
   createFreeSwitchUuid,
-  originateCustomerLeg,
+  originateAgentBridgeCall,
   sendFreeSwitchApiCommand,
   sendFreeSwitchBgapiCommand
 } from "../esl.js";
@@ -259,6 +259,7 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
       contactId: null,
       destinationNumber: validation.normalizedNumber,
       normalizedDestinationNumber: validation.normalizedNumber,
+      sipUsername: agent.sipUsername,
       manualDial: true,
       callRecordingEnabled: campaign.call_recording_enabled,
       eventType: "manual_dial_started"
@@ -297,6 +298,7 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
       contactId: contact.id,
       destinationNumber: contact.phoneNumber,
       normalizedDestinationNumber: contact.normalizedPhoneNumber,
+      sipUsername: agent.sipUsername,
       manualDial: false,
       callRecordingEnabled: campaign.call_recording_enabled,
       eventType: "call_next_started"
@@ -330,6 +332,7 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
       contactId: contact.id,
       destinationNumber: contact.phoneNumber,
       normalizedDestinationNumber: contact.normalizedPhoneNumber,
+      sipUsername: agent.sipUsername,
       manualDial: false,
       callRecordingEnabled: contact.callRecordingEnabled,
       eventType: "lead_call_started"
@@ -1266,6 +1269,7 @@ async function createDialerCall(
     contactId: string | null;
     destinationNumber: string;
     normalizedDestinationNumber: string;
+    sipUsername: string;
     manualDial: boolean;
     callRecordingEnabled: boolean;
     eventType: string;
@@ -1308,10 +1312,12 @@ async function createDialerCall(
 
     await client.query(
       `
-        insert into call_legs (call_id, type, state, started_at)
-        values ($1, 'customer', 'created', now())
+        insert into call_legs (call_id, type, state, started_at, sip_uri)
+        values
+          ($1, 'agent', 'created', now(), $2),
+          ($1, 'customer', 'created', now(), null)
       `,
-      [callId]
+      [callId, `sip:${input.sipUsername}@${config.FREESWITCH_DOMAIN}`]
     );
     await client.query(
       `
@@ -1343,7 +1349,8 @@ async function createDialerCall(
   await syncFreeSwitchOriginate(pool, config, {
     agentId: input.agentId,
     callId,
-    destinationNumber: input.destinationNumber
+    destinationNumber: input.destinationNumber,
+    sipUsername: input.sipUsername
   });
   return callId;
 }
@@ -1351,7 +1358,7 @@ async function createDialerCall(
 async function syncFreeSwitchOriginate(
   pool: pg.Pool,
   config: AppConfig,
-  input: { agentId: string; callId: string; destinationNumber: string }
+  input: { agentId: string; callId: string; destinationNumber: string; sipUsername: string }
 ): Promise<void> {
   if (!canOriginateCustomerLeg(config)) {
     await insertCallEvent(pool, {
@@ -1368,11 +1375,14 @@ async function syncFreeSwitchOriginate(
   }
 
   try {
-    const legUuid = await createFreeSwitchUuid(config);
-    const originate = await originateCustomerLeg(config, {
+    const agentLegUuid = await createFreeSwitchUuid(config);
+    const customerLegUuid = await createFreeSwitchUuid(config);
+    const originate = await originateAgentBridgeCall(config, {
+      agentLegUuid,
       callId: input.callId,
+      customerLegUuid,
       destinationNumber: input.destinationNumber,
-      legUuid
+      sipUsername: input.sipUsername
     });
     await pool.query(
       `
@@ -1381,26 +1391,46 @@ async function syncFreeSwitchOriginate(
             state = 'started',
             started_at = coalesce(started_at, now())
         where call_id = $1
+          and type = 'agent'
+      `,
+      [input.callId, originate.agentLegUuid]
+    );
+    await pool.query(
+      `
+        update call_legs
+        set freeswitch_uuid = $2
+        where call_id = $1
           and type = 'customer'
       `,
-      [input.callId, originate.legUuid]
+      [input.callId, originate.customerLegUuid]
     );
     await insertCallEvent(pool, {
       agentId: input.agentId,
       callId: input.callId,
-      eventType: "freeswitch_originate_queued",
-      state: "customer_dialing",
+      eventType: "freeswitch_agent_bridge_originate_queued",
+      state: "agent_ringing",
       apiCommandName: "bgapi originate",
-      customerLegUuid: originate.legUuid,
+      agentLegUuid: originate.agentLegUuid,
+      customerLegUuid: originate.customerLegUuid,
       raw: {
         command: originate.command,
         jobUuid: originate.jobUuid
       }
     });
+    await pool.query(
+      `
+        update calls
+        set state = 'agent_ringing',
+            updated_at = now()
+        where id = $1
+          and state not in ('completed', 'failed', 'canceled')
+      `,
+      [input.callId]
+    );
     scheduleOriginateWatchdog(pool, config, {
       agentId: input.agentId,
       callId: input.callId,
-      customerLegUuid: originate.legUuid,
+      customerLegUuid: originate.customerLegUuid,
       jobUuid: originate.jobUuid
     });
   } catch (error) {
@@ -1568,22 +1598,23 @@ async function killFreeSwitchLeg(
   config: AppConfig,
   callId: string,
   agentId: string,
-  customerLegUuid: string | null
+  leg: { type: "agent" | "customer"; uuid: string | null }
 ): Promise<void> {
-  if (!customerLegUuid || !config.FREESWITCH_ESL_ENABLED) {
+  if (!leg.uuid || !config.FREESWITCH_ESL_ENABLED) {
     return;
   }
 
   try {
-    await sendFreeSwitchApiCommand(config, `uuid_kill ${customerLegUuid}`);
+    await sendFreeSwitchApiCommand(config, `uuid_kill ${leg.uuid}`);
     await insertCallEvent(pool, {
       agentId,
       callId,
       eventType: "freeswitch_uuid_kill_sent",
       state: "completed",
       apiCommandName: "uuid_kill",
-      customerLegUuid,
-      raw: { customerLegUuid }
+      agentLegUuid: leg.type === "agent" ? leg.uuid : undefined,
+      customerLegUuid: leg.type === "customer" ? leg.uuid : undefined,
+      raw: { legType: leg.type, legUuid: leg.uuid }
     });
   } catch (error) {
     await insertCallEvent(pool, {
@@ -1592,9 +1623,11 @@ async function killFreeSwitchLeg(
       eventType: "freeswitch_uuid_kill_failed",
       state: "completed",
       apiCommandName: "uuid_kill",
-      customerLegUuid,
+      agentLegUuid: leg.type === "agent" ? leg.uuid : undefined,
+      customerLegUuid: leg.type === "customer" ? leg.uuid : undefined,
       raw: {
-        customerLegUuid,
+        legType: leg.type,
+        legUuid: leg.uuid,
         message: error instanceof Error ? error.message : "FreeSWITCH uuid_kill failed"
       }
     });
@@ -1609,6 +1642,7 @@ async function insertCallEvent(
     eventType: string;
     state: string;
     apiCommandName?: string;
+    agentLegUuid?: string;
     customerLegUuid?: string;
     raw: Record<string, unknown>;
   }
@@ -1621,10 +1655,11 @@ async function insertCallEvent(
         event_type,
         state,
         api_command_name,
+        agent_leg_uuid,
         customer_leg_uuid,
         raw_json
       )
-      values ($1, $2, $3, $4, $5, $6, $7::jsonb)
+      values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)
     `,
     [
       input.callId,
@@ -1632,6 +1667,7 @@ async function insertCallEvent(
       input.eventType,
       input.state,
       input.apiCommandName ?? null,
+      input.agentLegUuid ?? null,
       input.customerLegUuid ?? null,
       JSON.stringify(input.raw)
     ]
@@ -1652,13 +1688,20 @@ async function endDialerCall(
       id: string;
       agent_id: string;
       contact_id: string | null;
+      agent_leg_uuid: string | null;
       customer_leg_uuid: string | null;
     }>(
       `
-        select calls.id, calls.agent_id, calls.contact_id, call_legs.freeswitch_uuid as customer_leg_uuid
+        select
+          calls.id,
+          calls.agent_id,
+          calls.contact_id,
+          agent_leg.freeswitch_uuid as agent_leg_uuid,
+          customer_leg.freeswitch_uuid as customer_leg_uuid
         from calls
         join agents on agents.id = calls.agent_id
-        left join call_legs on call_legs.call_id = calls.id and call_legs.type = 'customer'
+        left join call_legs agent_leg on agent_leg.call_id = calls.id and agent_leg.type = 'agent'
+        left join call_legs customer_leg on customer_leg.call_id = calls.id and customer_leg.type = 'customer'
         where calls.id = $1
           and agents.user_id = $2
           and calls.ended_at is null
@@ -1724,7 +1767,8 @@ async function endDialerCall(
       [row.agent_id]
     );
     await client.query("commit");
-    await killFreeSwitchLeg(pool, config, callId, row.agent_id, row.customer_leg_uuid);
+    await killFreeSwitchLeg(pool, config, callId, row.agent_id, { type: "agent", uuid: row.agent_leg_uuid });
+    await killFreeSwitchLeg(pool, config, callId, row.agent_id, { type: "customer", uuid: row.customer_leg_uuid });
     return true;
   } catch (error) {
     await client.query("rollback");

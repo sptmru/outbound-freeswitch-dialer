@@ -50,11 +50,15 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
     if (!invitation) {
       return;
     }
+    await acceptInvitation(invitation, runtime.incomingCallLabel ?? "Connecting");
+  }
+
+  async function acceptInvitation(invitation: Invitation, incomingCallLabel: string) {
     setRuntime((current) => ({
       ...current,
       callState: "answering",
-      label: "Answering call",
-      detail: current.incomingCallLabel ?? "Connecting",
+      label: "Connecting softphone",
+      detail: incomingCallLabel,
       error: null
     }));
     await invitation.accept({
@@ -175,7 +179,6 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
 
               const incomingCallLabel = invitation.remoteIdentity.displayName || "Outbound Dialer Test";
               invitationRef.current = invitation;
-              void invitation.progress().catch(() => undefined);
               invitation.stateChange.addListener((state) => {
                 if (state === SessionState.Established) {
                   attachRemoteAudio(invitation);
@@ -200,14 +203,17 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
                 }
               });
 
-              setRuntime((current) => ({
-                ...current,
-                callState: "incoming",
-                label: "Incoming softphone call",
-                detail: incomingCallLabel,
-                error: null,
-                incomingCallLabel
-              }));
+              void acceptInvitation(invitation, incomingCallLabel).catch((error: unknown) => {
+                invitationRef.current = null;
+                setRuntime((current) => ({
+                  ...current,
+                  callState: "none",
+                  label: current.registered ? "Softphone registered" : current.label,
+                  detail: current.registered ? `${provisioning.sipUsername}@${provisioning.domain}` : current.detail,
+                  error: error instanceof Error ? error.message : "Softphone call failed",
+                  incomingCallLabel: null
+                }));
+              });
             }
           },
           transportOptions: {

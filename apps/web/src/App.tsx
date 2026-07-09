@@ -627,18 +627,6 @@ function AgentStatusPanel({
         </div>
       </div>
       <div className="softphone-actions">
-        {softphone.callState === "incoming" && (
-          <>
-            <button className="primary-action compact-action" onClick={() => void softphone.answerIncomingCall()} type="button">
-              <Phone size={16} />
-              Answer
-            </button>
-            <button className="secondary-action compact-action" onClick={() => void softphone.declineIncomingCall()} type="button">
-              <PhoneOff size={16} />
-              Decline
-            </button>
-          </>
-        )}
         {softphone.callState === "active" && (
           <button className="danger-action compact-action" onClick={() => void softphone.hangUpSoftphoneCall()} type="button">
             <PhoneOff size={16} />
