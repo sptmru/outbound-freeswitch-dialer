@@ -138,6 +138,7 @@ export interface AdminOverviewResponse {
     id: string;
     name: string;
     durationSeconds: number;
+    fileSizeBytes: number;
     runtimeFilePath: string;
     status: string;
   }>;

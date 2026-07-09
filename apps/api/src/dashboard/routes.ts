@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { mkdir, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import { basename, extname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { isSupportedCountry, parsePhoneNumberFromString } from "libphonenumber-js";
@@ -39,6 +39,7 @@ import type {
 } from "@outbound-dialer/shared";
 import { z } from "zod";
 import { requireUser } from "../auth/routes.js";
+import { verifyAuthToken } from "../auth/tokens.js";
 import type { AppConfig } from "../config.js";
 import {
   canOriginateCustomerLeg,
@@ -48,7 +49,7 @@ import {
   sendFreeSwitchApiCommand,
   sendFreeSwitchBgapiCommand
 } from "../esl.js";
-import { ensureAgentForUser, getSoftphoneProvisioningForUser, toPublicUser } from "../users.js";
+import { ensureAgentForUser, findUserById, getSoftphoneProvisioningForUser, toPublicUser } from "../users.js";
 
 const manualDialValidationSchema = z.object({
   phoneNumber: z.string().min(3),
@@ -113,6 +114,10 @@ const suppressionParamsSchema = z.object({
 
 const recordingParamsSchema = z.object({
   recordingId: z.string().uuid()
+});
+
+const recordingAudioQuerySchema = z.object({
+  token: z.string().optional()
 });
 
 const agentDeskQuerySchema = z.object({
@@ -456,6 +461,9 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
       const storedFilename = `${randomUUID()}${extension}`;
       const storagePath = join(config.VOICEMAIL_RECORDINGS_STORAGE_DIR, storedFilename);
       const audioBuffer = await file.toBuffer();
+      if (audioBuffer.length === 0) {
+        return reply.code(400).send({ message: "Recording file is empty" });
+      }
       const durationSeconds = detectAudioDurationSeconds(audioBuffer, extension);
 
       await mkdir(config.VOICEMAIL_RECORDINGS_STORAGE_DIR, { recursive: true });
@@ -467,6 +475,7 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
           filePath: storagePath,
           runtimeFilePath: storagePath,
           durationSeconds,
+          fileSizeBytes: audioBuffer.length,
           makeDefault
         });
         return reply.code(201).send({ item });
@@ -493,6 +502,33 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
       return { item };
     }
   );
+
+  app.get("/admin/recordings/:recordingId/audio", async (request, reply): Promise<void> => {
+    const user = await requireAdminWithOptionalQueryToken(request, reply, config, pool);
+    if (!user) {
+      return;
+    }
+
+    const params = recordingParamsSchema.parse(request.params);
+    const recording = await getRecordingAudioFile(pool, params.recordingId);
+    if (!recording) {
+      return reply.code(404).send({ message: "Recording not found" });
+    }
+
+    const fileStat = await stat(recording.filePath).catch(() => null);
+    if (!fileStat?.isFile()) {
+      return reply.code(404).send({ message: "Recording file not found" });
+    }
+    if (fileStat.size === 0) {
+      return reply.code(409).send({ message: "Recording file is empty; delete it and upload the voicemail again" });
+    }
+
+    reply
+      .header("Content-Type", getRecordingContentType(recording.filePath))
+      .header("Content-Length", fileStat.size)
+      .header("Content-Disposition", `inline; filename="${recording.filename}"`)
+      .send(await readFile(recording.filePath));
+  });
 
   app.delete("/admin/recordings/:recordingId", async (request, reply): Promise<DeleteResponse | void> => {
     const user = await requireAdmin(request, reply, config, pool);
@@ -796,6 +832,40 @@ async function requireAdmin(
   pool: pg.Pool
 ): Promise<PublicUser | null> {
   const user = await requireUser(request, config, pool);
+  if (!user) {
+    reply.code(401).send({ message: "Unauthorized" });
+    return null;
+  }
+  if (user.role !== "admin") {
+    reply.code(403).send({ message: "Admin role required" });
+    return null;
+  }
+  return toPublicUser(user);
+}
+
+async function requireAdminWithOptionalQueryToken(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  config: AppConfig,
+  pool: pg.Pool
+): Promise<PublicUser | null> {
+  const headerUser = await requireUser(request, config, pool);
+  if (headerUser) {
+    if (headerUser.role !== "admin") {
+      reply.code(403).send({ message: "Admin role required" });
+      return null;
+    }
+    return toPublicUser(headerUser);
+  }
+
+  const query = recordingAudioQuerySchema.parse(request.query);
+  const payload = query.token ? verifyAuthToken(config, query.token) : null;
+  if (!payload) {
+    reply.code(401).send({ message: "Unauthorized" });
+    return null;
+  }
+
+  const user = await findUserById(pool, payload.sub);
   if (!user) {
     reply.code(401).send({ message: "Unauthorized" });
     return null;
@@ -2170,10 +2240,11 @@ async function getRecordings(pool: pg.Pool): Promise<AdminOverviewResponse["reco
     name: string;
     runtime_file_path: string;
     duration_seconds: number;
+    file_size_bytes: number;
     is_default: boolean;
     is_active: boolean;
   }>(`
-    select id, name, runtime_file_path, duration_seconds, is_default, is_active
+    select id, name, runtime_file_path, duration_seconds, file_size_bytes, is_default, is_active
     from recordings
     where is_active = true
     order by is_default desc, created_at desc
@@ -2190,6 +2261,7 @@ async function createRecording(
     filePath: string;
     runtimeFilePath: string;
     durationSeconds: number;
+    fileSizeBytes: number;
     makeDefault: boolean;
   }
 ): Promise<AdminOverviewResponse["recordings"][number]> {
@@ -2205,11 +2277,11 @@ async function createRecording(
 
     const result = await client.query<RecordingRow>(
       `
-        insert into recordings (name, file_path, runtime_file_path, is_default, is_active, duration_seconds)
-        values ($1, $2, $3, $4, true, $5)
-        returning id, name, runtime_file_path, duration_seconds, is_default, is_active
+        insert into recordings (name, file_path, runtime_file_path, is_default, is_active, duration_seconds, file_size_bytes)
+        values ($1, $2, $3, $4, true, $5, $6)
+        returning id, name, runtime_file_path, duration_seconds, file_size_bytes, is_default, is_active
       `,
-      [input.name, input.filePath, input.runtimeFilePath, shouldMakeDefault, input.durationSeconds]
+      [input.name, input.filePath, input.runtimeFilePath, shouldMakeDefault, input.durationSeconds, input.fileSizeBytes]
     );
     await client.query("commit");
     return mapRecordingRow(result.rows[0]);
@@ -2243,7 +2315,7 @@ async function setDefaultRecording(
         update recordings
         set is_default = true, updated_at = now()
         where id = $1
-        returning id, name, runtime_file_path, duration_seconds, is_default, is_active
+        returning id, name, runtime_file_path, duration_seconds, file_size_bytes, is_default, is_active
       `,
       [recordingId]
     );
@@ -2306,11 +2378,35 @@ async function deleteRecording(pool: pg.Pool, recordingId: string): Promise<{ fi
   }
 }
 
+async function getRecordingAudioFile(
+  pool: pg.Pool,
+  recordingId: string
+): Promise<{ filePath: string; filename: string } | null> {
+  const result = await pool.query<{ file_path: string; name: string }>(
+    `
+      select file_path, name
+      from recordings
+      where id = $1 and is_active = true
+    `,
+    [recordingId]
+  );
+  const row = result.rows[0];
+  if (!row) {
+    return null;
+  }
+
+  return {
+    filePath: row.file_path,
+    filename: sanitizeDownloadFilename(row.name, extname(row.file_path))
+  };
+}
+
 type RecordingRow = {
   id: string;
   name: string;
   runtime_file_path: string;
   duration_seconds: number;
+  file_size_bytes: number;
   is_default: boolean;
   is_active: boolean;
 };
@@ -2320,6 +2416,7 @@ function mapRecordingRow(row: RecordingRow): AdminOverviewResponse["recordings"]
     id: row.id,
     name: row.name,
     durationSeconds: row.duration_seconds,
+    fileSizeBytes: row.file_size_bytes,
     runtimeFilePath: row.runtime_file_path,
     status: row.is_default ? "default" : row.is_active ? "ready" : "inactive"
   };
@@ -2347,6 +2444,26 @@ function getMultipartFieldValue(field: unknown): string | undefined {
 
 function parseBooleanField(value: string | undefined): boolean {
   return value === "true" || value === "1" || value === "on";
+}
+
+function getRecordingContentType(filePath: string): string {
+  const extension = extname(filePath).toLowerCase();
+  if (extension === ".mp3") {
+    return "audio/mpeg";
+  }
+  if (extension === ".wav") {
+    return "audio/wav";
+  }
+  return "application/octet-stream";
+}
+
+function sanitizeDownloadFilename(name: string, extension: string): string {
+  const safeName = name
+    .trim()
+    .replace(/[^a-zA-Z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80);
+  return `${safeName || "voicemail"}${extension}`;
 }
 
 function detectAudioDurationSeconds(buffer: Buffer, extension: ".mp3" | ".wav"): number {

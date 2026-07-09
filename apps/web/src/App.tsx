@@ -17,8 +17,10 @@ import {
   PhoneCall,
   PhoneForwarded,
   PhoneOff,
+  Play,
   Radio,
   Shield,
+  Square,
   Trash2,
   Upload,
   UserPlus,
@@ -45,6 +47,7 @@ import {
   fetchAgentDesk,
   fetchFreeSwitchDiagnostics,
   fetchMe,
+  getRecordingAudioUrl,
   getStoredToken,
   importCampaignCsv,
   importCampaignCsvFile,
@@ -1647,6 +1650,7 @@ function Recordings({ admin, onChanged }: { admin: AdminOverviewResponse; onChan
   const [pending, setPending] = useState(false);
   const [defaultPendingId, setDefaultPendingId] = useState<string | null>(null);
   const [deletePendingId, setDeletePendingId] = useState<string | null>(null);
+  const [preview, setPreview] = useState<{ id: string; url: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
@@ -1707,6 +1711,21 @@ function Recordings({ admin, onChanged }: { admin: AdminOverviewResponse; onChan
     }
   }
 
+  function togglePreview(recordingId: string) {
+    if (preview?.id === recordingId) {
+      setPreview(null);
+      return;
+    }
+
+    setError(null);
+    const url = getRecordingAudioUrl(recordingId);
+    if (!url) {
+      setError("Sign in again to preview voicemail");
+      return;
+    }
+    setPreview({ id: recordingId, url });
+  }
+
   return (
     <>
       <article className="panel form-panel">
@@ -1748,31 +1767,50 @@ function Recordings({ admin, onChanged }: { admin: AdminOverviewResponse; onChan
         <PanelHeader icon={FileAudio} title="Voicemail recordings" meta={`${admin.recordings.length} files`} />
         <div className="table-list">
           {admin.recordings.map((recording) => (
-            <div className="table-row recording-row" key={recording.id}>
-              <div>
-                <strong>{recording.name}</strong>
-                <small>{recording.runtimeFilePath}</small>
+            <div className="recording-item" key={recording.id}>
+              <div className="table-row recording-row">
+                <div>
+                  <strong>{recording.name}</strong>
+                  <small>{recording.runtimeFilePath}</small>
+                </div>
+                <span>
+                  {recording.durationSeconds ? `${recording.durationSeconds}s` : "Duration pending"} ·{" "}
+                  {formatBytes(recording.fileSizeBytes)}
+                </span>
+                <b>{recording.status}</b>
+                <button
+                  className="icon-button"
+                  disabled={deletePendingId === recording.id}
+                  onClick={() => togglePreview(recording.id)}
+                  title={preview?.id === recording.id ? "Stop preview" : "Preview voicemail"}
+                  type="button"
+                >
+                  {preview?.id === recording.id ? <Square size={16} /> : <Play size={16} />}
+                </button>
+                <button
+                  className="secondary-action compact-action"
+                  disabled={
+                    recording.status === "default" ||
+                    defaultPendingId === recording.id ||
+                    deletePendingId === recording.id
+                  }
+                  onClick={() => void makeRecordingDefault(recording.id)}
+                  type="button"
+                >
+                  <CheckCircle2 size={16} />
+                  {defaultPendingId === recording.id ? "Saving" : "Default"}
+                </button>
+                <button
+                  className="icon-button danger-icon"
+                  disabled={deletePendingId === recording.id || defaultPendingId === recording.id}
+                  onClick={() => void removeRecording(recording)}
+                  title="Delete voicemail"
+                  type="button"
+                >
+                  <Trash2 size={16} />
+                </button>
               </div>
-              <span>{recording.durationSeconds ? `${recording.durationSeconds}s` : "Duration pending"}</span>
-              <b>{recording.status}</b>
-              <button
-                className="secondary-action compact-action"
-                disabled={recording.status === "default" || defaultPendingId === recording.id || deletePendingId === recording.id}
-                onClick={() => void makeRecordingDefault(recording.id)}
-                type="button"
-              >
-                <CheckCircle2 size={16} />
-                {defaultPendingId === recording.id ? "Saving" : "Default"}
-              </button>
-              <button
-                className="icon-button danger-icon"
-                disabled={deletePendingId === recording.id || defaultPendingId === recording.id}
-                onClick={() => void removeRecording(recording)}
-                title="Delete voicemail"
-                type="button"
-              >
-                <Trash2 size={16} />
-              </button>
+              {preview?.id === recording.id && <audio className="recording-preview" controls src={preview.url} />}
             </div>
           ))}
           {!admin.recordings.length && <p className="empty-state">No voicemail recordings uploaded yet.</p>}
@@ -1780,6 +1818,21 @@ function Recordings({ admin, onChanged }: { admin: AdminOverviewResponse; onChan
       </article>
     </>
   );
+}
+
+function formatBytes(value: number): string {
+  if (value <= 0) {
+    return "0 B";
+  }
+  if (value < 1024) {
+    return `${value} B`;
+  }
+  const kilobytes = value / 1024;
+  if (kilobytes < 1024) {
+    return `${kilobytes.toFixed(kilobytes < 10 ? 1 : 0)} KB`;
+  }
+  const megabytes = kilobytes / 1024;
+  return `${megabytes.toFixed(megabytes < 10 ? 1 : 0)} MB`;
 }
 
 function UsersPanel({ onChanged, users }: { onChanged: () => Promise<void>; users: PublicUser[] }) {

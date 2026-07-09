@@ -1151,7 +1151,12 @@ input[type="checkbox"] {
 }
 
 .recording-row {
-  grid-template-columns: minmax(220px, 1.3fr) minmax(120px, 0.7fr) auto auto auto;
+  grid-template-columns: minmax(220px, 1.3fr) minmax(120px, 0.7fr) auto auto auto auto;
+}
+
+.recording-item {
+  display: grid;
+  gap: 8px;
 }
 
 .recording-row small {
@@ -1160,6 +1165,10 @@ input[type="checkbox"] {
   font-size: 12px;
   margin-top: 4px;
   overflow-wrap: anywhere;
+}
+
+.recording-preview {
+  width: 100%;
 }
 
 .empty-state {

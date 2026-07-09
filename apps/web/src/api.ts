@@ -223,6 +223,15 @@ export async function deleteRecording(recordingId: string): Promise<DeleteRespon
   });
 }
 
+export function getRecordingAudioUrl(recordingId: string): string | null {
+  const token = getStoredToken();
+  if (!token) {
+    return null;
+  }
+  const params = new URLSearchParams({ token });
+  return `${API_BASE_URL}/admin/recordings/${recordingId}/audio?${params.toString()}`;
+}
+
 export async function createUser(input: CreateUserRequest): Promise<CreateUserResponse> {
   return apiFetch<CreateUserResponse>("/admin/users", {
     method: "POST",
