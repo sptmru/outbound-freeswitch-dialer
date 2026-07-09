@@ -77,7 +77,7 @@ export interface AgentDeskResponse {
     callableLeads: number;
     manualDialingEnabled: boolean;
     callRecordingEnabled: boolean;
-  };
+  } | null;
   availableCampaigns: Array<{
     id: string;
     name: string;

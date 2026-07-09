@@ -51,6 +51,11 @@ This plan is based on the July 2026 audit of the API, FreeSWITCH event handling,
   - suppression lookup moved to `dashboard/suppression.ts`.
   - call orchestration moved to `dashboard/calls.ts`.
   - recording persistence/default/audio metadata/duration helpers moved to `dashboard/recordings.ts`.
+  - agent/admin response builders moved to `dashboard/responders.ts`.
+- Phase 3 demo data removal:
+  - `AgentDeskResponse.campaign` can now be `null` when there is no active campaign.
+  - agent desk responses return empty leads/metrics instead of demo campaign, demo leads, or demo active call data.
+  - the web Agent Desk renders an explicit no-campaign empty state.
 
 ## Phase 1: Stabilize Call State Invariants
 
@@ -80,12 +85,12 @@ Completed modules:
 - Done: `dashboard/suppression.ts`: shared suppression lookup.
 - Done: `dashboard/calls.ts`: create/end/drop voicemail/DTMF workflows.
 - Done: `dashboard/recordings.ts`: recording persistence, default selection, audio metadata, content-type, and duration helpers.
+- Done: `dashboard/responders.ts`: response builders for agent desk/admin overview.
 
 Remaining backend splits:
 
-- `dashboard/responders.ts`: response builders for agent desk/admin overview.
 - contact/suppression mutation handlers if they keep growing.
-- optional Fastify route grouping once response/demo behavior is stable.
+- optional Fastify route grouping if route registration keeps growing.
 
 Move behavior only after tests exist for the extracted function. Avoid changing SQL and extraction in the same commit unless the test explicitly covers the behavior.
 
@@ -93,9 +98,9 @@ Move behavior only after tests exist for the extracted function. Avoid changing 
 
 Goal: production API should never mask real empty states.
 
-- Remove demo campaign, demo leads, and demo active call fallbacks from `buildAgentDeskResponse`.
-- Return explicit empty states when there is no active campaign or no callable leads.
-- Add tests proving an empty DB does not return demo IDs or demo phone numbers.
+- Done: remove demo campaign, demo leads, and demo active call fallbacks from `buildAgentDeskResponse`.
+- Done: return explicit empty states when there is no active campaign or no callable leads.
+- Done: add tests proving an empty DB does not return demo IDs or demo phone numbers.
 
 ## Phase 4: Fix Registration And Provisioning Ownership
 
@@ -131,9 +136,7 @@ Goal: direct container ports and proxied production paths should behave consiste
 
 ## Suggested Order
 
-1. Remove demo API fallbacks.
-2. Extract response builders after empty-state behavior is tested.
-3. Add web test harness.
-4. Scope or remove server-side `agent_registered`.
-5. Add ESL-backed reload/flush for deleted agent registrations.
-6. Finish deployment smoke tests.
+1. Add web test harness.
+2. Scope or remove server-side `agent_registered`.
+3. Add ESL-backed reload/flush for deleted agent registrations.
+4. Finish deployment smoke tests.

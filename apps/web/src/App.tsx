@@ -83,6 +83,7 @@ import type {
 } from "./types";
 
 type View = "desk" | "campaigns" | "recordings" | "history" | "settings";
+type AgentDeskWithCampaign = AgentDeskResponse & { campaign: NonNullable<AgentDeskResponse["campaign"]> };
 
 const navItems: Array<{ id: View; label: string; icon: typeof BarChart3 }> = [
   { id: "desk", label: "Agent Desk", icon: BarChart3 },
@@ -135,7 +136,7 @@ export function App() {
       const [{ user: nextUser }, nextDesk] = await Promise.all([fetchMe(), fetchAgentDesk(selectedCampaignId ?? undefined)]);
       setUser(nextUser);
       setDesk(nextDesk);
-      setSelectedCampaignId(nextDesk.campaign.id);
+      setSelectedCampaignId(nextDesk.campaign?.id ?? null);
       if (nextUser.role === "admin") {
         const [nextAdmin, nextImports] = await Promise.all([fetchAdminOverview(), fetchCsvImports()]);
         setAdmin(nextAdmin);
@@ -173,12 +174,12 @@ export function App() {
     const refreshDesk = async () => {
       const requestId = ++activeCallPollRequestRef.current;
       try {
-        const nextDesk = await fetchAgentDesk(selectedCampaignId ?? desk.campaign.id);
+        const nextDesk = await fetchAgentDesk(selectedCampaignId ?? desk.campaign?.id);
         if (stopped || requestId !== activeCallPollRequestRef.current) {
           return;
         }
         setDesk(nextDesk);
-        setSelectedCampaignId(nextDesk.campaign.id);
+        setSelectedCampaignId(nextDesk.campaign?.id ?? null);
       } catch (refreshError) {
         if (stopped || requestId !== activeCallPollRequestRef.current) {
           return;
@@ -200,7 +201,7 @@ export function App() {
       activeCallPollRequestRef.current += 1;
       window.clearInterval(interval);
     };
-  }, [desk?.activeCall?.id, desk?.campaign.id, selectedCampaignId, user]);
+  }, [desk?.activeCall?.id, desk?.campaign?.id, selectedCampaignId, user]);
 
   const softphoneRuntime = useSoftphoneRegistration(user);
 
@@ -246,8 +247,8 @@ export function App() {
             })}
           </nav>
           <div className="sidebar-foot">
-            <span>{desk.campaign.name}</span>
-            <strong>{desk.campaign.status}</strong>
+            <span>{desk.campaign?.name ?? "No active campaign"}</span>
+            <strong>{desk.campaign?.status ?? "setup"}</strong>
           </div>
         </aside>
       )}
@@ -362,7 +363,7 @@ function TopBar({
 }) {
   return (
     <header className="topbar">
-      <p>{desk.campaign.name}</p>
+      <p>{desk.campaign?.name ?? "No active campaign"}</p>
       <div className="topbar-actions">
         <StatusBadge
           label={softphone.registered ? "app registered" : "app offline"}
@@ -406,14 +407,19 @@ function AgentDesk({
   const [dropVoicemailPending, setDropVoicemailPending] = useState(false);
   const [dtmfPending, setDtmfPending] = useState(false);
   const [endCallError, setEndCallError] = useState<string | null>(null);
+  const campaign = desk.campaign;
 
   useEffect(() => {
-    if (manualDialNumber && !desk.activeCall && desk.campaign.manualDialingEnabled) {
+    if (manualDialNumber && !desk.activeCall && campaign?.manualDialingEnabled) {
       setDeskMode("manual");
     }
-  }, [desk.activeCall, desk.campaign.manualDialingEnabled, manualDialNumber]);
+  }, [campaign?.manualDialingEnabled, desk.activeCall, manualDialNumber]);
 
   async function callNext() {
+    if (!campaign) {
+      setCallNextError("No active campaign is available");
+      return;
+    }
     if (!softphone.registered) {
       setCallNextError("Softphone must be registered before starting a call");
       return;
@@ -421,7 +427,7 @@ function AgentDesk({
     setCallNextPending(true);
     setCallNextError(null);
     try {
-      onDeskChanged(await startNextCall({ campaignId: desk.campaign.id }));
+      onDeskChanged(await startNextCall({ campaignId: campaign.id }));
     } catch (error) {
       setCallNextError(error instanceof Error ? error.message : "Could not start next call");
     } finally {
@@ -449,7 +455,7 @@ function AgentDesk({
     setEndCallPending(true);
     setEndCallError(null);
     try {
-      onDeskChanged(await endCall(callId, { campaignId: desk.campaign.id, outcome: "agent_canceled" }));
+      onDeskChanged(await endCall(callId, { campaignId: campaign?.id, outcome: "agent_canceled" }));
     } catch (error) {
       setEndCallError(error instanceof Error ? error.message : "Could not end call");
     } finally {
@@ -461,7 +467,7 @@ function AgentDesk({
     setDropVoicemailPending(true);
     setEndCallError(null);
     try {
-      onDeskChanged(await dropVoicemail(callId, { campaignId: desk.campaign.id }));
+      onDeskChanged(await dropVoicemail(callId, { campaignId: campaign?.id }));
     } catch (error) {
       setEndCallError(error instanceof Error ? error.message : "Could not drop voicemail");
     } finally {
@@ -473,13 +479,36 @@ function AgentDesk({
     setDtmfPending(true);
     setEndCallError(null);
     try {
-      onDeskChanged(await sendDtmf(callId, { campaignId: desk.campaign.id, digit }));
+      onDeskChanged(await sendDtmf(callId, { campaignId: campaign?.id, digit }));
     } catch (error) {
       setEndCallError(error instanceof Error ? error.message : "Could not send DTMF");
     } finally {
       setDtmfPending(false);
     }
   }
+
+  if (!campaign) {
+    return (
+      <section className={desk.activeCall ? "agent-grid active-agent-grid" : "ready-desk-grid"}>
+        <NoCampaignPanel />
+        {desk.activeCall && (
+          <ActiveCall
+            desk={desk}
+            dropPending={dropVoicemailPending}
+            error={endCallError}
+            onDropVoicemail={handleDropVoicemail}
+            onHangUp={hangUp}
+            onSendDtmf={handleSendDtmf}
+            dtmfPending={dtmfPending}
+            pending={endCallPending}
+          />
+        )}
+        <AgentNoCampaignStatus desk={desk} softphone={softphone} />
+      </section>
+    );
+  }
+
+  const campaignDesk = desk as AgentDeskWithCampaign;
 
   if (desk.activeCall) {
     return (
@@ -504,7 +533,7 @@ function AgentDesk({
           pending={endCallPending}
         />
         <AgentStatusPanel
-          desk={desk}
+          desk={campaignDesk}
           mode="active"
           onCampaignChange={onCampaignChange}
           onOpenManual={() => setDeskMode("manual")}
@@ -514,10 +543,10 @@ function AgentDesk({
     );
   }
 
-  if (deskMode === "manual" && desk.campaign.manualDialingEnabled) {
+  if (deskMode === "manual" && campaign.manualDialingEnabled) {
     return (
       <ManualDialSurface
-        desk={desk}
+        desk={campaignDesk}
         onDeskChanged={onDeskChanged}
         onOpenQueue={() => setDeskMode("ready")}
         onPhoneNumberChange={onManualDialNumberChange}
@@ -538,13 +567,25 @@ function AgentDesk({
         pending={callNextPending}
       />
       <AgentStatusPanel
-        desk={desk}
+        desk={campaignDesk}
         mode="ready"
         onCampaignChange={onCampaignChange}
         onOpenManual={() => setDeskMode("manual")}
         softphone={softphone}
       />
     </section>
+  );
+}
+
+function NoCampaignPanel() {
+  return (
+    <article className="panel no-campaign-panel">
+      <PanelHeader icon={AlertTriangle} title="No active campaign" meta="Setup" />
+      <div className="empty-queue-state large-empty-state">
+        <strong>No active campaign is available</strong>
+        <p>Create or activate a campaign, then import leads.</p>
+      </div>
+    </article>
   );
 }
 
@@ -596,6 +637,11 @@ function LeadQueue({
             </button>
           </div>
         ))}
+        {!leads.length && (
+          <div className="lead-table-empty" role="row">
+            No leads are queued for this campaign.
+          </div>
+        )}
       </div>
       {showRecommendedCall && recommended && (
         <div className="recommended-call">
@@ -620,7 +666,7 @@ function AgentStatusPanel({
   onOpenManual,
   softphone
 }: {
-  desk: AgentDeskResponse;
+  desk: AgentDeskWithCampaign;
   mode: "ready" | "active";
   onCampaignChange: (campaignId: string) => Promise<void>;
   onOpenManual: () => void;
@@ -700,6 +746,34 @@ function AgentStatusPanel({
   );
 }
 
+function AgentNoCampaignStatus({ desk, softphone }: { desk: AgentDeskResponse; softphone: SoftphoneRuntime }) {
+  return (
+    <article className="panel agent-status-panel">
+      <div className="surface-heading">
+        <h2>Agent status</h2>
+      </div>
+      <div className="status-stack">
+        <StatusBadge label={desk.activeCall ? "In call" : "No campaign"} tone={desk.activeCall ? "good" : "neutral"} />
+        <StatusBadge label="Manual dialing unavailable" tone="neutral" />
+      </div>
+      <div className="softphone-runtime-card">
+        <div className="softphone-runtime-icon">
+          <Mic size={17} />
+        </div>
+        <div>
+          <strong>{softphone.label}</strong>
+          <span>{softphone.error ?? softphone.detail}</span>
+        </div>
+      </div>
+      <div className="status-metric-list">
+        <Metric label="Callable leads" value={0} icon={Users} />
+        <Metric label="Calls today" value={desk.metrics.todayCalls} icon={PhoneForwarded} />
+        <Metric label="Blocked numbers" value={desk.metrics.suppressed} icon={Ban} />
+      </div>
+    </article>
+  );
+}
+
 function ManualDialSurface({
   desk,
   onDeskChanged,
@@ -708,7 +782,7 @@ function ManualDialSurface({
   phoneNumber,
   softphone
 }: {
-  desk: AgentDeskResponse;
+  desk: AgentDeskWithCampaign;
   onDeskChanged: (desk: AgentDeskResponse) => void;
   onOpenQueue: () => void;
   onPhoneNumberChange: (phoneNumber: string) => void;

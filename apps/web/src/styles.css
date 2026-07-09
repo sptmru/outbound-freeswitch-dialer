@@ -367,6 +367,7 @@ input[type="checkbox"] {
 }
 
 .next-leads-panel,
+.no-campaign-panel,
 .agent-status-panel,
 .manual-dial-panel,
 .pre-call-panel {
@@ -414,6 +415,17 @@ input[type="checkbox"] {
   white-space: nowrap;
 }
 
+.lead-table-empty {
+  align-items: center;
+  border: 1px dashed #cbd6e2;
+  border-radius: 8px;
+  color: #667789;
+  display: flex;
+  font-size: 13px;
+  min-height: 72px;
+  padding: 14px;
+}
+
 .pill-action {
   justify-self: stretch;
   background: #ffffff;
@@ -458,6 +470,10 @@ input[type="checkbox"] {
   font-size: 13px;
   line-height: 1.45;
   margin: 0;
+}
+
+.large-empty-state {
+  min-height: 220px;
 }
 
 .teal-action {

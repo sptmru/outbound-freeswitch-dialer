@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import type { PublicUser } from "@outbound-dialer/shared";
 import type pg from "pg";
 import type { AppConfig } from "../config.js";
 import { getAgentCampaign, getAgentCampaignForDialerAction } from "./campaigns.js";
@@ -7,6 +8,7 @@ import { createDialerCall, createDialerCallFailureMessage, syncFreeSwitchOrigina
 import { parseCsv } from "./csv.js";
 import { validateDialableNumber } from "./manual-dial.js";
 import { normalizePhoneNumber } from "./phone.js";
+import { __testing } from "./routes.js";
 
 const selectedCampaignId = "11111111-1111-4111-8111-111111111111";
 
@@ -206,6 +208,32 @@ describe("dashboard route helpers", () => {
     assert.equal(createDialerCallFailureMessage("no_callable_contacts"), "No callable contacts are available");
     assert.equal(createDialerCallFailureMessage("lead_not_callable"), "Lead is not callable");
   });
+
+  it("returns an explicit empty desk state instead of demo campaign data", async () => {
+    const pool = createQueryPool((sql) => {
+      if (sql.includes("from campaigns")) {
+        return rows([]);
+      }
+      if (sql.includes("from calls") && sql.includes("join agents")) {
+        return rows([]);
+      }
+      if (sql.includes("today_calls")) {
+        return rows([{ today_calls: "0", voicemails_dropped: "0", suppressed: "0" }]);
+      }
+      throw new Error(`Unexpected query: ${sql}`);
+    });
+
+    const result = await __testing.buildAgentDeskResponse(pool, userRow());
+    const serialized = JSON.stringify(result);
+
+    assert.equal(result.campaign, null);
+    assert.deepEqual(result.availableCampaigns, []);
+    assert.deepEqual(result.leads, []);
+    assert.equal(result.activeCall, null);
+    assert.equal(result.softphone.status, "offline");
+    assert.ok(!serialized.includes("campaign_demo_solar_followup"));
+    assert.ok(!serialized.includes("+1 415 555 0148"));
+  });
 });
 
 function createQueryPool(
@@ -252,6 +280,16 @@ function campaignRow(overrides: Partial<{
     call_recording_enabled: false,
     callable_leads: "0",
     agent_registered: false,
+    ...overrides
+  };
+}
+
+function userRow(overrides: Partial<PublicUser> = {}): PublicUser {
+  return {
+    id: "99999999-9999-4999-8999-999999999999",
+    email: "agent@example.com",
+    name: "Agent Example",
+    role: "agent",
     ...overrides
   };
 }
