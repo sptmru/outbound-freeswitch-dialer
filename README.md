@@ -133,6 +133,16 @@ Set `WEB_PUBLIC_PORT` to change that direct host port. For deployed builds,
 keep `VITE_API_BASE_URL=/api` so the browser uses the same HTTPS origin as the
 UI.
 
+After the stack is running, smoke-test the direct web port and its `/api`
+proxy:
+
+```bash
+npm run smoke:web
+```
+
+Set `WEB_SMOKE_URL` to target a different URL, for example the outer proxy
+origin.
+
 `./scripts/deploy.sh` starts the proxy, runs certbot with the webroot challenge
 for `LETSENCRYPT_DOMAIN`, and reloads nginx after the certificate is issued.
 The proxy starts with a short-lived self-signed fallback certificate only so the

@@ -23,6 +23,7 @@ This plan is based on the July 2026 audit of the API, FreeSWITCH event handling,
   - `npm test`
   - `npm run typecheck`
   - `npm run build`
+  - `npm run smoke:web` after the deployed stack is running.
 
 ## Completed Refactors
 
@@ -35,6 +36,7 @@ This plan is based on the July 2026 audit of the API, FreeSWITCH event handling,
   - server-side `agent_registered` is scoped to the current user.
   - existing agent softphone provisioning recreates missing generated XML before returning credentials.
   - user deletion removes generated agent XML after DB commit.
+  - user deletion runs a best-effort `reloadxml` plus `sofia profile internal-webrtc flush_inbound_reg <user>@<domain>` for deleted agent registrations.
 - Phase 5 web reliability cleanup:
   - web API errors carry HTTP status.
   - active-call polling ignores stale responses.
@@ -46,6 +48,7 @@ This plan is based on the July 2026 audit of the API, FreeSWITCH event handling,
   - Agent Desk no-campaign and empty-lead states are covered by web tests.
 - Phase 6 deployment surface cleanup:
   - direct web nginx now proxies `/api/` to the API service instead of serving the SPA fallback.
+  - `scripts/smoke-web.sh` verifies the published web root and `/api/health` proxy.
 - Phase 2 backend module split:
   - `apps/api/src/dashboard/routes.ts` was reduced from 3726 lines to 1393 lines.
   - phone normalization moved to `dashboard/phone.ts`.
@@ -56,6 +59,7 @@ This plan is based on the July 2026 audit of the API, FreeSWITCH event handling,
   - call orchestration moved to `dashboard/calls.ts`.
   - recording persistence/default/audio metadata/duration helpers moved to `dashboard/recordings.ts`.
   - agent/admin response builders moved to `dashboard/responders.ts`.
+  - deleted agent directory refresh runs through a focused FreeSWITCH provisioning helper.
 - Phase 3 demo data removal:
   - `AgentDeskResponse.campaign` can now be `null` when there is no active campaign.
   - agent desk responses return empty leads/metrics instead of demo campaign, demo leads, or demo active call data.
@@ -114,7 +118,7 @@ Goal: softphone status should describe the current user and the generated FreeSW
 - Persist/register status from actual FreeSWITCH registration events if server-side status remains.
 - Done: recreate the agent XML directory file when existing credentials are returned but the XML file is missing.
 - Done: delete generated FreeSWITCH agent XML when a user/agent is deleted.
-- Follow-up: add a narrow ESL-backed reload/flush path for deleted agent registrations after the local generated XML cleanup is covered (`reloadxml` and/or the affected `sofia` registration state).
+- Done: add a narrow ESL-backed reload/flush path for deleted agent registrations after generated XML deletion.
 
 ## Phase 5: Web Reliability And Test Harness
 
@@ -136,10 +140,11 @@ Goal: make async UI state deterministic and testable.
 Goal: direct container ports and proxied production paths should behave consistently.
 
 - Done: add `/api/` proxying to `apps/web/nginx.conf`.
-- Add a smoke test for the published web port if it remains exposed.
+- Done: add a smoke test for the published web port if it remains exposed.
 - Keep outer proxy behavior as the production source of truth for `/api`, WSS, and static SPA routing.
 
 ## Suggested Order
 
-1. Add ESL-backed reload/flush for deleted agent registrations.
-2. Finish deployment smoke tests.
+1. Persist/register status from actual FreeSWITCH registration events if server-side status remains.
+2. Clear SIP registration timeout on reject/failure and keep remote audio cleanup on session termination.
+3. Split contact/suppression mutation handlers or add Fastify route grouping only if `routes.ts` grows again.

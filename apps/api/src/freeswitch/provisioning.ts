@@ -3,6 +3,17 @@ import { join } from "node:path";
 import type pg from "pg";
 import type { AppConfig } from "../config.js";
 import { decryptSecret } from "../auth/crypto.js";
+import { sendFreeSwitchApiCommand } from "../esl.js";
+
+const AGENT_SIP_PROFILE = "internal-webrtc";
+
+export interface AgentRegistrationRefreshResult {
+  commands: string[];
+  errors: Array<{ command: string; message: string }>;
+  skipped: boolean;
+}
+
+export type FreeSwitchApiSender = (config: AppConfig, command: string) => Promise<unknown>;
 
 interface AgentDirectoryRecord {
   sip_username: string;
@@ -41,6 +52,36 @@ export async function deleteAgentDirectory(config: AppConfig, sipUsername: strin
   await rm(agentDirectoryXmlPath(config, sipUsername), { force: true });
 }
 
+export async function refreshDeletedAgentRegistrations(
+  config: AppConfig,
+  sipUsernames: string[],
+  sendApiCommand: FreeSwitchApiSender = sendFreeSwitchApiCommand
+): Promise<AgentRegistrationRefreshResult> {
+  const uniqueSipUsernames = Array.from(new Set(sipUsernames)).filter(Boolean);
+  if (!config.FREESWITCH_ESL_ENABLED || !uniqueSipUsernames.length) {
+    return { commands: [], errors: [], skipped: true };
+  }
+
+  const commands = [
+    "reloadxml",
+    ...uniqueSipUsernames.map((sipUsername) => buildFlushInboundRegistrationCommand(config, sipUsername))
+  ];
+  const errors: AgentRegistrationRefreshResult["errors"] = [];
+
+  for (const command of commands) {
+    try {
+      await sendApiCommand(config, command);
+    } catch (error) {
+      errors.push({
+        command,
+        message: error instanceof Error ? error.message : "FreeSWITCH command failed"
+      });
+    }
+  }
+
+  return { commands, errors, skipped: false };
+}
+
 export async function provisionAllAgentDirectories(pool: pg.Pool, config: AppConfig): Promise<number> {
   const result = await pool.query<AgentDirectoryRecord>(
     `
@@ -69,6 +110,14 @@ function agentDirectoryXmlPath(config: AppConfig, sipUsername: string): string {
   return join(agentDirectoryPath(config), `${safeFilename(sipUsername)}.xml`);
 }
 
+function buildFlushInboundRegistrationCommand(config: AppConfig, sipUsername: string): string {
+  const userAddress = `${assertFreeSwitchApiArgument(sipUsername, "SIP username")}@${assertFreeSwitchApiArgument(
+    config.FREESWITCH_DOMAIN,
+    "FreeSWITCH domain"
+  )}`;
+  return `sofia profile ${AGENT_SIP_PROFILE} flush_inbound_reg ${userAddress}`;
+}
+
 function renderAgentDirectoryXml(
   config: AppConfig,
   agent: { sipUsername: string; sipPassword: string; displayName: string }
@@ -92,6 +141,13 @@ function renderAgentDirectoryXml(
 
 function safeFilename(value: string): string {
   return value.replace(/[^a-zA-Z0-9_-]/g, "_");
+}
+
+function assertFreeSwitchApiArgument(value: string, label: string): string {
+  if (/\s/.test(value)) {
+    throw new Error(`${label} contains whitespace and cannot be used in a FreeSWITCH API command`);
+  }
+  return value;
 }
 
 function isMissingFile(error: unknown): boolean {

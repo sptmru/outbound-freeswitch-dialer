@@ -11,6 +11,7 @@
     "dev:api": "npm --workspace @outbound-dialer/api run dev",
     "dev:web": "npm --workspace @outbound-dialer/web run dev",
     "lint": "npm run lint --workspaces --if-present",
+    "smoke:web": "bash scripts/smoke-web.sh",
     "test": "npm run test --workspaces --if-present",
     "typecheck": "npm --workspace @outbound-dialer/shared run typecheck && npm --workspace @outbound-dialer/api run typecheck && npm --workspace @outbound-dialer/web run typecheck"
   },

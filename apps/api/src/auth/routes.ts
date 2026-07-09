@@ -6,7 +6,11 @@ import type { AppConfig } from "../config.js";
 import { verifySecret } from "./passwords.js";
 import { signAuthToken, verifyAuthToken } from "./tokens.js";
 import { createUserWithOptionalAgent, findUserByEmail, findUserById, toPublicUser } from "../users.js";
-import { deleteAgentDirectory } from "../freeswitch/provisioning.js";
+import {
+  deleteAgentDirectory,
+  refreshDeletedAgentRegistrations as refreshFreeSwitchDeletedAgentRegistrations,
+  type AgentRegistrationRefreshResult
+} from "../freeswitch/provisioning.js";
 
 const loginSchema = z.object({
   email: z.string().email(),
@@ -80,7 +84,11 @@ export function registerAuthRoutes(app: FastifyInstance, config: AppConfig, pool
       return reply.code(409).send({ message: "You cannot delete your own user" });
     }
 
-    const deleted = await deleteUser(pool, config, params.userId);
+    const deleted = await deleteUser(pool, config, params.userId, {
+      onRegistrationRefreshError: (details) => {
+        request.log.warn(details, "FreeSWITCH agent registration refresh failed after user deletion");
+      }
+    });
     if (deleted === "not_found") {
       return reply.code(404).send({ message: "User not found" });
     }
@@ -94,7 +102,8 @@ export function registerAuthRoutes(app: FastifyInstance, config: AppConfig, pool
 async function deleteUser(
   pool: pg.Pool,
   config: AppConfig,
-  userId: string
+  userId: string,
+  options: DeleteUserOptions = {}
 ): Promise<"deleted" | "not_found" | "active_call"> {
   const client = await pool.connect();
   let deletedAgentSipUsernames: string[] = [];
@@ -157,8 +166,27 @@ async function deleteUser(
   }
 
   await Promise.all(deletedAgentSipUsernames.map((sipUsername) => deleteAgentDirectory(config, sipUsername)));
+  const registrationRefresh = await (
+    options.refreshDeletedAgentRegistrations ?? refreshFreeSwitchDeletedAgentRegistrations
+  )(config, deletedAgentSipUsernames);
+  if (registrationRefresh.errors.length) {
+    options.onRegistrationRefreshError?.({
+      errors: registrationRefresh.errors,
+      sipUsernames: deletedAgentSipUsernames,
+      userId
+    });
+  }
   return "deleted";
 }
+
+type DeleteUserOptions = {
+  refreshDeletedAgentRegistrations?: typeof refreshFreeSwitchDeletedAgentRegistrations;
+  onRegistrationRefreshError?: (details: {
+    errors: AgentRegistrationRefreshResult["errors"];
+    sipUsernames: string[];
+    userId: string;
+  }) => void;
+};
 
 export async function requireUser(request: FastifyRequest, config: AppConfig, pool: pg.Pool) {
   const authorization = request.headers.authorization;

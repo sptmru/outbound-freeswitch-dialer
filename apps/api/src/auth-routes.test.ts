@@ -15,6 +15,8 @@ describe("auth route helpers", () => {
     const userId = "11111111-1111-4111-8111-111111111111";
     const filePath = join(tempDir, "directory", "default", "agent_delete.xml");
     const queries: string[] = [];
+    let refreshedSipUsernames: string[] = [];
+    let refreshedAfterCommit = false;
     const pool = createClientPool((sql) => {
       queries.push(sql);
       if (sql === "begin" || sql === "commit" || sql === "rollback") {
@@ -40,11 +42,20 @@ describe("auth route helpers", () => {
       });
       await access(filePath);
 
-      const result = await __testing.deleteUser(pool, config, userId);
+      const result = await __testing.deleteUser(pool, config, userId, {
+        refreshDeletedAgentRegistrations: async (_config, sipUsernames) => {
+          refreshedAfterCommit = queries.at(-1) === "commit";
+          refreshedSipUsernames = sipUsernames;
+          await assertFileMissing(filePath);
+          return { commands: ["reloadxml"], errors: [], skipped: false };
+        }
+      });
 
       assert.equal(result, "deleted");
       assert.match(queries.at(-2) ?? "", /delete from users/);
       assert.equal(queries.at(-1), "commit");
+      assert.equal(refreshedAfterCommit, true);
+      assert.deepEqual(refreshedSipUsernames, ["agent.delete"]);
       await assertFileMissing(filePath);
     } finally {
       await rm(tempDir, { recursive: true, force: true });

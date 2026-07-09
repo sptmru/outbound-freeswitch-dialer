@@ -4,7 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import type { AppConfig } from "./config.js";
-import { deleteAgentDirectory, ensureAgentDirectory, provisionAgentDirectory } from "./freeswitch/provisioning.js";
+import {
+  deleteAgentDirectory,
+  ensureAgentDirectory,
+  provisionAgentDirectory,
+  refreshDeletedAgentRegistrations
+} from "./freeswitch/provisioning.js";
 
 describe("FreeSWITCH provisioning helpers", () => {
   it("recreates a missing generated agent directory XML", async () => {
@@ -58,12 +63,57 @@ describe("FreeSWITCH provisioning helpers", () => {
       await rm(tempDir, { recursive: true, force: true });
     }
   });
+
+  it("reloads XML and flushes deleted registrations through ESL", async () => {
+    const commands: string[] = [];
+    const config = createConfig("/tmp/outbound-dialer-test", { FREESWITCH_ESL_ENABLED: true });
+
+    const result = await refreshDeletedAgentRegistrations(config, ["agent.remove", "agent.remove"], async (_config, command) => {
+      commands.push(command);
+    });
+
+    assert.deepEqual(commands, [
+      "reloadxml",
+      "sofia profile internal-webrtc flush_inbound_reg agent.remove@dialer.local"
+    ]);
+    assert.deepEqual(result, { commands, errors: [], skipped: false });
+  });
+
+  it("skips deleted registration refresh when ESL is disabled", async () => {
+    const result = await refreshDeletedAgentRegistrations(createConfig("/tmp/outbound-dialer-test"), ["agent.remove"], async () => {
+      throw new Error("ESL should not be called");
+    });
+
+    assert.deepEqual(result, { commands: [], errors: [], skipped: true });
+  });
+
+  it("records ESL refresh errors without throwing", async () => {
+    const config = createConfig("/tmp/outbound-dialer-test", { FREESWITCH_ESL_ENABLED: true });
+
+    const result = await refreshDeletedAgentRegistrations(config, ["agent.remove"], async () => {
+      throw new Error("ESL unavailable");
+    });
+
+    assert.deepEqual(result, {
+      commands: ["reloadxml", "sofia profile internal-webrtc flush_inbound_reg agent.remove@dialer.local"],
+      errors: [
+        { command: "reloadxml", message: "ESL unavailable" },
+        {
+          command: "sofia profile internal-webrtc flush_inbound_reg agent.remove@dialer.local",
+          message: "ESL unavailable"
+        }
+      ],
+      skipped: false
+    });
+  });
 });
 
-function createConfig(generatedConfigDir: string): AppConfig {
+function createConfig(generatedConfigDir: string, overrides: Partial<AppConfig> = {}): AppConfig {
   return {
     FREESWITCH_GENERATED_CONFIG_DIR: generatedConfigDir,
-    FREESWITCH_DOMAIN: "dialer.local"
+    FREESWITCH_DOMAIN: "dialer.local",
+    FREESWITCH_ESL_ENABLED: false,
+    ...overrides
   } as AppConfig;
 }
 
