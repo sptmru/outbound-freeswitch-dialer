@@ -78,6 +78,7 @@ describe("dashboard route helpers", () => {
   it("scopes server-side registration status to the current user", async () => {
     const userId = "99999999-9999-4999-8999-999999999999";
     const pool = createQueryPool((sql, params) => {
+      assert.match(sql, /agents\.registered = true/);
       assert.match(sql, /agents\.user_id = \$3/);
       assert.deepEqual(params, [selectedCampaignId, true, userId]);
       return rows([campaignRow({ agent_registered: true })]);

@@ -152,7 +152,7 @@ export async function ensureAgentForUser(
     }>(
       `
         insert into agents (user_id, sip_username, sip_password_hash, sip_password_encrypted, display_name, status)
-        values ($1, $2, $3, $4, $5, 'ready')
+        values ($1, $2, $3, $4, $5, 'offline')
         returning id, sip_username
       `,
       [user.id, sipUsername, await hashSecret(sipPassword), encryptSecret(config, sipPassword), user.name]

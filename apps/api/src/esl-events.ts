@@ -25,6 +25,14 @@ const EVENT_NAMES = [
   "CHANNEL_DESTROY"
 ].join(" ");
 
+const AGENT_SIP_PROFILE = "internal-webrtc";
+
+type AgentRegistrationEvent = {
+  eventSubclass: "sofia::register" | "sofia::unregister" | "sofia::expire";
+  registered: boolean;
+  sipUsername: string;
+};
+
 export function startFreeSwitchEventListener(config: AppConfig, pool: pg.Pool, logger: Logger): () => void {
   if (!config.FREESWITCH_ESL_ENABLED) {
     logger.info({ enabled: false }, "FreeSWITCH event listener disabled");
@@ -151,6 +159,10 @@ async function persistFreeSwitchEvent(config: AppConfig, pool: pg.Pool, frame: E
   const eventName = frame.headers["event-name"];
   if (eventName === "BACKGROUND_JOB") {
     await persistBackgroundJobEvent(pool, frame);
+    return;
+  }
+  if (eventName === "CUSTOM" && isAgentRegistrationEvent(frame)) {
+    await persistAgentRegistrationEvent(config, pool, frame);
     return;
   }
   if (eventName === "CUSTOM" && isVoicemailDetectionEvent(frame)) {
@@ -286,7 +298,7 @@ async function persistFreeSwitchEvent(config: AppConfig, pool: pg.Pool, frame: E
     await pool.query(
       `
         update agents
-        set status = 'ready',
+        set status = case when registered then 'ready' else 'offline' end,
             updated_at = now()
         where id = (
           select agent_id
@@ -453,6 +465,39 @@ async function persistVoicemailDetectionEvent(pool: pg.Pool, frame: EslFrame): P
   );
 }
 
+async function persistAgentRegistrationEvent(config: AppConfig, pool: pg.Pool, frame: EslFrame): Promise<void> {
+  const registrationEvent = mapAgentRegistrationEvent(config, frame);
+  if (!registrationEvent) {
+    return;
+  }
+
+  await pool.query(
+    `
+      update agents
+      set registered = $2,
+          last_registered_at = case when $2 then now() else last_registered_at end,
+          last_unregistered_at = case when $2 then last_unregistered_at else now() end,
+          status = case
+            when $2 and status = 'offline' then 'ready'
+            when not $2
+              and status in ('ready', 'registered')
+              and not exists (
+                select 1
+                from calls
+                where calls.agent_id = agents.id
+                  and calls.ended_at is null
+                  and calls.state not in ('completed', 'failed', 'canceled')
+              )
+              then 'offline'
+            else status
+          end,
+          updated_at = now()
+      where sip_username = $1
+    `,
+    [registrationEvent.sipUsername, registrationEvent.registered]
+  );
+}
+
 async function persistBackgroundJobEvent(pool: pg.Pool, frame: EslFrame): Promise<void> {
   const jobUuid = frame.headers["job-uuid"];
   if (!jobUuid || !isFailedBackgroundJob(frame)) {
@@ -527,7 +572,7 @@ async function persistBackgroundJobEvent(pool: pg.Pool, frame: EslFrame): Promis
   await pool.query(
     `
       update agents
-      set status = 'ready',
+      set status = case when registered then 'ready' else 'offline' end,
           updated_at = now()
       where id = $1
     `,
@@ -606,6 +651,49 @@ function isVoicemailDetectionEvent(frame: EslFrame): boolean {
   });
 }
 
+function isAgentRegistrationEvent(frame: EslFrame): boolean {
+  const eventSubclass = frame.headers["event-subclass"]?.toLowerCase();
+  return eventSubclass === "sofia::register" || eventSubclass === "sofia::unregister" || eventSubclass === "sofia::expire";
+}
+
+function mapAgentRegistrationEvent(config: AppConfig, frame: EslFrame): AgentRegistrationEvent | null {
+  const eventSubclass = frame.headers["event-subclass"]?.toLowerCase();
+  if (
+    eventSubclass !== "sofia::register" &&
+    eventSubclass !== "sofia::unregister" &&
+    eventSubclass !== "sofia::expire"
+  ) {
+    return null;
+  }
+
+  const profileName = firstHeader(frame.headers, ["profile-name", "sofia-profile-name", "profile"]);
+  if (profileName && profileName !== AGENT_SIP_PROFILE) {
+    return null;
+  }
+
+  const domain = firstHeader(frame.headers, ["from-host", "domain-name", "realm", "sip-auth-realm"]);
+  if (domain && domain !== config.FREESWITCH_DOMAIN) {
+    return null;
+  }
+
+  const sipUsername = firstHeader(frame.headers, [
+    "from-user",
+    "username",
+    "user-name",
+    "sip-auth-username",
+    "user"
+  ]);
+  if (!sipUsername) {
+    return null;
+  }
+
+  return {
+    eventSubclass,
+    registered: eventSubclass === "sofia::register",
+    sipUsername
+  };
+}
+
 function mapVoicemailDetectionSignal(
   frame: EslFrame
 ): { confidence: number | null; eventType: string; signalType: string; status: "possible" | "detected" } | null {
@@ -670,6 +758,16 @@ function parseConfidence(value: string | undefined): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function firstHeader(headers: Record<string, string>, keys: string[]): string | null {
+  for (const key of keys) {
+    const value = headers[key]?.trim();
+    if (value) {
+      return value;
+    }
+  }
+  return null;
+}
+
 function mapEventToCallState(eventName: string, hangupCause?: string, legType = "customer"): string {
   if (eventName === "CHANNEL_ANSWER" && legType === "agent") {
     return "agent_answered";
@@ -724,10 +822,13 @@ export const __testing = {
   isFailedBackgroundJob,
   isTerminalEvent,
   isUuid,
+  isAgentRegistrationEvent,
   isVoicemailDetectionEvent,
+  mapAgentRegistrationEvent,
   mapEventToCallState,
   mapEventToLegState,
   mapHangupCauseToOutcome,
+  persistFreeSwitchEvent,
   mapVoicemailDetectionSignal,
   parseConfidence,
   parseHeaders

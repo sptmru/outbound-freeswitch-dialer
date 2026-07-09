@@ -85,7 +85,7 @@ export async function getAgentCampaign(
       exists (
         select 1
         from agents
-        where agents.status = 'registered'
+        where agents.registered = true
           and ($3::uuid is null or agents.user_id = $3)
       ) as agent_registered
     from campaigns

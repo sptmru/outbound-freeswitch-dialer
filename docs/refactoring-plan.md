@@ -16,6 +16,7 @@ This plan is based on the July 2026 audit of the API, FreeSWITCH event handling,
   - Recording helper behavior: extension detection, multipart fields, content types, name normalization, and WAV duration detection.
   - ESL dial string and response parsing.
   - FreeSWITCH event state mapping, including `CHANNEL_DESTROY`.
+  - FreeSWITCH SIP registration event mapping for browser agents.
   - FreeSWITCH generated agent XML recreation/deletion.
 - Verification commands:
   - `npm --workspace @outbound-dialer/api test`
@@ -34,6 +35,7 @@ This plan is based on the July 2026 audit of the API, FreeSWITCH event handling,
   - active call uniqueness is backed by partial DB indexes.
 - Phase 4 provisioning lifecycle:
   - server-side `agent_registered` is scoped to the current user.
+  - `agent_registered` is now backed by actual FreeSWITCH `sofia::register`, `sofia::unregister`, and `sofia::expire` events.
   - existing agent softphone provisioning recreates missing generated XML before returning credentials.
   - user deletion removes generated agent XML after DB commit.
   - user deletion runs a best-effort `reloadxml` plus `sofia profile internal-webrtc flush_inbound_reg <user>@<domain>` for deleted agent registrations.
@@ -115,7 +117,7 @@ Goal: production API should never mask real empty states.
 Goal: softphone status should describe the current user and the generated FreeSWITCH directory should match DB state.
 
 - Done: scope server-side `agent_registered` to the current user.
-- Persist/register status from actual FreeSWITCH registration events if server-side status remains.
+- Done: persist/register status from actual FreeSWITCH registration events.
 - Done: recreate the agent XML directory file when existing credentials are returned but the XML file is missing.
 - Done: delete generated FreeSWITCH agent XML when a user/agent is deleted.
 - Done: add a narrow ESL-backed reload/flush path for deleted agent registrations after generated XML deletion.
@@ -145,6 +147,5 @@ Goal: direct container ports and proxied production paths should behave consiste
 
 ## Suggested Order
 
-1. Persist/register status from actual FreeSWITCH registration events if server-side status remains.
-2. Clear SIP registration timeout on reject/failure and keep remote audio cleanup on session termination.
-3. Split contact/suppression mutation handlers or add Fastify route grouping only if `routes.ts` grows again.
+1. Clear SIP registration timeout on reject/failure and keep remote audio cleanup on session termination.
+2. Split contact/suppression mutation handlers or add Fastify route grouping only if `routes.ts` grows again.

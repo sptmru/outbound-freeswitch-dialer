@@ -426,7 +426,7 @@ export async function syncFreeSwitchOriginate(
     await pool.query(
       `
         update agents
-        set status = 'ready',
+        set status = case when registered then 'ready' else 'offline' end,
             updated_at = now()
         where id = $1
       `,
@@ -575,7 +575,7 @@ async function failDialerCallFromFreeSwitch(
   await pool.query(
     `
       update agents
-      set status = 'ready',
+      set status = case when registered then 'ready' else 'offline' end,
           updated_at = now()
       where id = $1
     `,
@@ -797,7 +797,7 @@ export async function dropVoicemailForCall(
     await client.query(
       `
         update agents
-        set status = 'ready',
+        set status = case when registered then 'ready' else 'offline' end,
             updated_at = now()
         where id = $1
       `,
@@ -987,7 +987,7 @@ export async function endDialerCall(
     await client.query(
       `
         update agents
-        set status = 'ready',
+        set status = case when registered then 'ready' else 'offline' end,
             updated_at = now()
         where id = $1
           and not exists (
