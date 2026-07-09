@@ -1,8 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { createWriteStream } from "node:fs";
-import { mkdir, unlink } from "node:fs/promises";
+import { mkdir, unlink, writeFile } from "node:fs/promises";
 import { basename, extname, join } from "node:path";
-import { pipeline } from "node:stream/promises";
 import { randomUUID } from "node:crypto";
 import { isSupportedCountry, parsePhoneNumberFromString } from "libphonenumber-js";
 import type { CountryCode } from "libphonenumber-js";
@@ -457,15 +455,18 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
       const makeDefault = parseBooleanField(getMultipartFieldValue(file.fields.makeDefault));
       const storedFilename = `${randomUUID()}${extension}`;
       const storagePath = join(config.VOICEMAIL_RECORDINGS_STORAGE_DIR, storedFilename);
+      const audioBuffer = await file.toBuffer();
+      const durationSeconds = detectAudioDurationSeconds(audioBuffer, extension);
 
       await mkdir(config.VOICEMAIL_RECORDINGS_STORAGE_DIR, { recursive: true });
-      await pipeline(file.file, createWriteStream(storagePath, { flags: "wx" }));
+      await writeFile(storagePath, audioBuffer, { flag: "wx" });
 
       try {
         const item = await createRecording(pool, {
           name,
           filePath: storagePath,
           runtimeFilePath: storagePath,
+          durationSeconds,
           makeDefault
         });
         return reply.code(201).send({ item });
@@ -2168,10 +2169,11 @@ async function getRecordings(pool: pg.Pool): Promise<AdminOverviewResponse["reco
     id: string;
     name: string;
     runtime_file_path: string;
+    duration_seconds: number;
     is_default: boolean;
     is_active: boolean;
   }>(`
-    select id, name, runtime_file_path, is_default, is_active
+    select id, name, runtime_file_path, duration_seconds, is_default, is_active
     from recordings
     where is_active = true
     order by is_default desc, created_at desc
@@ -2187,6 +2189,7 @@ async function createRecording(
     name: string;
     filePath: string;
     runtimeFilePath: string;
+    durationSeconds: number;
     makeDefault: boolean;
   }
 ): Promise<AdminOverviewResponse["recordings"][number]> {
@@ -2202,11 +2205,11 @@ async function createRecording(
 
     const result = await client.query<RecordingRow>(
       `
-        insert into recordings (name, file_path, runtime_file_path, is_default, is_active)
-        values ($1, $2, $3, $4, true)
-        returning id, name, runtime_file_path, is_default, is_active
+        insert into recordings (name, file_path, runtime_file_path, is_default, is_active, duration_seconds)
+        values ($1, $2, $3, $4, true, $5)
+        returning id, name, runtime_file_path, duration_seconds, is_default, is_active
       `,
-      [input.name, input.filePath, input.runtimeFilePath, shouldMakeDefault]
+      [input.name, input.filePath, input.runtimeFilePath, shouldMakeDefault, input.durationSeconds]
     );
     await client.query("commit");
     return mapRecordingRow(result.rows[0]);
@@ -2240,7 +2243,7 @@ async function setDefaultRecording(
         update recordings
         set is_default = true, updated_at = now()
         where id = $1
-        returning id, name, runtime_file_path, is_default, is_active
+        returning id, name, runtime_file_path, duration_seconds, is_default, is_active
       `,
       [recordingId]
     );
@@ -2307,6 +2310,7 @@ type RecordingRow = {
   id: string;
   name: string;
   runtime_file_path: string;
+  duration_seconds: number;
   is_default: boolean;
   is_active: boolean;
 };
@@ -2315,7 +2319,7 @@ function mapRecordingRow(row: RecordingRow): AdminOverviewResponse["recordings"]
   return {
     id: row.id,
     name: row.name,
-    durationSeconds: 0,
+    durationSeconds: row.duration_seconds,
     runtimeFilePath: row.runtime_file_path,
     status: row.is_default ? "default" : row.is_active ? "ready" : "inactive"
   };
@@ -2343,6 +2347,139 @@ function getMultipartFieldValue(field: unknown): string | undefined {
 
 function parseBooleanField(value: string | undefined): boolean {
   return value === "true" || value === "1" || value === "on";
+}
+
+function detectAudioDurationSeconds(buffer: Buffer, extension: ".mp3" | ".wav"): number {
+  const duration = extension === ".wav" ? detectWavDurationSeconds(buffer) : detectMp3DurationSeconds(buffer);
+  if (!Number.isFinite(duration) || duration <= 0) {
+    return 0;
+  }
+  return Math.max(1, Math.round(duration));
+}
+
+function detectWavDurationSeconds(buffer: Buffer): number {
+  if (buffer.length < 44 || buffer.toString("ascii", 0, 4) !== "RIFF" || buffer.toString("ascii", 8, 12) !== "WAVE") {
+    return 0;
+  }
+
+  let offset = 12;
+  let byteRate = 0;
+  let dataSize = 0;
+  while (offset + 8 <= buffer.length) {
+    const chunkId = buffer.toString("ascii", offset, offset + 4);
+    const chunkSize = buffer.readUInt32LE(offset + 4);
+    const chunkDataOffset = offset + 8;
+
+    if (chunkId === "fmt " && chunkDataOffset + 16 <= buffer.length) {
+      byteRate = buffer.readUInt32LE(chunkDataOffset + 8);
+    } else if (chunkId === "data") {
+      dataSize = chunkSize;
+      break;
+    }
+
+    offset = chunkDataOffset + chunkSize + (chunkSize % 2);
+  }
+
+  return byteRate > 0 && dataSize > 0 ? dataSize / byteRate : 0;
+}
+
+function detectMp3DurationSeconds(buffer: Buffer): number {
+  let offset = getMp3AudioStartOffset(buffer);
+  let duration = 0;
+  let frames = 0;
+
+  while (offset + 4 <= buffer.length) {
+    if (buffer[offset] !== 0xff || (buffer[offset + 1] & 0xe0) !== 0xe0) {
+      offset += 1;
+      continue;
+    }
+
+    const frame = parseMp3FrameHeader(buffer, offset);
+    if (!frame) {
+      offset += 1;
+      continue;
+    }
+
+    duration += frame.samplesPerFrame / frame.sampleRate;
+    frames += 1;
+    offset += frame.frameLength;
+  }
+
+  return frames > 0 ? duration : 0;
+}
+
+function getMp3AudioStartOffset(buffer: Buffer): number {
+  if (buffer.length < 10 || buffer.toString("ascii", 0, 3) !== "ID3") {
+    return 0;
+  }
+  const size =
+    ((buffer[6] & 0x7f) << 21) |
+    ((buffer[7] & 0x7f) << 14) |
+    ((buffer[8] & 0x7f) << 7) |
+    (buffer[9] & 0x7f);
+  return 10 + size;
+}
+
+function parseMp3FrameHeader(
+  buffer: Buffer,
+  offset: number
+): { frameLength: number; sampleRate: number; samplesPerFrame: number } | null {
+  const versionBits = (buffer[offset + 1] >> 3) & 0x03;
+  const layerBits = (buffer[offset + 1] >> 1) & 0x03;
+  const bitrateIndex = (buffer[offset + 2] >> 4) & 0x0f;
+  const sampleRateIndex = (buffer[offset + 2] >> 2) & 0x03;
+  const padding = (buffer[offset + 2] >> 1) & 0x01;
+
+  if (versionBits === 1 || layerBits === 0 || bitrateIndex === 0 || bitrateIndex === 15 || sampleRateIndex === 3) {
+    return null;
+  }
+
+  const version: "mpeg1" | "mpeg2" | "mpeg25" = versionBits === 3 ? "mpeg1" : versionBits === 2 ? "mpeg2" : "mpeg25";
+  const layer: 1 | 2 | 3 = layerBits === 3 ? 1 : layerBits === 2 ? 2 : 3;
+  const sampleRate = getMp3SampleRate(version, sampleRateIndex);
+  const bitrate = getMp3Bitrate(version, layer, bitrateIndex);
+  if (!sampleRate || !bitrate) {
+    return null;
+  }
+
+  if (layer === 1) {
+    return {
+      frameLength: Math.floor((12 * bitrate * 1000) / sampleRate + padding) * 4,
+      sampleRate,
+      samplesPerFrame: 384
+    };
+  }
+
+  const samplesPerFrame = layer === 3 && version !== "mpeg1" ? 576 : 1152;
+  const coefficient = layer === 3 && version !== "mpeg1" ? 72 : 144;
+  return {
+    frameLength: Math.floor((coefficient * bitrate * 1000) / sampleRate + padding),
+    sampleRate,
+    samplesPerFrame
+  };
+}
+
+function getMp3SampleRate(version: "mpeg1" | "mpeg2" | "mpeg25", index: number): number {
+  const rates = {
+    mpeg1: [44100, 48000, 32000],
+    mpeg2: [22050, 24000, 16000],
+    mpeg25: [11025, 12000, 8000]
+  };
+  return rates[version][index] ?? 0;
+}
+
+function getMp3Bitrate(version: "mpeg1" | "mpeg2" | "mpeg25", layer: 1 | 2 | 3, index: number): number {
+  const mpeg1 = {
+    1: [0, 32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384, 416, 448],
+    2: [0, 32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384],
+    3: [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320]
+  };
+  const mpeg2 = {
+    1: [0, 32, 48, 56, 64, 80, 96, 112, 128, 144, 160, 176, 192, 224, 256],
+    2: [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160],
+    3: [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160]
+  };
+  return (version === "mpeg1" ? mpeg1[layer] : mpeg2[layer])[index] ?? 0;
 }
 
 async function getUsers(pool: pg.Pool): Promise<PublicUser[]> {
