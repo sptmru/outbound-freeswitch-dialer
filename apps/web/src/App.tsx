@@ -34,6 +34,7 @@ import {
   createSuppression,
   createUser,
   deleteCampaign,
+  deleteRecording,
   deleteSuppression,
   deleteUser,
   endCall,
@@ -1645,10 +1646,12 @@ function Recordings({ admin, onChanged }: { admin: AdminOverviewResponse; onChan
   const [makeDefault, setMakeDefault] = useState(true);
   const [pending, setPending] = useState(false);
   const [defaultPendingId, setDefaultPendingId] = useState<string | null>(null);
+  const [deletePendingId, setDeletePendingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const form = event.currentTarget;
     if (!file) {
       setError("Choose a WAV or MP3 file");
       return;
@@ -1665,7 +1668,7 @@ function Recordings({ admin, onChanged }: { admin: AdminOverviewResponse; onChan
       setFile(null);
       setName("");
       setMakeDefault(true);
-      event.currentTarget.reset();
+      form.reset();
       await onChanged();
     } catch (uploadError) {
       setError(uploadError instanceof Error ? uploadError.message : "Unable to upload recording");
@@ -1684,6 +1687,23 @@ function Recordings({ admin, onChanged }: { admin: AdminOverviewResponse; onChan
       setError(defaultError instanceof Error ? defaultError.message : "Unable to set default recording");
     } finally {
       setDefaultPendingId(null);
+    }
+  }
+
+  async function removeRecording(recording: AdminOverviewResponse["recordings"][number]) {
+    if (!window.confirm(`Delete ${recording.name}?`)) {
+      return;
+    }
+
+    setDeletePendingId(recording.id);
+    setError(null);
+    try {
+      await deleteRecording(recording.id);
+      await onChanged();
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : "Unable to delete recording");
+    } finally {
+      setDeletePendingId(null);
     }
   }
 
@@ -1737,12 +1757,21 @@ function Recordings({ admin, onChanged }: { admin: AdminOverviewResponse; onChan
               <b>{recording.status}</b>
               <button
                 className="secondary-action compact-action"
-                disabled={recording.status === "default" || defaultPendingId === recording.id}
+                disabled={recording.status === "default" || defaultPendingId === recording.id || deletePendingId === recording.id}
                 onClick={() => void makeRecordingDefault(recording.id)}
                 type="button"
               >
                 <CheckCircle2 size={16} />
                 {defaultPendingId === recording.id ? "Saving" : "Default"}
+              </button>
+              <button
+                className="icon-button danger-icon"
+                disabled={deletePendingId === recording.id || defaultPendingId === recording.id}
+                onClick={() => void removeRecording(recording)}
+                title="Delete voicemail"
+                type="button"
+              >
+                <Trash2 size={16} />
               </button>
             </div>
           ))}

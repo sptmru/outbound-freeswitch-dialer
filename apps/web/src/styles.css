@@ -1151,7 +1151,7 @@ input[type="checkbox"] {
 }
 
 .recording-row {
-  grid-template-columns: minmax(220px, 1.3fr) minmax(120px, 0.7fr) auto auto;
+  grid-template-columns: minmax(220px, 1.3fr) minmax(120px, 0.7fr) auto auto auto;
 }
 
 .recording-row small {

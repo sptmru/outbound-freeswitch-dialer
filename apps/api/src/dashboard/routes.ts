@@ -493,6 +493,22 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
     }
   );
 
+  app.delete("/admin/recordings/:recordingId", async (request, reply): Promise<DeleteResponse | void> => {
+    const user = await requireAdmin(request, reply, config, pool);
+    if (!user) {
+      return;
+    }
+
+    const params = recordingParamsSchema.parse(request.params);
+    const deleted = await deleteRecording(pool, params.recordingId);
+    if (!deleted) {
+      return reply.code(404).send({ message: "Recording not found" });
+    }
+
+    await unlink(deleted.filePath).catch(() => undefined);
+    return { ok: true };
+  });
+
   app.post(
     "/admin/contacts",
     async (request, reply): Promise<MutationResponse<LeadSummary> | void> => {
@@ -2157,6 +2173,7 @@ async function getRecordings(pool: pg.Pool): Promise<AdminOverviewResponse["reco
   }>(`
     select id, name, runtime_file_path, is_default, is_active
     from recordings
+    where is_active = true
     order by is_default desc, created_at desc
     limit 12
   `);
@@ -2229,6 +2246,55 @@ async function setDefaultRecording(
     );
     await client.query("commit");
     return mapRecordingRow(result.rows[0]);
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function deleteRecording(pool: pg.Pool, recordingId: string): Promise<{ filePath: string } | null> {
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const existing = await client.query<{ id: string; file_path: string; is_default: boolean }>(
+      "select id, file_path, is_default from recordings where id = $1 and is_active = true",
+      [recordingId]
+    );
+    const row = existing.rows[0];
+    if (!row) {
+      await client.query("rollback");
+      return null;
+    }
+
+    await client.query(
+      `
+        update recordings
+        set is_active = false, is_default = false, updated_at = now()
+        where id = $1
+      `,
+      [recordingId]
+    );
+
+    if (row.is_default) {
+      await client.query(
+        `
+          update recordings
+          set is_default = true, updated_at = now()
+          where id = (
+            select id
+            from recordings
+            where is_active = true
+            order by created_at desc
+            limit 1
+          )
+        `
+      );
+    }
+
+    await client.query("commit");
+    return { filePath: row.file_path };
   } catch (error) {
     await client.query("rollback");
     throw error;

@@ -217,6 +217,12 @@ export async function setDefaultRecording(
   );
 }
 
+export async function deleteRecording(recordingId: string): Promise<DeleteResponse> {
+  return apiFetch<DeleteResponse>(`/admin/recordings/${recordingId}`, {
+    method: "DELETE"
+  });
+}
+
 export async function createUser(input: CreateUserRequest): Promise<CreateUserResponse> {
   return apiFetch<CreateUserResponse>("/admin/users", {
     method: "POST",
