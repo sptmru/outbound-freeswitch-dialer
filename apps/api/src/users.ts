@@ -3,7 +3,7 @@ import type { UserRole } from "@outbound-dialer/shared";
 import type { AppConfig } from "./config.js";
 import { decryptSecret, encryptSecret } from "./auth/crypto.js";
 import { generateSecret, hashSecret } from "./auth/passwords.js";
-import { provisionAgentDirectory } from "./freeswitch/provisioning.js";
+import { ensureAgentDirectory, provisionAgentDirectory } from "./freeswitch/provisioning.js";
 
 export interface UserRecord {
   id: string;
@@ -116,11 +116,28 @@ export async function ensureAgentForUser(
   const existing = await pool.query<{
     id: string;
     sip_username: string;
-  }>("select id, sip_username from agents where user_id = $1 order by created_at asc limit 1", [user.id]);
-  if (existing.rows[0]) {
+    sip_password_encrypted: string;
+    display_name: string;
+  }>(
+    `
+      select id, sip_username, sip_password_encrypted, display_name
+      from agents
+      where user_id = $1
+      order by created_at asc
+      limit 1
+    `,
+    [user.id]
+  );
+  const existingAgent = existing.rows[0];
+  if (existingAgent) {
+    await ensureAgentDirectory(config, {
+      sipUsername: existingAgent.sip_username,
+      sipPassword: decryptSecret(config, existingAgent.sip_password_encrypted),
+      displayName: existingAgent.display_name || user.name
+    });
     return {
-      id: existing.rows[0].id,
-      sipUsername: existing.rows[0].sip_username
+      id: existingAgent.id,
+      sipUsername: existingAgent.sip_username
     };
   }
 
@@ -179,12 +196,19 @@ export async function getSoftphoneProvisioningForUser(
   if (!agent) {
     throw new Error("Agent credentials are unavailable");
   }
+  const sipPassword = decryptSecret(config, agent.sip_password_encrypted);
+  const displayName = agent.display_name || user.name;
+  await ensureAgentDirectory(config, {
+    sipUsername: agent.sip_username,
+    sipPassword,
+    displayName
+  });
 
   return {
     sipUri: `sip:${agent.sip_username}@${config.FREESWITCH_DOMAIN}`,
     sipUsername: agent.sip_username,
-    sipPassword: decryptSecret(config, agent.sip_password_encrypted),
-    displayName: agent.display_name || user.name,
+    sipPassword,
+    displayName,
     websocketUrl: config.FREESWITCH_WEBRTC_PUBLIC_WS_URL ?? `wss://${config.FREESWITCH_DOMAIN}/freeswitch-ws`,
     domain: config.FREESWITCH_DOMAIN
   };

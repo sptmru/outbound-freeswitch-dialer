@@ -29,6 +29,7 @@ import {
   XCircle
 } from "lucide-react";
 import {
+  isApiError,
   clearStoredToken,
   completeContact,
   createCampaign,
@@ -91,6 +92,10 @@ const navItems: Array<{ id: View; label: string; icon: typeof BarChart3 }> = [
   { id: "settings", label: "Settings", icon: Shield }
 ];
 
+function getErrorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : fallback;
+}
+
 export function App() {
   const [tokenReady, setTokenReady] = useState(false);
   const [user, setUser] = useState<PublicUser | null>(null);
@@ -101,6 +106,7 @@ export function App() {
   const [view, setView] = useState<View>("desk");
   const [error, setError] = useState<string | null>(null);
   const [manualDialNumber, setManualDialNumber] = useState("");
+  const activeCallPollRequestRef = useRef(0);
 
   useEffect(() => {
     const token = getStoredToken();
@@ -111,6 +117,18 @@ export function App() {
 
     void hydrateSession();
   }, []);
+
+  function resetSession(nextError: string | null = null) {
+    clearStoredToken();
+    setUser(null);
+    setDesk(null);
+    setAdmin(null);
+    setCsvImports([]);
+    setSelectedCampaignId(null);
+    setManualDialNumber("");
+    setView("desk");
+    setError(nextError);
+  }
 
   async function hydrateSession() {
     try {
@@ -124,13 +142,7 @@ export function App() {
         setCsvImports(nextImports.imports);
       }
     } catch (sessionError) {
-      clearStoredToken();
-      setUser(null);
-      setDesk(null);
-      setAdmin(null);
-      setCsvImports([]);
-      setSelectedCampaignId(null);
-      setError(sessionError instanceof Error ? sessionError.message : "Session expired");
+      resetSession(getErrorMessage(sessionError, "Session expired"));
     } finally {
       setTokenReady(true);
     }
@@ -144,13 +156,7 @@ export function App() {
   }
 
   function handleLogout() {
-    clearStoredToken();
-    setUser(null);
-    setDesk(null);
-    setAdmin(null);
-    setCsvImports([]);
-    setSelectedCampaignId(null);
-    setView("desk");
+    resetSession();
   }
 
   async function handleCampaignChange(campaignId: string) {
@@ -165,16 +171,23 @@ export function App() {
 
     let stopped = false;
     const refreshDesk = async () => {
+      const requestId = ++activeCallPollRequestRef.current;
       try {
         const nextDesk = await fetchAgentDesk(selectedCampaignId ?? desk.campaign.id);
-        if (!stopped) {
-          setDesk(nextDesk);
-          setSelectedCampaignId(nextDesk.campaign.id);
+        if (stopped || requestId !== activeCallPollRequestRef.current) {
+          return;
         }
+        setDesk(nextDesk);
+        setSelectedCampaignId(nextDesk.campaign.id);
       } catch (refreshError) {
-        if (!stopped) {
-          setError(refreshError instanceof Error ? refreshError.message : "Could not refresh call status");
+        if (stopped || requestId !== activeCallPollRequestRef.current) {
+          return;
         }
+        if (isApiError(refreshError) && refreshError.status === 401) {
+          resetSession(getErrorMessage(refreshError, "Session expired"));
+          return;
+        }
+        setError(getErrorMessage(refreshError, "Could not refresh call status"));
       }
     };
 
@@ -184,6 +197,7 @@ export function App() {
 
     return () => {
       stopped = true;
+      activeCallPollRequestRef.current += 1;
       window.clearInterval(interval);
     };
   }, [desk?.activeCall?.id, desk?.campaign.id, selectedCampaignId, user]);
@@ -701,7 +715,6 @@ function ManualDialSurface({
   phoneNumber: string;
   softphone: SoftphoneRuntime;
 }) {
-  const [note, setNote] = useState("");
   const [result, setResult] = useState<ManualDialValidationResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
@@ -770,10 +783,6 @@ function ManualDialSurface({
               placeholder="+1 415 555 0000"
               value={phoneNumber}
             />
-          </label>
-          <label>
-            Lead name or note
-            <input onChange={(event) => setNote(event.target.value)} placeholder="Optional" value={note} />
           </label>
           <div className="large-keypad" aria-label="Dial pad">
             {["1", "2", "3", "4", "5", "6", "7", "8", "9", "*", "0", "#"].map((key) => (
@@ -961,130 +970,6 @@ function formatVoicemailSignal(signal: NonNullable<AgentDeskResponse["activeCall
     return { detail: "Detection is not yet conclusive", label: "Possible VM" };
   }
   return { detail: "Listening during the connected call", label: "Listening" };
-}
-
-function SoftphonePanel({
-  desk,
-  manualDialNumber,
-  onDeskChanged,
-  onManualDialNumberChange
-}: {
-  desk: AgentDeskResponse;
-  manualDialNumber: string;
-  onDeskChanged: (desk: AgentDeskResponse) => void;
-  onManualDialNumberChange: (phoneNumber: string) => void;
-}) {
-  return (
-    <aside className="softphone-stack">
-      <article className="panel">
-        <PanelHeader icon={Mic} title="Softphone" meta={desk.softphone.status} />
-        <div className="dial-pad">
-          <button type="button">1</button>
-          <button type="button">2</button>
-          <button type="button">3</button>
-          <button type="button">4</button>
-          <button type="button">5</button>
-          <button type="button">6</button>
-          <button type="button">7</button>
-          <button type="button">8</button>
-          <button type="button">9</button>
-          <button type="button">*</button>
-          <button type="button">0</button>
-          <button type="button">#</button>
-        </div>
-      </article>
-      <ManualDial
-        campaignId={desk.campaign.id}
-        onDeskChanged={onDeskChanged}
-        phoneNumber={manualDialNumber}
-        onPhoneNumberChange={onManualDialNumberChange}
-      />
-      <article className="metric-grid">
-        <Metric label="Today calls" value={desk.metrics.todayCalls} icon={PhoneForwarded} />
-        <Metric label="VM dropped" value={desk.metrics.voicemailsDropped} icon={Voicemail} />
-        <Metric label="Suppressed" value={desk.metrics.suppressed} icon={Ban} />
-      </article>
-    </aside>
-  );
-}
-
-function ManualDial({
-  campaignId,
-  onDeskChanged,
-  onPhoneNumberChange,
-  phoneNumber
-}: {
-  campaignId: string;
-  onDeskChanged: (desk: AgentDeskResponse) => void;
-  onPhoneNumberChange: (phoneNumber: string) => void;
-  phoneNumber: string;
-}) {
-  const [result, setResult] = useState<ManualDialValidationResponse | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [pending, setPending] = useState(false);
-  const [startPending, setStartPending] = useState(false);
-
-  useEffect(() => {
-    setResult(null);
-    setError(null);
-  }, [phoneNumber]);
-
-  async function validate(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setPending(true);
-    setError(null);
-    try {
-      setResult(await validateManualDial(phoneNumber, campaignId));
-    } catch (validateError) {
-      setError(validateError instanceof Error ? validateError.message : "Could not validate number");
-    } finally {
-      setPending(false);
-    }
-  }
-
-  async function startCall() {
-    setStartPending(true);
-    setError(null);
-    try {
-      onDeskChanged(await startManualCall({ campaignId, phoneNumber }));
-    } catch (startError) {
-      setError(startError instanceof Error ? startError.message : "Could not start call");
-    } finally {
-      setStartPending(false);
-    }
-  }
-
-  return (
-    <article className="panel compact-panel">
-      <PanelHeader icon={Phone} title="Manual dialing" meta="Preview" />
-      <form className="manual-form" onSubmit={validate}>
-        <input
-          onChange={(event) => onPhoneNumberChange(event.target.value)}
-          placeholder="+1 415 555 0199"
-          value={phoneNumber}
-        />
-        <button className="icon-button dark" disabled={pending} title="Validate" type="submit">
-          <CheckCircle2 size={17} />
-        </button>
-        <button
-          className="icon-button"
-          disabled={startPending || !phoneNumber.trim()}
-          onClick={startCall}
-          title="Start manual call"
-          type="button"
-        >
-          <PhoneCall size={17} />
-        </button>
-      </form>
-      {error && <p className="form-error">{error}</p>}
-      {result && (
-        <div className={result.allowed ? "validation-result allowed" : "validation-result blocked"}>
-          {result.allowed ? <CheckCircle2 size={16} /> : <XCircle size={16} />}
-          <span>{result.reason}</span>
-        </div>
-      )}
-    </article>
-  );
 }
 
 function AdminView({
@@ -1286,6 +1171,7 @@ function CampaignContacts({
   const [actionId, setActionId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  const contactsRequestRef = useRef(0);
 
   useEffect(() => {
     const nextCampaignId = getValidCampaignId(campaignId, campaigns);
@@ -1296,22 +1182,38 @@ function CampaignContacts({
 
   useEffect(() => {
     if (!campaignId) {
+      contactsRequestRef.current += 1;
       setContacts(null);
+      setPending(false);
       return;
     }
 
+    const requestId = ++contactsRequestRef.current;
     const timeout = window.setTimeout(() => {
       setPending(true);
       setError(null);
       fetchCampaignContacts(campaignId, { q: query, status })
-        .then(setContacts)
-        .catch((loadError: unknown) => {
-          setError(loadError instanceof Error ? loadError.message : "Could not load contacts");
+        .then((nextContacts) => {
+          if (requestId === contactsRequestRef.current) {
+            setContacts(nextContacts);
+          }
         })
-        .finally(() => setPending(false));
+        .catch((loadError: unknown) => {
+          if (requestId === contactsRequestRef.current) {
+            setError(getErrorMessage(loadError, "Could not load contacts"));
+          }
+        })
+        .finally(() => {
+          if (requestId === contactsRequestRef.current) {
+            setPending(false);
+          }
+        });
     }, 180);
 
-    return () => window.clearTimeout(timeout);
+    return () => {
+      contactsRequestRef.current += 1;
+      window.clearTimeout(timeout);
+    };
   }, [campaignId, query, reloadKey, status]);
 
   async function runContactAction(

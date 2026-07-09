@@ -37,6 +37,22 @@ type LoginResponse = {
   user: PublicUser;
 };
 
+export class ApiError extends Error {
+  readonly status: number;
+  readonly body: unknown;
+
+  constructor(message: string, status: number, body: unknown) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.body = body;
+  }
+}
+
+export function isApiError(error: unknown): error is ApiError {
+  return error instanceof ApiError;
+}
+
 export function getStoredToken(): string | null {
   return window.localStorage.getItem(TOKEN_KEY);
 }
@@ -65,15 +81,19 @@ async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> 
   if (!response.ok) {
     const errorBody = await response.json().catch(() => ({}));
     const message =
-      typeof errorBody.error === "string"
+      isRecord(errorBody) && typeof errorBody.error === "string"
         ? errorBody.error
-        : typeof errorBody.message === "string"
+        : isRecord(errorBody) && typeof errorBody.message === "string"
           ? errorBody.message
         : `Request failed with ${response.status}`;
-    throw new Error(message);
+    throw new ApiError(message, response.status, errorBody);
   }
 
   return response.json() as Promise<T>;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }
 
 export async function login(email: string, password: string): Promise<LoginResponse> {

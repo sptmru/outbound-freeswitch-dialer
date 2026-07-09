@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type pg from "pg";
 import type { AppConfig } from "../config.js";
@@ -14,13 +14,31 @@ export async function provisionAgentDirectory(
   config: AppConfig,
   agent: { sipUsername: string; sipPassword: string; displayName: string }
 ): Promise<void> {
-  const directory = join(config.FREESWITCH_GENERATED_CONFIG_DIR, "directory", "default");
+  const directory = agentDirectoryPath(config);
   await mkdir(directory, { recursive: true });
   await writeFile(
-    join(directory, `${safeFilename(agent.sipUsername)}.xml`),
+    agentDirectoryXmlPath(config, agent.sipUsername),
     renderAgentDirectoryXml(config, agent),
     "utf8"
   );
+}
+
+export async function ensureAgentDirectory(
+  config: AppConfig,
+  agent: { sipUsername: string; sipPassword: string; displayName: string }
+): Promise<void> {
+  try {
+    await stat(agentDirectoryXmlPath(config, agent.sipUsername));
+  } catch (error) {
+    if (!isMissingFile(error)) {
+      throw error;
+    }
+    await provisionAgentDirectory(config, agent);
+  }
+}
+
+export async function deleteAgentDirectory(config: AppConfig, sipUsername: string): Promise<void> {
+  await rm(agentDirectoryXmlPath(config, sipUsername), { force: true });
 }
 
 export async function provisionAllAgentDirectories(pool: pg.Pool, config: AppConfig): Promise<number> {
@@ -41,6 +59,14 @@ export async function provisionAllAgentDirectories(pool: pg.Pool, config: AppCon
   }
 
   return result.rowCount ?? 0;
+}
+
+function agentDirectoryPath(config: AppConfig): string {
+  return join(config.FREESWITCH_GENERATED_CONFIG_DIR, "directory", "default");
+}
+
+function agentDirectoryXmlPath(config: AppConfig, sipUsername: string): string {
+  return join(agentDirectoryPath(config), `${safeFilename(sipUsername)}.xml`);
 }
 
 function renderAgentDirectoryXml(
@@ -66,6 +92,10 @@ function renderAgentDirectoryXml(
 
 function safeFilename(value: string): string {
   return value.replace(/[^a-zA-Z0-9_-]/g, "_");
+}
+
+function isMissingFile(error: unknown): boolean {
+  return error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT";
 }
 
 function escapeXml(value: string): string {

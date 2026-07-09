@@ -102,6 +102,100 @@ describe("dashboard route helpers", () => {
       "bgapi originate"
     ]);
   });
+
+  it("rolls back call creation when the agent already has an active call", async () => {
+    const clientQueries: Array<{ params: readonly unknown[]; sql: string }> = [];
+    const pool = createTransactionalPool({
+      clientHandler: (sql, params) => {
+        clientQueries.push({ sql, params });
+        if (sql.includes("from calls") && sql.includes("for update")) {
+          return rows([{ id: "active-call" }]);
+        }
+        return rows([]);
+      }
+    });
+
+    const result = await __testing.createDialerCall(pool, config, {
+      agentId: "33333333-3333-4333-8333-333333333333",
+      campaignId: selectedCampaignId,
+      contactId: null,
+      destinationNumber: "+14155550100",
+      normalizedDestinationNumber: "+14155550100",
+      sipUsername: "agent1000",
+      manualDial: true,
+      callRecordingEnabled: false,
+      eventType: "manual_dial_started"
+    });
+
+    assert.deepEqual(result, { ok: false, reason: "active_call" });
+    assert.ok(clientQueries.some((query) => query.sql === "rollback"));
+    assert.ok(!clientQueries.some((query) => query.sql.includes("insert into calls")));
+  });
+
+  it("selects next contacts inside the call transaction with skip locked", async () => {
+    const clientQueries: Array<{ params: readonly unknown[]; sql: string }> = [];
+    const poolQueries: Array<{ params: readonly unknown[]; sql: string }> = [];
+    const pool = createTransactionalPool({
+      clientHandler: (sql, params) => {
+        clientQueries.push({ sql, params });
+        if (sql.includes("from calls") && sql.includes("for update")) {
+          return rows([]);
+        }
+        if (sql.includes("from contacts") && sql.includes("skip locked")) {
+          return rows([
+            {
+              id: "22222222-2222-4222-8222-222222222222",
+              campaign_id: selectedCampaignId,
+              phone_number: "+1 415 555 0100",
+              normalized_phone_number: "+14155550100",
+              call_recording_enabled: true
+            }
+          ]);
+        }
+        if (sql.includes("from recordings")) {
+          return rows([]);
+        }
+        if (sql.includes("insert into calls")) {
+          return rows([{ id: "44444444-4444-4444-8444-444444444444" }]);
+        }
+        return rows([]);
+      },
+      poolHandler: (sql, params) => {
+        poolQueries.push({ sql, params });
+        if (sql.includes("returning contact_id")) {
+          return rows([{ contact_id: "22222222-2222-4222-8222-222222222222" }]);
+        }
+        return rows([]);
+      }
+    });
+
+    const result = await __testing.createDialerCall(
+      pool,
+      {
+        ...config,
+        FREESWITCH_DOMAIN: "dialer.local",
+        FREESWITCH_ESL_ENABLED: false
+      } as AppConfig,
+      {
+        agentId: "33333333-3333-4333-8333-333333333333",
+        campaignId: selectedCampaignId,
+        contactId: "next",
+        sipUsername: "agent1000",
+        manualDial: false,
+        callRecordingEnabled: false,
+        eventType: "call_next_started"
+      }
+    );
+
+    assert.deepEqual(result, {
+      ok: true,
+      callId: "44444444-4444-4444-8444-444444444444",
+      campaignId: selectedCampaignId
+    });
+    assert.ok(clientQueries.some((query) => query.sql.includes("for update of contacts skip locked")));
+    assert.ok(clientQueries.some((query) => query.sql === "commit"));
+    assert.ok(poolQueries.some((query) => query.sql.includes("set state = 'failed'")));
+  });
 });
 
 function createQueryPool(
@@ -109,6 +203,21 @@ function createQueryPool(
 ): pg.Pool {
   return {
     query: (sql: string, params: readonly unknown[] = []) => Promise.resolve(handler(sql, params))
+  } as unknown as pg.Pool;
+}
+
+function createTransactionalPool(options: {
+  clientHandler: (sql: string, params: readonly unknown[]) => { rows: unknown[]; rowCount: number };
+  poolHandler?: (sql: string, params: readonly unknown[]) => { rows: unknown[]; rowCount: number };
+}): pg.Pool {
+  const client = {
+    query: (sql: string, params: readonly unknown[] = []) => Promise.resolve(options.clientHandler(sql, params)),
+    release: () => undefined
+  };
+  return {
+    connect: () => Promise.resolve(client),
+    query: (sql: string, params: readonly unknown[] = []) =>
+      Promise.resolve(options.poolHandler ? options.poolHandler(sql, params) : rows([]))
   } as unknown as pg.Pool;
 }
 

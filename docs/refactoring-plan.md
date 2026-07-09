@@ -11,21 +11,43 @@ This plan is based on the July 2026 audit of the API, FreeSWITCH event handling,
   - Manual dial validation with campaign permissions.
   - Strict campaign selection for dialer actions.
   - Missing trunk originate cleanup.
+  - Transactional active-call/contact selection.
   - ESL dial string and response parsing.
   - FreeSWITCH event state mapping, including `CHANNEL_DESTROY`.
+  - FreeSWITCH generated agent XML recreation/deletion.
 - Verification commands:
   - `npm --workspace @outbound-dialer/api test`
   - `npm test`
   - `npm run typecheck`
   - `npm run build`
 
+## Completed Refactors
+
+- Phase 1 backend call-state invariants:
+  - active-call checks now run inside the call creation transaction.
+  - `call-next` contact selection uses `for update skip locked`.
+  - selected lead calls revalidate and lock the contact before call creation.
+  - active call uniqueness is backed by partial DB indexes.
+- Phase 4 provisioning lifecycle:
+  - existing agent softphone provisioning recreates missing generated XML before returning credentials.
+  - user deletion removes generated agent XML after DB commit.
+- Phase 5 web reliability cleanup:
+  - web API errors carry HTTP status.
+  - active-call polling ignores stale responses.
+  - 401 polling responses clear the session.
+  - campaign contact search/filter ignores stale responses.
+  - unused legacy softphone/manual dial components were removed.
+  - the non-persisted manual dial note field was removed.
+- Phase 6 deployment surface cleanup:
+  - direct web nginx now proxies `/api/` to the API service instead of serving the SPA fallback.
+
 ## Phase 1: Stabilize Call State Invariants
 
 Goal: make it impossible for backend-controlled calls to stay active without a real telephony path.
 
-- Move active-call checks, contact selection, call creation, agent status updates, and contact status updates into one transaction.
-- Use `for update skip locked` when selecting the next callable contact.
-- Add partial unique indexes for active calls:
+- Done: move active-call checks, contact selection, call creation, agent status updates, and contact status updates into one transaction.
+- Done: use `for update skip locked` when selecting the next callable contact.
+- Done: add partial unique indexes for active calls:
   - one active call per agent.
   - one active call per contact.
 - Keep the current missing-trunk behavior: attempted calls must immediately become `failed`, release the agent, and reset the contact.
@@ -63,36 +85,37 @@ Goal: softphone status should describe the current user and the generated FreeSW
 
 - Scope server-side `agent_registered` to the current user or remove it from the API and rely on browser SIP.js runtime state.
 - Persist/register status from actual FreeSWITCH registration events if server-side status remains.
-- Recreate the agent XML directory file when existing credentials are returned but the XML file is missing.
-- Delete generated FreeSWITCH agent XML when a user/agent is deleted, then reload or flush the affected registration state.
+- Done: recreate the agent XML directory file when existing credentials are returned but the XML file is missing.
+- Done: delete generated FreeSWITCH agent XML when a user/agent is deleted.
+- Follow-up: add a narrow ESL-backed reload/flush path for deleted agent registrations after the local generated XML cleanup is covered (`reloadxml` and/or the affected `sofia` registration state).
 
 ## Phase 5: Web Reliability And Test Harness
 
 Goal: make async UI state deterministic and testable.
 
 - Add Vitest, jsdom, and React Testing Library for web tests.
-- Introduce a typed `ApiError` with HTTP status in `apps/web/src/api.ts`.
-- On 401 during polling, clear token/session instead of leaving stale desk state.
-- Add latest-request guards or `AbortController` for:
+- Done: introduce a typed `ApiError` with HTTP status in `apps/web/src/api.ts`.
+- Done: on 401 during polling, clear token/session instead of leaving stale desk state.
+- Done: add latest-request guards for:
   - active-call polling.
   - campaign contacts search/filter requests.
 - Clear SIP registration timeout on reject/failure and keep remote audio cleanup on session termination.
-- Remove unused `SoftphonePanel` and legacy `ManualDial` after the current `ManualDialSurface` has component coverage.
-- Decide whether the manual dial "Lead name or note" field should be persisted. If not, remove it from the UI.
+- Done: remove unused `SoftphonePanel` and legacy `ManualDial`.
+- Done: remove the manual dial "Lead name or note" field because it was not persisted.
 
 ## Phase 6: Deployment Surface Cleanup
 
 Goal: direct container ports and proxied production paths should behave consistently.
 
-- Either remove public exposure of the web container port or add `/api/` proxying to `apps/web/nginx.conf`.
+- Done: add `/api/` proxying to `apps/web/nginx.conf`.
 - Add a smoke test for the published web port if it remains exposed.
 - Keep outer proxy behavior as the production source of truth for `/api`, WSS, and static SPA routing.
 
 ## Suggested Order
 
-1. Add DB-level active-call/contact constraints and transactional call selection.
-2. Extract and test call orchestration helpers.
-3. Remove demo API fallbacks.
-4. Add web test harness and typed API errors.
-5. Clean up softphone registration/provisioning ownership.
-6. Remove unused UI components and finish deployment smoke tests.
+1. Extract and test call orchestration helpers.
+2. Remove demo API fallbacks.
+3. Add web test harness.
+4. Scope or remove server-side `agent_registered`.
+5. Add ESL-backed reload/flush for deleted agent registrations.
+6. Finish deployment smoke tests.

@@ -6,6 +6,7 @@ import type { AppConfig } from "../config.js";
 import { verifySecret } from "./passwords.js";
 import { signAuthToken, verifyAuthToken } from "./tokens.js";
 import { createUserWithOptionalAgent, findUserByEmail, findUserById, toPublicUser } from "../users.js";
+import { deleteAgentDirectory } from "../freeswitch/provisioning.js";
 
 const loginSchema = z.object({
   email: z.string().email(),
@@ -79,7 +80,7 @@ export function registerAuthRoutes(app: FastifyInstance, config: AppConfig, pool
       return reply.code(409).send({ message: "You cannot delete your own user" });
     }
 
-    const deleted = await deleteUser(pool, params.userId);
+    const deleted = await deleteUser(pool, config, params.userId);
     if (deleted === "not_found") {
       return reply.code(404).send({ message: "User not found" });
     }
@@ -90,8 +91,13 @@ export function registerAuthRoutes(app: FastifyInstance, config: AppConfig, pool
   });
 }
 
-async function deleteUser(pool: pg.Pool, userId: string): Promise<"deleted" | "not_found" | "active_call"> {
+async function deleteUser(
+  pool: pg.Pool,
+  config: AppConfig,
+  userId: string
+): Promise<"deleted" | "not_found" | "active_call"> {
   const client = await pool.connect();
+  let deletedAgentSipUsernames: string[] = [];
   try {
     await client.query("begin");
     const user = await client.query("select id from users where id = $1 for update", [userId]);
@@ -117,6 +123,11 @@ async function deleteUser(pool: pg.Pool, userId: string): Promise<"deleted" | "n
       return "active_call";
     }
 
+    const agents = await client.query<{ sip_username: string }>("select sip_username from agents where user_id = $1", [
+      userId
+    ]);
+    deletedAgentSipUsernames = agents.rows.map((agent) => agent.sip_username);
+
     await client.query(
       `
         update call_events
@@ -138,13 +149,15 @@ async function deleteUser(pool: pg.Pool, userId: string): Promise<"deleted" | "n
     ]);
     await client.query("delete from users where id = $1", [userId]);
     await client.query("commit");
-    return "deleted";
   } catch (error) {
     await client.query("rollback");
     throw error;
   } finally {
     client.release();
   }
+
+  await Promise.all(deletedAgentSipUsernames.map((sipUsername) => deleteAgentDirectory(config, sipUsername)));
+  return "deleted";
 }
 
 export async function requireUser(request: FastifyRequest, config: AppConfig, pool: pg.Pool) {
@@ -161,3 +174,7 @@ export async function requireUser(request: FastifyRequest, config: AppConfig, po
 
   return findUserById(pool, payload.sub);
 }
+
+export const __testing = {
+  deleteUser
+};

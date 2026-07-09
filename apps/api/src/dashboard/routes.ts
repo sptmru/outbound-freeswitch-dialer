@@ -245,7 +245,7 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
 
     const publicUser = toPublicUser(user);
     const input = manualDialValidationSchema.parse(request.body);
-    const validation = await validateDialableNumber(pool, config, input.phoneNumber);
+    const validation = await validateDialableNumber(pool, config, input.phoneNumber, input.campaignId);
     if (!validation.allowed) {
       return reply.code(400).send({ message: validation.reason });
     }
@@ -258,13 +258,8 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
       return reply.code(409).send({ message: "Manual dialing is disabled for this campaign" });
     }
 
-    const activeCall = await getActiveCall(pool, publicUser.id);
-    if (activeCall) {
-      return reply.code(409).send({ message: "An active call is already in progress" });
-    }
-
     const agent = await ensureAgentForUser(pool, config, publicUser);
-    await createDialerCall(pool, config, {
+    const created = await createDialerCall(pool, config, {
       agentId: agent.id,
       campaignId: campaign.id,
       contactId: null,
@@ -275,6 +270,9 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
       callRecordingEnabled: campaign.call_recording_enabled,
       eventType: "manual_dial_started"
     });
+    if (!created.ok) {
+      return reply.code(409).send({ message: createDialerCallFailureMessage(created.reason) });
+    }
 
     return buildAgentDeskResponse(pool, publicUser, campaign.id);
   });
@@ -287,33 +285,24 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
 
     const input = startNextCallSchema.parse(request.body ?? {});
     const publicUser = toPublicUser(user);
-    const activeCall = await getActiveCall(pool, publicUser.id);
-    if (activeCall) {
-      return reply.code(409).send({ message: "An active call is already in progress" });
-    }
-
     const campaign = await getAgentCampaignForDialerAction(pool, input.campaignId);
     if (!campaign) {
       return reply.code(409).send({ message: "No campaign is available" });
     }
 
     const agent = await ensureAgentForUser(pool, config, publicUser);
-    const contact = await getNextCallableContact(pool, campaign.id);
-    if (!contact) {
-      return reply.code(409).send({ message: "No callable contacts are available" });
-    }
-
-    await createDialerCall(pool, config, {
+    const created = await createDialerCall(pool, config, {
       agentId: agent.id,
       campaignId: campaign.id,
-      contactId: contact.id,
-      destinationNumber: contact.phoneNumber,
-      normalizedDestinationNumber: contact.normalizedPhoneNumber,
+      contactId: "next",
       sipUsername: agent.sipUsername,
       manualDial: false,
       callRecordingEnabled: campaign.call_recording_enabled,
       eventType: "call_next_started"
     });
+    if (!created.ok) {
+      return reply.code(409).send({ message: createDialerCallFailureMessage(created.reason) });
+    }
 
     return buildAgentDeskResponse(pool, publicUser, campaign.id);
   });
@@ -325,31 +314,22 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
     }
 
     const publicUser = toPublicUser(user);
-    const activeCall = await getActiveCall(pool, publicUser.id);
-    if (activeCall) {
-      return reply.code(409).send({ message: "An active call is already in progress" });
-    }
-
     const params = z.object({ contactId: z.string().uuid() }).parse(request.params);
-    const contact = await getCallableContact(pool, params.contactId);
-    if (!contact) {
-      return reply.code(409).send({ message: "Lead is not callable" });
-    }
-
     const agent = await ensureAgentForUser(pool, config, publicUser);
-    await createDialerCall(pool, config, {
+    const created = await createDialerCall(pool, config, {
       agentId: agent.id,
-      campaignId: contact.campaignId,
-      contactId: contact.id,
-      destinationNumber: contact.phoneNumber,
-      normalizedDestinationNumber: contact.normalizedPhoneNumber,
+      campaignId: null,
+      contactId: params.contactId,
       sipUsername: agent.sipUsername,
       manualDial: false,
-      callRecordingEnabled: contact.callRecordingEnabled,
+      callRecordingEnabled: false,
       eventType: "lead_call_started"
     });
+    if (!created.ok) {
+      return reply.code(409).send({ message: createDialerCallFailureMessage(created.reason) });
+    }
 
-    return buildAgentDeskResponse(pool, publicUser, contact.campaignId);
+    return buildAgentDeskResponse(pool, publicUser, created.campaignId);
   });
 
   app.post("/agent/calls/:callId/end", async (request, reply): Promise<AgentDeskResponse | void> => {
@@ -1233,25 +1213,43 @@ async function getManualDialingCheck(
   return { status: "pass", detail: "Manual dialing allowed" };
 }
 
-async function getNextCallableContact(
-  pool: pg.Pool,
+interface LockedCallableContact {
+  id: string;
+  campaignId: string;
+  phoneNumber: string;
+  normalizedPhoneNumber: string;
+  callRecordingEnabled: boolean;
+}
+
+async function getNextCallableContactForUpdate(
+  client: pg.PoolClient,
   campaignId: string
-): Promise<{ id: string; phoneNumber: string; normalizedPhoneNumber: string } | null> {
-  const result = await pool.query<{
+): Promise<LockedCallableContact | null> {
+  const result = await client.query<{
     id: string;
+    campaign_id: string;
     phone_number: string;
     normalized_phone_number: string;
+    call_recording_enabled: boolean;
   }>(
     `
-      select contacts.id, contacts.phone_number, contacts.normalized_phone_number
+      select
+        contacts.id,
+        contacts.campaign_id,
+        contacts.phone_number,
+        contacts.normalized_phone_number,
+        campaigns.call_recording_enabled
       from contacts
+      join campaigns on campaigns.id = contacts.campaign_id
       left join suppression_entries
         on suppression_entries.normalized_phone_number = contacts.normalized_phone_number
       where contacts.campaign_id = $1
+        and campaigns.status = 'active'
         and contacts.status not in ('calling', 'completed', 'suppressed')
         and suppression_entries.id is null
       order by contacts.created_at asc
       limit 1
+      for update of contacts skip locked
     `,
     [campaignId]
   );
@@ -1263,22 +1261,18 @@ async function getNextCallableContact(
 
   return {
     id: row.id,
+    campaignId: row.campaign_id,
     phoneNumber: row.phone_number,
-    normalizedPhoneNumber: row.normalized_phone_number
+    normalizedPhoneNumber: row.normalized_phone_number,
+    callRecordingEnabled: row.call_recording_enabled
   };
 }
 
-async function getCallableContact(
-  pool: pg.Pool,
+async function getCallableContactForUpdate(
+  client: pg.PoolClient,
   contactId: string
-): Promise<{
-  id: string;
-  campaignId: string;
-  phoneNumber: string;
-  normalizedPhoneNumber: string;
-  callRecordingEnabled: boolean;
-} | null> {
-  const result = await pool.query<{
+): Promise<LockedCallableContact | null> {
+  const result = await client.query<{
     id: string;
     campaign_id: string;
     phone_number: string;
@@ -1297,9 +1291,11 @@ async function getCallableContact(
       left join suppression_entries
         on suppression_entries.normalized_phone_number = contacts.normalized_phone_number
       where contacts.id = $1
+        and campaigns.status = 'active'
         and contacts.status not in ('calling', 'completed', 'suppressed')
         and suppression_entries.id is null
       limit 1
+      for update of contacts
     `,
     [contactId]
   );
@@ -1331,25 +1327,102 @@ async function getDefaultRecordingId(client: pg.Pool | pg.PoolClient): Promise<s
   return result.rows[0]?.id ?? null;
 }
 
+type CreateDialerCallFailureReason = "active_call" | "lead_not_callable" | "no_callable_contacts";
+
+type CreateDialerCallResult =
+  | { ok: true; callId: string; campaignId: string }
+  | { ok: false; reason: CreateDialerCallFailureReason };
+
+interface DialerCallContext {
+  callRecordingEnabled: boolean;
+  campaignId: string;
+  contactId: string | null;
+  destinationNumber: string;
+  normalizedDestinationNumber: string;
+}
+
 async function createDialerCall(
   pool: pg.Pool,
   config: AppConfig,
   input: {
     agentId: string;
-    campaignId: string;
-    contactId: string | null;
-    destinationNumber: string;
-    normalizedDestinationNumber: string;
+    campaignId: string | null;
+    contactId: string | null | "next";
+    destinationNumber?: string;
+    normalizedDestinationNumber?: string;
     sipUsername: string;
     manualDial: boolean;
     callRecordingEnabled: boolean;
     eventType: string;
   }
-): Promise<string> {
+): Promise<CreateDialerCallResult> {
   const client = await pool.connect();
-  let callId: string;
+  let callId: string | null = null;
+  let callContext: DialerCallContext;
+  let committedContext: DialerCallContext | null = null;
   try {
     await client.query("begin");
+
+    await client.query("select id from agents where id = $1 for update", [input.agentId]);
+    const activeCall = await client.query<{ id: string }>(
+      `
+        select id
+        from calls
+        where agent_id = $1
+          and ended_at is null
+          and state not in ('completed', 'failed', 'canceled')
+        limit 1
+        for update
+      `,
+      [input.agentId]
+    );
+    if (activeCall.rowCount) {
+      await client.query("rollback");
+      return { ok: false, reason: "active_call" };
+    }
+
+    if (input.contactId === "next") {
+      if (!input.campaignId) {
+        throw new Error("campaignId is required for next-contact calls");
+      }
+      const contact = await getNextCallableContactForUpdate(client, input.campaignId);
+      if (!contact) {
+        await client.query("rollback");
+        return { ok: false, reason: "no_callable_contacts" };
+      }
+      callContext = {
+        callRecordingEnabled: contact.callRecordingEnabled,
+        campaignId: contact.campaignId,
+        contactId: contact.id,
+        destinationNumber: contact.phoneNumber,
+        normalizedDestinationNumber: contact.normalizedPhoneNumber
+      };
+    } else if (input.contactId) {
+      const contact = await getCallableContactForUpdate(client, input.contactId);
+      if (!contact) {
+        await client.query("rollback");
+        return { ok: false, reason: "lead_not_callable" };
+      }
+      callContext = {
+        callRecordingEnabled: contact.callRecordingEnabled,
+        campaignId: contact.campaignId,
+        contactId: contact.id,
+        destinationNumber: contact.phoneNumber,
+        normalizedDestinationNumber: contact.normalizedPhoneNumber
+      };
+    } else {
+      if (!input.campaignId || !input.destinationNumber || !input.normalizedDestinationNumber) {
+        throw new Error("manual dial calls require campaign and destination numbers");
+      }
+      callContext = {
+        callRecordingEnabled: input.callRecordingEnabled,
+        campaignId: input.campaignId,
+        contactId: null,
+        destinationNumber: input.destinationNumber,
+        normalizedDestinationNumber: input.normalizedDestinationNumber
+      };
+    }
+
     const recordingId = await getDefaultRecordingId(client);
     const call = await client.query<{ id: string }>(
       `
@@ -1370,13 +1443,13 @@ async function createDialerCall(
       `,
       [
         input.agentId,
-        input.campaignId,
-        input.contactId,
-        input.destinationNumber,
-        input.normalizedDestinationNumber,
+        callContext.campaignId,
+        callContext.contactId,
+        callContext.destinationNumber,
+        callContext.normalizedDestinationNumber,
         recordingId,
         input.manualDial,
-        input.callRecordingEnabled
+        callContext.callRecordingEnabled
       ]
     );
     callId = call.rows[0].id;
@@ -1400,30 +1473,70 @@ async function createDialerCall(
         input.agentId,
         input.eventType,
         JSON.stringify({
-          destinationNumber: input.destinationNumber,
+          destinationNumber: callContext.destinationNumber,
           manualDial: input.manualDial
         })
       ]
     );
     await client.query("update agents set status = 'in_call', updated_at = now() where id = $1", [input.agentId]);
-    if (input.contactId) {
-      await client.query("update contacts set status = 'calling', updated_at = now() where id = $1", [input.contactId]);
+    if (callContext.contactId) {
+      await client.query("update contacts set status = 'calling', updated_at = now() where id = $1", [
+        callContext.contactId
+      ]);
     }
     await client.query("commit");
+    committedContext = callContext;
   } catch (error) {
     await client.query("rollback");
+    const uniqueConflict = mapCreateDialerCallUniqueViolation(error);
+    if (uniqueConflict) {
+      return { ok: false, reason: uniqueConflict };
+    }
     throw error;
   } finally {
     client.release();
   }
 
+  if (!callId || !committedContext) {
+    throw new Error("Dialer call transaction completed without a call");
+  }
+
   await syncFreeSwitchOriginate(pool, config, {
     agentId: input.agentId,
     callId,
-    destinationNumber: input.destinationNumber,
+    destinationNumber: committedContext.destinationNumber,
     sipUsername: input.sipUsername
   });
-  return callId;
+  return { ok: true, callId, campaignId: committedContext.campaignId };
+}
+
+function createDialerCallFailureMessage(reason: CreateDialerCallFailureReason): string {
+  if (reason === "active_call") {
+    return "An active call is already in progress";
+  }
+  if (reason === "no_callable_contacts") {
+    return "No callable contacts are available";
+  }
+  return "Lead is not callable";
+}
+
+function mapCreateDialerCallUniqueViolation(error: unknown): CreateDialerCallFailureReason | null {
+  if (
+    typeof error !== "object" ||
+    error === null ||
+    !("code" in error) ||
+    error.code !== "23505"
+  ) {
+    return null;
+  }
+  const constraint = "constraint" in error && typeof error.constraint === "string" ? error.constraint : "";
+  if (constraint.includes("agent")) {
+    return "active_call";
+  }
+  if (constraint.includes("contact")) {
+    return "lead_not_callable";
+  }
+  return null;
 }
 
 async function syncFreeSwitchOriginate(
@@ -3600,6 +3713,7 @@ function normalizeCountryCode(value?: string): CountryCode | undefined {
 }
 
 export const __testing = {
+  createDialerCall,
   formatElapsed,
   getAgentCampaign,
   getAgentCampaignForDialerAction,
