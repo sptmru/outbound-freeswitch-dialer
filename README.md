@@ -177,5 +177,6 @@ the WebSocket to FreeSWITCH's internal `ws-binding` on port `5066`. Override
 different trusted WSS endpoint.
 
 Fail2ban runs as a separate host-network container and watches FreeSWITCH logs
-for SIP scanner noise such as `Can't find user [...] from <ip>`. The jail lives
-in `infra/fail2ban` and bans matching IPs after repeated misses.
+for SIP scanner noise such as `Can't find user [...] from <ip>` and unsolicited
+`sofia/external` INVITEs. The jail lives in `infra/fail2ban`, bans matching IPs
+after repeated misses, and uses incremental bantime for repeat offenders.
