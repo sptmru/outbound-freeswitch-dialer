@@ -2120,12 +2120,12 @@ function FreeSwitchDiagnosticsPanel() {
       <div className="diagnostics-grid">
         <div className={`diagnostic-card ${eslTone}`}>
           <span>ESL</span>
-          <strong>{diagnostics?.esl.status ?? "checking"}</strong>
+          <strong>{diagnostics ? displayHealthStatus(diagnostics.esl.status) : "checking"}</strong>
           <small>{diagnostics?.esl.message ?? "Waiting for status"}</small>
         </div>
         <div className={`diagnostic-card ${trunkTone}`}>
           <span>Provider trunk</span>
-          <strong>{diagnostics?.trunk.status ?? "checking"}</strong>
+          <strong>{diagnostics ? displayTrunkStatus(diagnostics.trunk.status) : "checking"}</strong>
           <small>{diagnostics?.trunk.summary ?? "Waiting for status"}</small>
         </div>
       </div>
@@ -2159,6 +2159,13 @@ function toneForHealth(status: FreeSwitchDiagnosticsResponse["esl"]["status"]): 
   return "neutral";
 }
 
+function displayHealthStatus(status: FreeSwitchDiagnosticsResponse["esl"]["status"]): string {
+  if (status === "ok") {
+    return "OK";
+  }
+  return status;
+}
+
 function toneForTrunk(status: FreeSwitchDiagnosticsResponse["trunk"]["status"]): "good" | "bad" | "neutral" {
   if (status === "ready") {
     return "good";
@@ -2167,6 +2174,13 @@ function toneForTrunk(status: FreeSwitchDiagnosticsResponse["trunk"]["status"]):
     return "neutral";
   }
   return "bad";
+}
+
+function displayTrunkStatus(status: FreeSwitchDiagnosticsResponse["trunk"]["status"]): string {
+  if (status === "ready") {
+    return "OK";
+  }
+  return status;
 }
 
 function CreateSuppressionForm({ onChanged }: { onChanged: () => Promise<void> }) {
