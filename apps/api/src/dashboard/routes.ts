@@ -106,7 +106,8 @@ const endCallSchema = z.object({
 }) satisfies z.ZodType<EndCallRequest>;
 
 const dropVoicemailSchema = z.object({
-  campaignId: z.string().uuid().optional()
+  campaignId: z.string().uuid().optional(),
+  recordingId: z.string().uuid().optional()
 }) satisfies z.ZodType<DropVoicemailRequest>;
 
 const sendDtmfSchema = z.object({
@@ -396,7 +397,7 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
     const publicUser = toPublicUser(user);
     const params = z.object({ callId: z.string().uuid() }).parse(request.params);
     const input = dropVoicemailSchema.parse(request.body ?? {});
-    const dropped = await dropVoicemailForCall(pool, config, publicUser.id, params.callId);
+    const dropped = await dropVoicemailForCall(pool, config, publicUser.id, params.callId, input.recordingId);
     if (!dropped.ok) {
       return reply.code(dropped.statusCode).send({ message: dropped.message });
     }

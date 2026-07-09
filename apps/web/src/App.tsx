@@ -463,11 +463,11 @@ function AgentDesk({
     }
   }
 
-  async function handleDropVoicemail(callId: string) {
+  async function handleDropVoicemail(callId: string, recordingId?: string) {
     setDropVoicemailPending(true);
     setEndCallError(null);
     try {
-      onDeskChanged(await dropVoicemail(callId, { campaignId: campaign?.id }));
+      onDeskChanged(await dropVoicemail(callId, { campaignId: campaign?.id, recordingId }));
     } catch (error) {
       setEndCallError(error instanceof Error ? error.message : "Could not drop voicemail");
     } finally {
@@ -615,6 +615,18 @@ function LeadQueue({
         <p>No live call is active. Start the next call from the campaign queue.</p>
       </div>
       {error && <p className="form-error">{error}</p>}
+      {showRecommendedCall && recommended && (
+        <div className="recommended-call">
+          <h3>Next lead</h3>
+          <p>
+            {recommended.name}, {recommended.phoneNumber}
+          </p>
+          <button className="primary-action teal-action" disabled={pending || !canStartCalls} onClick={onCallNext} type="button">
+            <PhoneCall size={17} />
+            {pending ? "Starting" : "Start next call"}
+          </button>
+        </div>
+      )}
       <div className="lead-table" role="table" aria-label="Next leads">
         <div className="lead-table-row lead-table-head" role="row">
           <span>Lead</span>
@@ -643,18 +655,6 @@ function LeadQueue({
           </div>
         )}
       </div>
-      {showRecommendedCall && recommended && (
-        <div className="recommended-call">
-          <h3>Next lead</h3>
-          <p>
-            {recommended.name}, {recommended.phoneNumber}
-          </p>
-          <button className="primary-action teal-action" disabled={pending || !canStartCalls} onClick={onCallNext} type="button">
-            <PhoneCall size={17} />
-            {pending ? "Starting" : "Start next call"}
-          </button>
-        </div>
-      )}
     </article>
   );
 }
@@ -956,12 +956,18 @@ function ActiveCall({
   dropPending: boolean;
   dtmfPending: boolean;
   error: string | null;
-  onDropVoicemail: (callId: string) => Promise<void>;
+  onDropVoicemail: (callId: string, recordingId?: string) => Promise<void>;
   onHangUp: (callId: string) => Promise<void>;
   onSendDtmf: (callId: string, digit: string) => Promise<void>;
   pending: boolean;
 }) {
   const activeCall = desk.activeCall;
+  const defaultRecordingId = activeCall?.recordingId ?? desk.recordings[0]?.id ?? "";
+  const [selectedRecordingId, setSelectedRecordingId] = useState(defaultRecordingId);
+  useEffect(() => {
+    setSelectedRecordingId(defaultRecordingId);
+  }, [activeCall?.id, defaultRecordingId]);
+
   if (!activeCall) {
     return (
       <article className="panel active-call">
@@ -973,6 +979,8 @@ function ActiveCall({
 
   const durationLabel = activeCall.status === "bridged" ? "connected" : activeCall.status;
   const voicemailSignal = formatVoicemailSignal(activeCall.voicemailSignal);
+  const selectedRecording = desk.recordings.find((recording) => recording.id === selectedRecordingId);
+  const dropRecordingId = selectedRecording?.id ?? activeCall.recordingId ?? undefined;
   return (
     <article className="panel active-call">
       <PanelHeader icon={PhoneCall} title="Active call" meta={activeCall.status} />
@@ -992,8 +1000,8 @@ function ActiveCall({
         </button>
         <button
           className="primary-action"
-          disabled={pending || dropPending}
-          onClick={() => onDropVoicemail(activeCall.id)}
+          disabled={pending || dropPending || !dropRecordingId}
+          onClick={() => onDropVoicemail(activeCall.id, dropRecordingId)}
           type="button"
         >
           <Voicemail size={17} />
@@ -1018,7 +1026,21 @@ function ActiveCall({
         </div>
         <div>
           <span>Recording</span>
-          <strong>{activeCall.recordingName}</strong>
+          <label className="compact-select">
+            <select
+              disabled={pending || dropPending || desk.recordings.length === 0}
+              onChange={(event) => setSelectedRecordingId(event.target.value)}
+              value={selectedRecordingId}
+            >
+              {desk.recordings.map((recording) => (
+                <option key={recording.id} value={recording.id}>
+                  {recording.name}
+                  {recording.status === "default" ? " (default)" : ""}
+                </option>
+              ))}
+            </select>
+          </label>
+          {!desk.recordings.length && <strong>No voicemail recordings</strong>}
         </div>
       </div>
       <div className="timeline">

@@ -235,9 +235,9 @@ export async function uploadRecording(input: {
   makeDefault: boolean;
 }): Promise<CreateRecordingResponse> {
   const formData = new FormData();
-  formData.set("file", input.file);
   formData.set("name", input.name);
   formData.set("makeDefault", String(input.makeDefault));
+  formData.set("file", input.file);
 
   return apiFetch<CreateRecordingResponse>("/admin/recordings", {
     method: "POST",

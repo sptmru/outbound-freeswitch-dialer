@@ -1,9 +1,10 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import type { AgentDeskResponse, PublicUser } from "./types";
 
 const apiMocks = vi.hoisted(() => ({
+  dropVoicemail: vi.fn(),
   fetchAgentDesk: vi.fn(),
   fetchMe: vi.fn(),
   getStoredToken: vi.fn()
@@ -13,6 +14,7 @@ vi.mock("./api", async () => {
   const actual = await vi.importActual<typeof import("./api")>("./api");
   return {
     ...actual,
+    dropVoicemail: apiMocks.dropVoicemail,
     fetchAgentDesk: apiMocks.fetchAgentDesk,
     fetchMe: apiMocks.fetchMe,
     getStoredToken: apiMocks.getStoredToken
@@ -88,6 +90,50 @@ describe("App Agent Desk empty states", () => {
     expect(screen.queryByText(/Recommended next:/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Default voicemail/)).not.toBeInTheDocument();
   });
+
+  it("drops voicemail with the selected active-call recording", async () => {
+    const activeDesk = deskResponse({
+      activeCall: {
+        id: "33333333-3333-4333-8333-333333333333",
+        state: "bridged",
+        leadName: "Avery Johnson",
+        phoneNumber: "+15551234567",
+        durationSeconds: 12,
+        status: "bridged",
+        voicemailSignal: "detected",
+        recordingId: "44444444-4444-4444-8444-444444444444",
+        recordingName: "Default voicemail",
+        timeline: []
+      },
+      recordings: [
+        recordingRow({
+          id: "44444444-4444-4444-8444-444444444444",
+          name: "Default voicemail",
+          status: "default"
+        }),
+        recordingRow({
+          id: "55555555-5555-4555-8555-555555555555",
+          name: "Alternate voicemail",
+          status: "ready"
+        })
+      ]
+    });
+    apiMocks.fetchAgentDesk.mockResolvedValue(activeDesk);
+    apiMocks.dropVoicemail.mockResolvedValue(deskResponse({ activeCall: null }));
+
+    render(<App />);
+
+    const recordingSelect = await screen.findByDisplayValue("Default voicemail (default)");
+    fireEvent.change(recordingSelect, { target: { value: "55555555-5555-4555-8555-555555555555" } });
+    fireEvent.click(screen.getByRole("button", { name: /Drop voicemail/ }));
+
+    await waitFor(() => {
+      expect(apiMocks.dropVoicemail).toHaveBeenCalledWith("33333333-3333-4333-8333-333333333333", {
+        campaignId: "11111111-1111-4111-8111-111111111111",
+        recordingId: "55555555-5555-4555-8555-555555555555"
+      });
+    });
+  });
 });
 
 function userRow(overrides: Partial<PublicUser> = {}): PublicUser {
@@ -132,7 +178,19 @@ function deskResponse(overrides: Partial<AgentDeskResponse> = {}): AgentDeskResp
       suppressed: 0
     },
     leads: [],
+    recordings: [recordingRow()],
     activeCall: null,
+    ...overrides
+  };
+}
+
+function recordingRow(
+  overrides: Partial<AgentDeskResponse["recordings"][number]> = {}
+): AgentDeskResponse["recordings"][number] {
+  return {
+    id: "44444444-4444-4444-8444-444444444444",
+    name: "Default voicemail",
+    status: "default",
     ...overrides
   };
 }

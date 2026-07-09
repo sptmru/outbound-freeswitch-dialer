@@ -812,6 +812,18 @@ input[type="checkbox"] {
   line-height: 1.35;
 }
 
+.compact-select {
+  display: block;
+  min-width: 0;
+}
+
+.compact-select select {
+  font-size: 13px;
+  min-height: 34px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .voicemail-signal.detected {
   background: #fff6ed;
 }

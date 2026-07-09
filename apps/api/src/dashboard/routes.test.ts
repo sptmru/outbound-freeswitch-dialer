@@ -231,6 +231,9 @@ describe("dashboard route helpers", () => {
       if (sql.includes("from calls") && sql.includes("join agents")) {
         return rows([]);
       }
+      if (sql.includes("from recordings")) {
+        return rows([]);
+      }
       if (sql.includes("today_calls")) {
         return rows([{ today_calls: "0", voicemails_dropped: "0", suppressed: "0" }]);
       }
@@ -243,6 +246,7 @@ describe("dashboard route helpers", () => {
     assert.equal(result.campaign, null);
     assert.deepEqual(result.availableCampaigns, []);
     assert.deepEqual(result.leads, []);
+    assert.deepEqual(result.recordings, []);
     assert.equal(result.activeCall, null);
     assert.equal(result.softphone.status, "offline");
     assert.ok(!serialized.includes("campaign_demo_solar_followup"));

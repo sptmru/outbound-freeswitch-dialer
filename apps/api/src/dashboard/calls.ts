@@ -687,13 +687,15 @@ export async function dropVoicemailForCall(
   pool: pg.Pool,
   config: AppConfig,
   userId: string,
-  callId: string
+  callId: string,
+  recordingId?: string
 ): Promise<{ ok: true } | { ok: false; statusCode: 404 | 409 | 502; message: string }> {
   const result = await pool.query<{
     agent_id: string;
     contact_id: string | null;
     agent_leg_uuid: string | null;
     customer_leg_uuid: string | null;
+    selected_recording_id: string | null;
     runtime_file_path: string | null;
   }>(
     `
@@ -702,23 +704,28 @@ export async function dropVoicemailForCall(
         calls.contact_id,
         agent_leg.freeswitch_uuid as agent_leg_uuid,
         customer_leg.freeswitch_uuid as customer_leg_uuid,
-        recordings.runtime_file_path
+        selected_recording.id as selected_recording_id,
+        coalesce(selected_recording.runtime_file_path, recordings.runtime_file_path) as runtime_file_path
       from calls
       join agents on agents.id = calls.agent_id
       left join call_legs agent_leg on agent_leg.call_id = calls.id and agent_leg.type = 'agent'
       left join call_legs customer_leg on customer_leg.call_id = calls.id and customer_leg.type = 'customer'
       left join recordings on recordings.id = calls.recording_id and recordings.is_active = true
+      left join recordings selected_recording on selected_recording.id = $3 and selected_recording.is_active = true
       where calls.id = $1
         and agents.user_id = $2
         and calls.ended_at is null
         and calls.state not in ('completed', 'failed', 'canceled')
       limit 1
     `,
-    [callId, userId]
+    [callId, userId, recordingId ?? null]
   );
   const row = result.rows[0];
   if (!row) {
     return { ok: false, statusCode: 404, message: "Active call not found" };
+  }
+  if (recordingId && !row.selected_recording_id) {
+    return { ok: false, statusCode: 409, message: "Selected voicemail recording is not available" };
   }
   if (!row.customer_leg_uuid) {
     return { ok: false, statusCode: 409, message: "Customer leg is not ready for voicemail drop" };
@@ -757,13 +764,14 @@ export async function dropVoicemailForCall(
         update calls
         set state = 'completed',
             outcome = 'voicemail_dropped',
+            recording_id = coalesce($2, recording_id),
             ended_at = now(),
             updated_at = now()
         where id = $1
           and ended_at is null
           and state not in ('completed', 'failed', 'canceled')
       `,
-      [callId]
+      [callId, row.selected_recording_id]
     );
     if (!updated.rowCount) {
       await client.query("rollback");
@@ -782,7 +790,7 @@ export async function dropVoicemailForCall(
         row.agent_id,
         row.agent_leg_uuid,
         row.customer_leg_uuid,
-        JSON.stringify({ recordingPath: row.runtime_file_path })
+        JSON.stringify({ recordingId: row.selected_recording_id, recordingPath: row.runtime_file_path })
       ]
     );
     await client.query(

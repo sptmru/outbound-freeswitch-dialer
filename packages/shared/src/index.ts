@@ -95,6 +95,11 @@ export interface AgentDeskResponse {
     suppressed: number;
   };
   leads: LeadSummary[];
+  recordings: Array<{
+    id: string;
+    name: string;
+    status: string;
+  }>;
   activeCall: {
     id: string;
     state: CallState;
@@ -104,6 +109,7 @@ export interface AgentDeskResponse {
     durationSeconds: number;
     status: "dialing" | "ringing" | "bridged" | "voicemail_drop" | "completed";
     voicemailSignal: "none" | "possible" | "detected";
+    recordingId: string | null;
     recordingName: string;
     timeline: Array<{ at: string; label: string }>;
   } | null;
@@ -284,6 +290,7 @@ export interface EndCallRequest {
 
 export interface DropVoicemailRequest {
   campaignId?: string;
+  recordingId?: string;
 }
 
 export interface SendDtmfRequest {

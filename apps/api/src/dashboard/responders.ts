@@ -15,12 +15,14 @@ export async function buildAgentDeskResponse(
   user: PublicUser,
   selectedCampaignId?: string
 ): Promise<AgentDeskResponse> {
-  const [campaign, availableCampaigns, activeCall, metrics] = await Promise.all([
+  const [campaign, availableCampaigns, activeCall, metrics, recordings] = await Promise.all([
     getAgentCampaign(pool, selectedCampaignId, { userId: user.id }),
     getAgentCampaigns(pool),
     getActiveCall(pool, user.id),
-    getAgentMetrics(pool, user.id)
+    getAgentMetrics(pool, user.id),
+    getRecordings(pool)
   ]);
+  const agentRecordings = recordings.map(({ id, name, status }) => ({ id, name, status }));
   if (!campaign) {
     return {
       user,
@@ -33,6 +35,7 @@ export async function buildAgentDeskResponse(
       },
       metrics,
       leads: [],
+      recordings: agentRecordings,
       activeCall
     };
   }
@@ -57,6 +60,7 @@ export async function buildAgentDeskResponse(
     },
     metrics,
     leads,
+    recordings: agentRecordings,
     activeCall
   };
 }
@@ -135,6 +139,7 @@ async function getActiveCall(pool: pg.Pool, userId: string): Promise<AgentDeskRe
     started_at: Date | null;
     answered_at: Date | null;
     voicemail_signal_status: string | null;
+    recording_id: string | null;
     recording_name: string | null;
   }>(
     `
@@ -146,6 +151,7 @@ async function getActiveCall(pool: pg.Pool, userId: string): Promise<AgentDeskRe
         calls.started_at,
         calls.answered_at,
         calls.voicemail_signal_status,
+        calls.recording_id,
         recordings.name as recording_name
       from calls
       join agents on agents.id = calls.agent_id
@@ -176,6 +182,7 @@ async function getActiveCall(pool: pg.Pool, userId: string): Promise<AgentDeskRe
     durationSeconds,
     status: mapCallStatus(row.state),
     voicemailSignal: mapVoicemailSignal(row.voicemail_signal_status),
+    recordingId: row.recording_id,
     recordingName: row.recording_name ?? "No default recording",
     timeline: await getCallTimeline(pool, row.id)
   };
