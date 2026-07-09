@@ -1030,18 +1030,18 @@ function parseGatewayStatus(raw: string): FreeSwitchTrunkStatus {
 
 function summarizeGatewayStatus(status: FreeSwitchTrunkStatus): string {
   if (status === "ready") {
-    return "SIP trunk gateway is registered and ready for live originate tests.";
+    return "SIP trunk is configured and connected.";
   }
   if (status === "dns_error") {
-    return "FreeSWITCH cannot resolve the configured SIP trunk proxy.";
+    return "SIP trunk is unavailable due to DNS resolution error.";
   }
   if (status === "registration_failed") {
-    return "SIP trunk gateway is configured but not registered.";
+    return "SIP trunk is configured but failed to register.";
   }
   if (status === "error") {
-    return "Could not read SIP trunk gateway status.";
+    return "Could not read SIP trunk status.";
   }
-  return "SIP trunk gateway status is not conclusive yet.";
+  return "SIP trunk status is not conclusive yet.";
 }
 
 function parseBgapiJobUuid(body: string): string | undefined {
