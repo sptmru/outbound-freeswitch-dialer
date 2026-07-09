@@ -147,6 +147,11 @@ export function startFreeSwitchEventListener(config: AppConfig, pool: pg.Pool, l
 
 async function persistFreeSwitchEvent(pool: pg.Pool, frame: EslFrame): Promise<void> {
   const eventName = frame.headers["event-name"];
+  if (eventName === "BACKGROUND_JOB") {
+    await persistBackgroundJobEvent(pool, frame);
+    return;
+  }
+
   const callId = frame.headers["variable_outbound_dialer_call_id"];
   if (!eventName || !callId || !isUuid(callId)) {
     return;
@@ -272,6 +277,103 @@ async function persistFreeSwitchEvent(pool: pg.Pool, frame: EslFrame): Promise<v
   }
 }
 
+async function persistBackgroundJobEvent(pool: pg.Pool, frame: EslFrame): Promise<void> {
+  const jobUuid = frame.headers["job-uuid"];
+  if (!jobUuid || !isFailedBackgroundJob(frame)) {
+    return;
+  }
+
+  const result = await pool.query<{ call_id: string; agent_id: string | null; customer_leg_uuid: string | null }>(
+    `
+      select
+        calls.id as call_id,
+        calls.agent_id,
+        call_legs.freeswitch_uuid as customer_leg_uuid
+      from call_events
+      join calls on calls.id = call_events.call_id
+      left join call_legs on call_legs.call_id = calls.id and call_legs.type = 'customer'
+      where call_events.event_type = 'freeswitch_originate_queued'
+        and call_events.raw_json ->> 'jobUuid' = $1
+        and calls.ended_at is null
+        and calls.state not in ('completed', 'failed', 'canceled')
+      order by call_events.created_at desc
+      limit 1
+    `,
+    [jobUuid]
+  );
+  const row = result.rows[0];
+  if (!row) {
+    return;
+  }
+
+  const raw = JSON.stringify({
+    headers: frame.headers,
+    body: frame.body
+  });
+
+  await pool.query(
+    `
+      insert into call_events (
+        call_id,
+        agent_id,
+        event_type,
+        state,
+        freeswitch_event_name,
+        api_command_name,
+        customer_leg_uuid,
+        raw_json
+      )
+      values ($1, $2, 'freeswitch_background_job_failed', 'failed', 'BACKGROUND_JOB', $3, $4, $5::jsonb)
+    `,
+    [row.call_id, row.agent_id, frame.headers["job-command"] ?? "bgapi originate", row.customer_leg_uuid, raw]
+  );
+  await pool.query(
+    `
+      update calls
+      set state = 'failed',
+          outcome = 'failed',
+          ended_at = coalesce(ended_at, now()),
+          updated_at = now()
+      where id = $1
+        and state not in ('completed', 'failed', 'canceled')
+    `,
+    [row.call_id]
+  );
+  await pool.query(
+    `
+      update call_legs
+      set state = 'ended',
+          ended_at = coalesce(ended_at, now())
+      where call_id = $1
+        and type = 'customer'
+    `,
+    [row.call_id]
+  );
+  await pool.query(
+    `
+      update agents
+      set status = 'ready',
+          updated_at = now()
+      where id = $1
+    `,
+    [row.agent_id]
+  );
+  await pool.query(
+    `
+      update contacts
+      set status = 'new',
+          updated_at = now()
+      where id = (
+        select contact_id
+        from calls
+        where id = $1
+      )
+        and status = 'calling'
+    `,
+    [row.call_id]
+  );
+}
+
 function extractFrames(buffer: string): { frames: EslFrame[]; rest: string } {
   const frames: EslFrame[] = [];
   let rest = buffer;
@@ -347,6 +449,10 @@ function mapHangupCauseToOutcome(hangupCause?: string): string {
     return "not_answered";
   }
   return "failed";
+}
+
+function isFailedBackgroundJob(frame: EslFrame): boolean {
+  return frame.body.trimStart().startsWith("-ERR");
 }
 
 function isTerminalEvent(eventName: string): boolean {

@@ -151,9 +151,8 @@ function buildCustomerDialString(config: AppConfig, destinationNumber: string): 
 
 function normalizeDestinationForDialString(value: string): string {
   const trimmed = value.trim();
-  const hasPlus = trimmed.startsWith("+");
-  const digits = trimmed.replace(/\D/g, "");
-  return `${hasPlus ? "+" : ""}${digits}`;
+  // Some SIP trunks reject E.164 user parts with a leading plus.
+  return trimmed.replace(/\D/g, "");
 }
 
 function escapeOriginateVariable(value: string): string {
