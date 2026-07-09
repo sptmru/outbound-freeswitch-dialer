@@ -42,6 +42,24 @@ render() {
     "$src" > "$dst"
 }
 
+ensure_module_load() {
+  module="$1"
+  module_file="/usr/lib/freeswitch/mod/${module}.so"
+  modules_conf="$CONFIG_DIR/autoload_configs/modules.conf.xml"
+
+  if [ ! -f "$module_file" ]; then
+    echo "FreeSWITCH module ${module} is not available at ${module_file}; skipping autoload" >&2
+    return
+  fi
+
+  if grep -Eq "<load module=\"${module}\"[[:space:]]*/?>" "$modules_conf"; then
+    return
+  fi
+
+  sed -i "/^[[:space:]]*<\/modules>/i\\    <load module=\"${module}\"/>" "$modules_conf"
+  echo "Enabled FreeSWITCH module ${module} in ${modules_conf}"
+}
+
 legacy_env() {
   name="$1"
   legacy_prefix="MA${EMPTY:-}XO"
@@ -88,10 +106,13 @@ mkdir -p "$CONFIG_DIR/directory"
 ln -s "$GENERATED_DIR/directory/default" "$CONFIG_DIR/directory/default"
 
 render "$TEMPLATE_DIR/autoload_configs/event_socket.conf.xml.tpl" "$CONFIG_DIR/autoload_configs/event_socket.conf.xml"
+render "$TEMPLATE_DIR/autoload_configs/avmd.conf.xml.tpl" "$CONFIG_DIR/autoload_configs/avmd.conf.xml"
 render "$TEMPLATE_DIR/vars.xml.tpl" "$CONFIG_DIR/vars.xml"
 render "$TEMPLATE_DIR/sip_profiles/internal-webrtc.xml.tpl" "$CONFIG_DIR/sip_profiles/internal-webrtc.xml"
 render "$TEMPLATE_DIR/dialplan/default/outbound-sip-trunk.xml.tpl" "$CONFIG_DIR/dialplan/default/outbound-sip-trunk.xml"
 render "$TEMPLATE_DIR/dialplan/default/voicemail-drop.xml.tpl" "$CONFIG_DIR/dialplan/default/voicemail-drop.xml"
+ensure_module_load "mod_avmd"
+ensure_module_load "mod_amd"
 
 legacy_name="ma${EMPTY:-}xo"
 rm -f "$CONFIG_DIR/dialplan/default/outbound-${legacy_name}.xml"

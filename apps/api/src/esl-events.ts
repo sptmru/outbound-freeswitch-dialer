@@ -1,6 +1,7 @@
 import net from "node:net";
 import type pg from "pg";
 import type { AppConfig } from "./config.js";
+import { sendFreeSwitchApiCommand } from "./esl.js";
 
 interface Logger {
   error: (value: unknown, message?: string) => void;
@@ -15,6 +16,7 @@ interface EslFrame {
 
 const EVENT_NAMES = [
   "BACKGROUND_JOB",
+  "CUSTOM",
   "CHANNEL_CREATE",
   "CHANNEL_ANSWER",
   "CHANNEL_BRIDGE",
@@ -100,7 +102,7 @@ export function startFreeSwitchEventListener(config: AppConfig, pool: pg.Pool, l
         }
 
         if (stage === "events") {
-          void persistFreeSwitchEvent(pool, frame).catch((error: unknown) => {
+          void persistFreeSwitchEvent(config, pool, frame).catch((error: unknown) => {
             logger.error(error, "failed to persist FreeSWITCH event");
           });
         }
@@ -145,10 +147,14 @@ export function startFreeSwitchEventListener(config: AppConfig, pool: pg.Pool, l
   };
 }
 
-async function persistFreeSwitchEvent(pool: pg.Pool, frame: EslFrame): Promise<void> {
+async function persistFreeSwitchEvent(config: AppConfig, pool: pg.Pool, frame: EslFrame): Promise<void> {
   const eventName = frame.headers["event-name"];
   if (eventName === "BACKGROUND_JOB") {
     await persistBackgroundJobEvent(pool, frame);
+    return;
+  }
+  if (eventName === "CUSTOM" && isVoicemailDetectionEvent(frame)) {
+    await persistVoicemailDetectionEvent(pool, frame);
     return;
   }
 
@@ -253,6 +259,13 @@ async function persistFreeSwitchEvent(pool: pg.Pool, frame: EslFrame): Promise<v
       `,
       [callId]
     );
+
+    if (legType === "customer" && legUuid) {
+      await startVoicemailDetection(config, pool, {
+        callId,
+        customerLegUuid: legUuid
+      });
+    }
   }
 
   if (eventName === "CHANNEL_HANGUP_COMPLETE") {
@@ -298,6 +311,146 @@ async function persistFreeSwitchEvent(pool: pg.Pool, frame: EslFrame): Promise<v
       [callId]
     );
   }
+}
+
+async function startVoicemailDetection(
+  config: AppConfig,
+  pool: pg.Pool,
+  input: { callId: string; customerLegUuid: string }
+): Promise<void> {
+  const alreadyStarted = await pool.query<{ id: string }>(
+    `
+      select id
+      from call_events
+      where call_id = $1
+        and customer_leg_uuid = $2
+        and event_type = 'voicemail_detection_started'
+      limit 1
+    `,
+    [input.callId, input.customerLegUuid]
+  );
+  if (alreadyStarted.rowCount) {
+    return;
+  }
+
+  const raw: Record<string, unknown> = {};
+  const modules: Array<{ module: "mod_avmd" | "mod_amd"; command: string }> = [
+    { module: "mod_avmd", command: `avmd ${input.customerLegUuid} start` },
+    { module: "mod_amd", command: `amd ${input.customerLegUuid} start` }
+  ];
+
+  for (const module of modules) {
+    try {
+      const moduleExists = await sendFreeSwitchApiCommand(config, `module_exists ${module.module}`);
+      if (moduleExists.body.trim() !== "true") {
+        raw[module.module] = { status: "unavailable" };
+        continue;
+      }
+      const response = await sendFreeSwitchApiCommand(config, module.command);
+      raw[module.module] = { command: module.command, status: "started", response: response.body.trim() };
+    } catch (error) {
+      raw[module.module] = {
+        command: module.command,
+        error: error instanceof Error ? error.message : String(error),
+        status: "failed"
+      };
+    }
+  }
+
+  await pool.query(
+    `
+      insert into call_events (
+        call_id,
+        agent_id,
+        event_type,
+        state,
+        api_command_name,
+        customer_leg_uuid,
+        raw_json
+      )
+      values (
+        $1,
+        (select agent_id from calls where id = $1),
+        'voicemail_detection_started',
+        'bridged',
+        'voicemail detection start',
+        $2,
+        $3::jsonb
+      )
+    `,
+    [input.callId, input.customerLegUuid, JSON.stringify(raw)]
+  );
+}
+
+async function persistVoicemailDetectionEvent(pool: pg.Pool, frame: EslFrame): Promise<void> {
+  const legUuid = frame.headers["unique-id"] ?? frame.headers["variable_uuid"] ?? null;
+  const eventSubclass = frame.headers["event-subclass"] ?? "";
+  if (!legUuid) {
+    return;
+  }
+
+  const call = await pool.query<{ call_id: string; agent_id: string | null }>(
+    `
+      select calls.id as call_id, calls.agent_id
+      from call_legs
+      join calls on calls.id = call_legs.call_id
+      where call_legs.freeswitch_uuid = $1
+        and call_legs.type = 'customer'
+        and calls.ended_at is null
+        and calls.state not in ('completed', 'failed', 'canceled')
+      order by calls.created_at desc
+      limit 1
+    `,
+    [legUuid]
+  );
+  const row = call.rows[0];
+  if (!row) {
+    return;
+  }
+
+  const signal = mapVoicemailDetectionSignal(frame);
+  if (!signal) {
+    return;
+  }
+
+  const raw = JSON.stringify({
+    headers: frame.headers,
+    body: frame.body
+  });
+
+  await pool.query(
+    `
+      insert into voicemail_detection_events (call_id, signal_type, confidence, raw_json)
+      values ($1, $2, $3, $4::jsonb)
+    `,
+    [row.call_id, signal.signalType, signal.confidence, raw]
+  );
+  await pool.query(
+    `
+      insert into call_events (
+        call_id,
+        agent_id,
+        event_type,
+        state,
+        freeswitch_event_name,
+        customer_leg_uuid,
+        raw_json
+      )
+      values ($1, $2, $3, 'bridged', 'CUSTOM', $4, $5::jsonb)
+    `,
+    [row.call_id, row.agent_id, signal.eventType, legUuid, raw]
+  );
+  await pool.query(
+    `
+      update calls
+      set voicemail_signal_status = $2,
+          updated_at = now()
+      where id = $1
+        and state not in ('completed', 'failed', 'canceled')
+        and ($2 = 'detected' or voicemail_signal_status is null or voicemail_signal_status = 'none')
+    `,
+    [row.call_id, signal.status]
+  );
 }
 
 async function persistBackgroundJobEvent(pool: pg.Pool, frame: EslFrame): Promise<void> {
@@ -437,6 +590,84 @@ function parseHeaders(value: string): Record<string, string> {
       })
       .filter((entry): entry is [string, string] => Boolean(entry))
   );
+}
+
+function isVoicemailDetectionEvent(frame: EslFrame): boolean {
+  const eventSubclass = frame.headers["event-subclass"]?.toLowerCase() ?? "";
+  if (eventSubclass === "avmd::beep") {
+    return true;
+  }
+  if (eventSubclass.includes("amd")) {
+    return true;
+  }
+  return Object.entries(frame.headers).some(([key, value]) => {
+    const normalizedKey = key.toLowerCase();
+    return normalizedKey.includes("amd") || normalizedKey.includes("beep") || value.toLowerCase().includes("voicemail");
+  });
+}
+
+function mapVoicemailDetectionSignal(
+  frame: EslFrame
+): { confidence: number | null; eventType: string; signalType: string; status: "possible" | "detected" } | null {
+  const eventSubclass = frame.headers["event-subclass"]?.toLowerCase() ?? "";
+  if (eventSubclass === "avmd::beep") {
+    return {
+      confidence: null,
+      eventType: "voicemail_beep_detected",
+      signalType: "beep",
+      status: "detected"
+    };
+  }
+
+  const values = Object.values(frame.headers)
+    .join(" ")
+    .toLowerCase();
+  const result =
+    frame.headers["amd-result"] ??
+    frame.headers["amd-status"] ??
+    frame.headers["answering-machine-detection"] ??
+    frame.headers["machine"] ??
+    "";
+  const normalizedResult = result.toLowerCase();
+
+  if (normalizedResult.includes("human") || values.includes("amd_status=human")) {
+    return null;
+  }
+
+  if (
+    eventSubclass.includes("amd") &&
+    (normalizedResult.includes("machine") ||
+      normalizedResult.includes("voicemail") ||
+      normalizedResult.includes("answering") ||
+      values.includes("machine") ||
+      values.includes("voicemail"))
+  ) {
+    return {
+      confidence: parseConfidence(frame.headers["amd-confidence"] ?? frame.headers["confidence"]),
+      eventType: "voicemail_machine_detected",
+      signalType: "machine",
+      status: "detected"
+    };
+  }
+
+  if (eventSubclass.includes("amd")) {
+    return {
+      confidence: parseConfidence(frame.headers["amd-confidence"] ?? frame.headers["confidence"]),
+      eventType: "voicemail_machine_possible",
+      signalType: "machine_possible",
+      status: "possible"
+    };
+  }
+
+  return null;
+}
+
+function parseConfidence(value: string | undefined): number | null {
+  if (!value) {
+    return null;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function mapEventToCallState(eventName: string, hangupCause?: string, legType = "customer"): string {

@@ -844,6 +844,7 @@ function ActiveCall({
   }
 
   const durationLabel = activeCall.status === "bridged" ? "connected" : activeCall.status;
+  const voicemailSignal = formatVoicemailSignal(activeCall.voicemailSignal);
   return (
     <article className="panel active-call">
       <PanelHeader icon={PhoneCall} title="Active call" meta={activeCall.status} />
@@ -868,9 +869,10 @@ function ActiveCall({
       </div>
       {error && <p className="form-error">{error}</p>}
       <div className="signal-strip">
-        <div>
+        <div className={`voicemail-signal ${activeCall.voicemailSignal}`}>
           <span>VM/beep signal</span>
-          <strong>{activeCall.voicemailSignal}</strong>
+          <strong>{voicemailSignal.label}</strong>
+          <small>{voicemailSignal.detail}</small>
         </div>
         <div>
           <span>Recording</span>
@@ -887,6 +889,19 @@ function ActiveCall({
       </div>
     </article>
   );
+}
+
+function formatVoicemailSignal(signal: NonNullable<AgentDeskResponse["activeCall"]>["voicemailSignal"]): {
+  detail: string;
+  label: string;
+} {
+  if (signal === "detected") {
+    return { detail: "Beep or voicemail signal detected", label: "Detected" };
+  }
+  if (signal === "possible") {
+    return { detail: "Detection is not yet conclusive", label: "Possible VM" };
+  }
+  return { detail: "Listening during the connected call", label: "Listening" };
 }
 
 function SoftphonePanel({

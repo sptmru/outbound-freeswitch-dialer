@@ -751,6 +751,28 @@ input[type="checkbox"] {
   text-transform: uppercase;
 }
 
+.signal-strip small {
+  color: #607086;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.voicemail-signal.detected {
+  background: #fff6ed;
+}
+
+.voicemail-signal.detected strong {
+  color: #9d2518;
+}
+
+.voicemail-signal.possible {
+  background: #fffbea;
+}
+
+.voicemail-signal.possible strong {
+  color: #805b00;
+}
+
 .timeline-item,
 .table-row {
   align-items: center;
