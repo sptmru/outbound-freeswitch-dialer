@@ -1318,9 +1318,11 @@ function CampaignCard({
             />
             Start AVMD during early media
           </label>
-          <p className="avmd-warning">
-            May detect voicemail beeps before answer, but slightly increases the chance of false positives from carrier tones.
-          </p>
+          {earlyMediaAvmdEnabled && (
+            <p className="avmd-warning">
+              May detect voicemail beeps before answer, but slightly increases the chance of false positives from carrier tones.
+            </p>
+          )}
           <button className="primary-action compact-action" disabled={pending} type="submit">
             <CheckCircle2 size={16} />
             {pending ? "Saving" : "Save"}
@@ -1720,9 +1722,11 @@ function CreateCampaignForm({ onChanged }: { onChanged: () => Promise<void> }) {
             AVMD in early media
           </label>
         </div>
-        <p className="avmd-warning">
-          May detect voicemail beeps before answer, but slightly increases the chance of false positives from carrier tones.
-        </p>
+        {earlyMediaAvmdEnabled && (
+          <p className="avmd-warning">
+            May detect voicemail beeps before answer, but slightly increases the chance of false positives from carrier tones.
+          </p>
+        )}
         {error && <p className="form-error">{error}</p>}
         <button className="primary-action" disabled={pending} type="submit">
           <Upload size={17} />

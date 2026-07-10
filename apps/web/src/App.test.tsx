@@ -213,7 +213,7 @@ describe("App Agent Desk empty states", () => {
     expect(screen.getAllByTitle("Finish the active call first")).toHaveLength(4);
   });
 
-  it("shows the campaign early-media AVMD setting with a false-positive warning", async () => {
+  it("shows the campaign early-media AVMD warning only while the setting is enabled", async () => {
     const admin = userRow({ role: "admin" });
     apiMocks.fetchMe.mockResolvedValue({ user: admin });
     apiMocks.fetchAgentDesk.mockResolvedValue(deskResponse({ user: admin }));
@@ -236,9 +236,22 @@ describe("App Agent Desk empty states", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Campaigns" }));
 
     expect(await screen.findByText("Early-media AVMD")).toBeInTheDocument();
+    const createAvmdToggle = screen.getByRole("checkbox", { name: "AVMD in early media" });
+    expect(createAvmdToggle).not.toBeChecked();
+    expect(screen.queryByText(/slightly increases the chance of false positives/i)).not.toBeInTheDocument();
+
+    fireEvent.click(createAvmdToggle);
+    expect(screen.getByText(/slightly increases the chance of false positives/i)).toBeInTheDocument();
+    fireEvent.click(createAvmdToggle);
+    expect(screen.queryByText(/slightly increases the chance of false positives/i)).not.toBeInTheDocument();
+
     fireEvent.click(screen.getByTitle("Edit campaign"));
-    expect(screen.getByRole("checkbox", { name: "Start AVMD during early media" })).toBeChecked();
-    expect(screen.getAllByText(/slightly increases the chance of false positives/i)).not.toHaveLength(0);
+    const editAvmdToggle = screen.getByRole("checkbox", { name: "Start AVMD during early media" });
+    expect(editAvmdToggle).toBeChecked();
+    expect(screen.getByText(/slightly increases the chance of false positives/i)).toBeInTheDocument();
+
+    fireEvent.click(editAvmdToggle);
+    expect(screen.queryByText(/slightly increases the chance of false positives/i)).not.toBeInTheDocument();
   });
 
   it("plays a call recording and keeps technical events collapsed until requested", async () => {
