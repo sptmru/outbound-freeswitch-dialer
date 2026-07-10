@@ -19,6 +19,7 @@ interface EslFrame {
 const EVENT_NAMES = [
   "BACKGROUND_JOB",
   "CHANNEL_CREATE",
+  "CHANNEL_PROGRESS_MEDIA",
   "CHANNEL_ANSWER",
   "CHANNEL_BRIDGE",
   "CHANNEL_HANGUP",
@@ -274,6 +275,19 @@ async function persistFreeSwitchEvent(config: AppConfig, pool: pg.Pool, frame: E
     );
   }
 
+  if (eventName === "CHANNEL_PROGRESS_MEDIA" && legType === "customer" && legUuid) {
+    await startCallRecording(config, pool, {
+      callId,
+      customerLegUuid: legUuid,
+      phase: "early_media"
+    });
+    await startVoicemailDetection(config, pool, {
+      callId,
+      customerLegUuid: legUuid,
+      phase: "early_media"
+    });
+  }
+
   if ((eventName === "CHANNEL_ANSWER" && legType === "customer") || eventName === "CHANNEL_BRIDGE") {
     await pool.query(
       `
@@ -290,11 +304,13 @@ async function persistFreeSwitchEvent(config: AppConfig, pool: pg.Pool, frame: E
     if (legType === "customer" && legUuid) {
       await startCallRecording(config, pool, {
         callId,
-        customerLegUuid: legUuid
+        customerLegUuid: legUuid,
+        phase: "answered"
       });
       await startVoicemailDetection(config, pool, {
         callId,
-        customerLegUuid: legUuid
+        customerLegUuid: legUuid,
+        phase: "answered"
       });
     }
   }
@@ -371,13 +387,16 @@ async function persistFreeSwitchEvent(config: AppConfig, pool: pg.Pool, frame: E
 }
 
 type FreeSwitchApiCommandSender = typeof sendFreeSwitchApiCommand;
+type MediaStartPhase = "early_media" | "answered";
 
 async function startCallRecording(
   config: AppConfig,
   pool: pg.Pool,
-  input: { callId: string; customerLegUuid: string },
+  input: { callId: string; customerLegUuid: string; phase?: MediaStartPhase },
   sendApiCommand: FreeSwitchApiCommandSender = sendFreeSwitchApiCommand
 ): Promise<void> {
+  const phase = input.phase ?? "answered";
+  const eventState = phase === "early_media" ? "customer_dialing" : "bridged";
   const recordingPath = buildCallRecordingPath(config.CALL_RECORDINGS_STORAGE_DIR, input.callId);
   const claimed = await pool.query<{ agent_id: string | null }>(
     `
@@ -413,13 +432,14 @@ async function startCallRecording(
           customer_leg_uuid,
           raw_json
         )
-        values ($1, $2, 'call_recording_started', 'bridged', 'uuid_record', $3, $4::jsonb)
+        values ($1, $2, 'call_recording_started', $3, 'uuid_record', $4, $5::jsonb)
       `,
       [
         input.callId,
         call.agent_id,
+        eventState,
         input.customerLegUuid,
-        JSON.stringify({ command, recordingPath, response: response.body.trim() })
+        JSON.stringify({ command, phase, recordingPath, response: response.body.trim() })
       ]
     );
   } catch (error) {
@@ -444,15 +464,17 @@ async function startCallRecording(
           customer_leg_uuid,
           raw_json
         )
-        values ($1, $2, 'call_recording_failed', 'bridged', 'uuid_record', $3, $4::jsonb)
+        values ($1, $2, 'call_recording_failed', $3, 'uuid_record', $4, $5::jsonb)
       `,
       [
         input.callId,
         call.agent_id,
+        eventState,
         input.customerLegUuid,
         JSON.stringify({
           command,
           message: error instanceof Error ? error.message : String(error),
+          phase,
           recordingPath
         })
       ]
@@ -473,37 +495,63 @@ function buildCallRecordingPath(storageDir: string, callId: string): string {
 async function startVoicemailDetection(
   config: AppConfig,
   pool: pg.Pool,
-  input: { callId: string; customerLegUuid: string }
+  input: { callId: string; customerLegUuid: string; phase?: MediaStartPhase },
+  sendApiCommand: FreeSwitchApiCommandSender = sendFreeSwitchApiCommand
 ): Promise<void> {
-  const alreadyStarted = await pool.query<{ id: string }>(
+  const phase = input.phase ?? "answered";
+  if (phase === "early_media") {
+    const enabled = await pool.query<{ early_media_avmd_enabled: boolean }>(
+      `
+        select early_media_avmd_enabled
+        from calls
+        where id = $1
+          and ended_at is null
+          and state not in ('completed', 'failed', 'canceled')
+        limit 1
+      `,
+      [input.callId]
+    );
+    if (!enabled.rows[0]?.early_media_avmd_enabled) {
+      return;
+    }
+  }
+
+  const priorStarts = await pool.query<{ raw_json: unknown }>(
     `
-      select id
+      select raw_json
       from call_events
       where call_id = $1
         and customer_leg_uuid = $2
         and event_type = 'voicemail_detection_started'
-      limit 1
     `,
     [input.callId, input.customerLegUuid]
   );
-  if (alreadyStarted.rowCount) {
+
+  const attemptedModules = new Set(
+    priorStarts.rows.flatMap((row) => getAttemptedVoicemailDetectionModules(row.raw_json))
+  );
+
+  const raw: Record<string, unknown> = {};
+  const modules: Array<{ module: "mod_avmd" | "mod_amd"; command: string }> = (
+    phase === "early_media"
+      ? [{ module: "mod_avmd" as const, command: `avmd ${input.customerLegUuid} start` }]
+      : [
+          { module: "mod_avmd" as const, command: `avmd ${input.customerLegUuid} start` },
+          { module: "mod_amd" as const, command: `amd ${input.customerLegUuid} start` }
+        ]
+  ).filter(({ module }) => !attemptedModules.has(module));
+  if (!modules.length) {
     return;
   }
 
-  const raw: Record<string, unknown> = {};
-  const modules: Array<{ module: "mod_avmd" | "mod_amd"; command: string }> = [
-    { module: "mod_avmd", command: `avmd ${input.customerLegUuid} start` },
-    { module: "mod_amd", command: `amd ${input.customerLegUuid} start` }
-  ];
-
   for (const module of modules) {
     try {
-      const moduleExists = await sendFreeSwitchApiCommand(config, `module_exists ${module.module}`);
+      const moduleExists = await sendApiCommand(config, `module_exists ${module.module}`);
       if (moduleExists.body.trim() !== "true") {
         raw[module.module] = { status: "unavailable" };
         continue;
       }
-      const response = await sendFreeSwitchApiCommand(config, module.command);
+      const response = await sendApiCommand(config, module.command);
       raw[module.module] = { command: module.command, status: "started", response: response.body.trim() };
     } catch (error) {
       raw[module.module] = {
@@ -529,14 +577,30 @@ async function startVoicemailDetection(
         $1,
         (select agent_id from calls where id = $1),
         'voicemail_detection_started',
-        'bridged',
-        'voicemail detection start',
         $2,
-        $3::jsonb
+        'voicemail detection start',
+        $3,
+        $4::jsonb
       )
     `,
-    [input.callId, input.customerLegUuid, JSON.stringify(raw)]
+    [
+      input.callId,
+      phase === "early_media" ? "customer_dialing" : "bridged",
+      input.customerLegUuid,
+      JSON.stringify({ phase, modules: raw })
+    ]
   );
+}
+
+function getAttemptedVoicemailDetectionModules(value: unknown): Array<"mod_avmd" | "mod_amd"> {
+  if (!value || typeof value !== "object") {
+    return [];
+  }
+  const record = value as Record<string, unknown>;
+  const modules = record.modules && typeof record.modules === "object"
+    ? record.modules as Record<string, unknown>
+    : record;
+  return (["mod_avmd", "mod_amd"] as const).filter((module) => module in modules);
 }
 
 async function persistVoicemailDetectionEvent(pool: pg.Pool, frame: EslFrame): Promise<void> {
@@ -546,9 +610,9 @@ async function persistVoicemailDetectionEvent(pool: pg.Pool, frame: EslFrame): P
     return;
   }
 
-  const call = await pool.query<{ call_id: string; agent_id: string | null }>(
+  const call = await pool.query<{ call_id: string; agent_id: string | null; call_state: string }>(
     `
-      select calls.id as call_id, calls.agent_id
+      select calls.id as call_id, calls.agent_id, calls.state as call_state
       from call_legs
       join calls on calls.id = call_legs.call_id
       where call_legs.freeswitch_uuid = $1
@@ -593,9 +657,9 @@ async function persistVoicemailDetectionEvent(pool: pg.Pool, frame: EslFrame): P
         customer_leg_uuid,
         raw_json
       )
-      values ($1, $2, $3, 'bridged', 'CUSTOM', $4, $5::jsonb)
+      values ($1, $2, $3, $4, 'CUSTOM', $5, $6::jsonb)
     `,
-    [row.call_id, row.agent_id, signal.eventType, legUuid, raw]
+    [row.call_id, row.agent_id, signal.eventType, row.call_state, legUuid, raw]
   );
   await pool.query(
     `
@@ -1011,7 +1075,9 @@ function isUuid(value: string): boolean {
 
 export const __testing = {
   buildCallRecordingPath,
+  eventNames: EVENT_NAMES,
   extractFrames,
+  getAttemptedVoicemailDetectionModules,
   isFailedBackgroundJob,
   isTerminalEvent,
   isUuid,
@@ -1023,6 +1089,7 @@ export const __testing = {
   mapHangupCauseToOutcome,
   resolveCustomerHangupOutcome,
   startCallRecording,
+  startVoicemailDetection,
   persistFreeSwitchEvent,
   mapVoicemailDetectionSignal,
   parseConfidence,

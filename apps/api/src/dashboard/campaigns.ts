@@ -7,6 +7,7 @@ export type AgentCampaign = {
   status: "active" | "paused" | "draft";
   manual_dialing_enabled: boolean;
   call_recording_enabled: boolean;
+  early_media_avmd_enabled: boolean;
   callable_leads: string;
   agent_registered: boolean;
 };
@@ -78,6 +79,7 @@ export async function getAgentCampaign(
       campaigns.status,
       campaigns.manual_dialing_enabled,
       campaigns.call_recording_enabled,
+      campaigns.early_media_avmd_enabled,
       count(contacts.id) filter (
         where contacts.status not in ('completed', 'suppressed')
           and suppression_entries.id is null
@@ -153,11 +155,13 @@ export async function getCampaigns(pool: pg.Pool): Promise<AdminOverviewResponse
     status: AdminOverviewResponse["campaigns"][number]["status"];
     loaded: string;
     callable: string;
+    early_media_avmd_enabled: boolean;
   }>(`
     select
       campaigns.id,
       campaigns.name,
       campaigns.status,
+      campaigns.early_media_avmd_enabled,
       count(contacts.id) as loaded,
       count(contacts.id) filter (
         where contacts.status not in ('completed', 'suppressed')
@@ -176,7 +180,8 @@ export async function getCampaigns(pool: pg.Pool): Promise<AdminOverviewResponse
     name: row.name,
     status: row.status,
     loaded: Number(row.loaded),
-    callable: Number(row.callable)
+    callable: Number(row.callable),
+    earlyMediaAvmdEnabled: row.early_media_avmd_enabled
   }));
 }
 
@@ -190,12 +195,14 @@ export async function getCampaignOverviewItem(
     status: AdminOverviewResponse["campaigns"][number]["status"];
     loaded: string;
     callable: string;
+    early_media_avmd_enabled: boolean;
   }>(
     `
       select
         campaigns.id,
         campaigns.name,
         campaigns.status,
+        campaigns.early_media_avmd_enabled,
         count(contacts.id) as loaded,
         count(contacts.id) filter (
           where contacts.status not in ('completed', 'suppressed')
@@ -218,6 +225,7 @@ export async function getCampaignOverviewItem(
     name: row.name,
     status: row.status,
     loaded: Number(row.loaded),
-    callable: Number(row.callable)
+    callable: Number(row.callable),
+    earlyMediaAvmdEnabled: row.early_media_avmd_enabled
   };
 }

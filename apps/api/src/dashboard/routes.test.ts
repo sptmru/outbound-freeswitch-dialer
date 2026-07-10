@@ -202,6 +202,7 @@ describe("dashboard route helpers", () => {
       sipUsername: "agent1000",
       manualDial: true,
       callRecordingEnabled: false,
+      earlyMediaAvmdEnabled: false,
       eventType: "manual_dial_started"
     });
 
@@ -226,7 +227,8 @@ describe("dashboard route helpers", () => {
               campaign_id: selectedCampaignId,
               phone_number: "+1 415 555 0100",
               normalized_phone_number: "+14155550100",
-              call_recording_enabled: true
+              call_recording_enabled: true,
+              early_media_avmd_enabled: true
             }
           ]);
         }
@@ -261,6 +263,7 @@ describe("dashboard route helpers", () => {
         sipUsername: "agent1000",
         manualDial: false,
         callRecordingEnabled: false,
+        earlyMediaAvmdEnabled: false,
         eventType: "call_next_started"
       }
     );
@@ -437,6 +440,7 @@ function rows<T>(items: T[]): { rows: T[]; rowCount: number } {
 function campaignRow(overrides: Partial<{
   agent_registered: boolean;
   call_recording_enabled: boolean;
+  early_media_avmd_enabled: boolean;
   callable_leads: string;
   id: string;
   manual_dialing_enabled: boolean;
@@ -449,6 +453,7 @@ function campaignRow(overrides: Partial<{
     status: "active" as const,
     manual_dialing_enabled: true,
     call_recording_enabled: false,
+    early_media_avmd_enabled: false,
     callable_leads: "0",
     agent_registered: false,
     ...overrides

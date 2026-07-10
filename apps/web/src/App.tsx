@@ -1233,20 +1233,22 @@ function CampaignCard({
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(campaign.name);
   const [status, setStatus] = useState(campaign.status);
+  const [earlyMediaAvmdEnabled, setEarlyMediaAvmdEnabled] = useState(campaign.earlyMediaAvmdEnabled);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     setName(campaign.name);
     setStatus(campaign.status);
-  }, [campaign.name, campaign.status]);
+    setEarlyMediaAvmdEnabled(campaign.earlyMediaAvmdEnabled);
+  }, [campaign.earlyMediaAvmdEnabled, campaign.name, campaign.status]);
 
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setPending(true);
     setError(null);
     try {
-      await updateCampaign(campaign.id, { name, status });
+      await updateCampaign(campaign.id, { name, status, earlyMediaAvmdEnabled });
       setEditing(false);
       await onChanged();
     } catch (saveError) {
@@ -1308,13 +1310,27 @@ function CampaignCard({
               <option value="paused">paused</option>
             </select>
           </label>
+          <label className="checkbox-label">
+            <input
+              checked={earlyMediaAvmdEnabled}
+              onChange={(event) => setEarlyMediaAvmdEnabled(event.target.checked)}
+              type="checkbox"
+            />
+            Start AVMD during early media
+          </label>
+          <p className="avmd-warning">
+            May detect voicemail beeps before answer, but slightly increases the chance of false positives from carrier tones.
+          </p>
           <button className="primary-action compact-action" disabled={pending} type="submit">
             <CheckCircle2 size={16} />
             {pending ? "Saving" : "Save"}
           </button>
         </form>
       ) : (
-        <StatusBadge label={campaign.status} tone="neutral" />
+        <div className="campaign-badges">
+          <StatusBadge label={campaign.status} tone="neutral" />
+          {campaign.earlyMediaAvmdEnabled && <StatusBadge label="Early-media AVMD" tone="warn" />}
+        </div>
       )}
       <div className="stat-row campaign-stat-row">
         <Metric label="Loaded" value={campaign.loaded} icon={Users} />
@@ -1641,6 +1657,7 @@ function CreateCampaignForm({ onChanged }: { onChanged: () => Promise<void> }) {
   const [status, setStatus] = useState<"active" | "paused" | "draft">("draft");
   const [manualDialingEnabled, setManualDialingEnabled] = useState(true);
   const [callRecordingEnabled, setCallRecordingEnabled] = useState(true);
+  const [earlyMediaAvmdEnabled, setEarlyMediaAvmdEnabled] = useState(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -1649,9 +1666,10 @@ function CreateCampaignForm({ onChanged }: { onChanged: () => Promise<void> }) {
     setPending(true);
     setError(null);
     try {
-      await createCampaign({ name, status, manualDialingEnabled, callRecordingEnabled });
+      await createCampaign({ name, status, manualDialingEnabled, callRecordingEnabled, earlyMediaAvmdEnabled });
       setName("");
       setStatus("draft");
+      setEarlyMediaAvmdEnabled(false);
       await onChanged();
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : "Could not create campaign");
@@ -1693,7 +1711,18 @@ function CreateCampaignForm({ onChanged }: { onChanged: () => Promise<void> }) {
             />
             Call recording
           </label>
+          <label>
+            <input
+              checked={earlyMediaAvmdEnabled}
+              onChange={(event) => setEarlyMediaAvmdEnabled(event.target.checked)}
+              type="checkbox"
+            />
+            AVMD in early media
+          </label>
         </div>
+        <p className="avmd-warning">
+          May detect voicemail beeps before answer, but slightly increases the chance of false positives from carrier tones.
+        </p>
         {error && <p className="form-error">{error}</p>}
         <button className="primary-action" disabled={pending} type="submit">
           <Upload size={17} />
@@ -2551,7 +2580,7 @@ function Metric({
   );
 }
 
-function StatusBadge({ label, tone }: { label: string; tone: "good" | "bad" | "neutral" }) {
+function StatusBadge({ label, tone }: { label: string; tone: "good" | "bad" | "neutral" | "warn" }) {
   return (
     <span className={`status-badge ${tone}`}>
       <Clock3 size={14} />

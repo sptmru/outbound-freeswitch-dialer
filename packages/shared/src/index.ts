@@ -77,6 +77,7 @@ export interface AgentDeskResponse {
     callableLeads: number;
     manualDialingEnabled: boolean;
     callRecordingEnabled: boolean;
+    earlyMediaAvmdEnabled: boolean;
   } | null;
   availableCampaigns: Array<{
     id: string;
@@ -148,6 +149,7 @@ export interface AdminOverviewResponse {
     status: CampaignStatus;
     loaded: number;
     callable: number;
+    earlyMediaAvmdEnabled: boolean;
   }>;
   recordings: Array<{
     id: string;
@@ -201,11 +203,13 @@ export interface CreateCampaignRequest {
   status: CampaignStatus;
   manualDialingEnabled: boolean;
   callRecordingEnabled: boolean;
+  earlyMediaAvmdEnabled: boolean;
 }
 
 export interface UpdateCampaignRequest {
   name: string;
   status: CampaignStatus;
+  earlyMediaAvmdEnabled: boolean;
 }
 
 export interface CreateContactRequest {

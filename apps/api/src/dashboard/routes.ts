@@ -120,12 +120,14 @@ const createCampaignSchema = z.object({
   name: z.string().min(1).max(160),
   status: z.enum(["active", "paused", "draft"]),
   manualDialingEnabled: z.boolean(),
-  callRecordingEnabled: z.boolean()
+  callRecordingEnabled: z.boolean(),
+  earlyMediaAvmdEnabled: z.boolean()
 }) satisfies z.ZodType<CreateCampaignRequest>;
 
 const updateCampaignSchema = z.object({
   name: z.string().min(1).max(160),
-  status: z.enum(["active", "paused", "draft"])
+  status: z.enum(["active", "paused", "draft"]),
+  earlyMediaAvmdEnabled: z.boolean()
 }) satisfies z.ZodType<UpdateCampaignRequest>;
 
 const createContactSchema = z.object({
@@ -349,6 +351,7 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
       sipUsername: agent.sipUsername,
       manualDial: true,
       callRecordingEnabled: campaign.call_recording_enabled,
+      earlyMediaAvmdEnabled: campaign.early_media_avmd_enabled,
       eventType: "manual_dial_started"
     });
     if (!created.ok) {
@@ -379,6 +382,7 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
       sipUsername: agent.sipUsername,
       manualDial: false,
       callRecordingEnabled: campaign.call_recording_enabled,
+      earlyMediaAvmdEnabled: campaign.early_media_avmd_enabled,
       eventType: "call_next_started"
     });
     if (!created.ok) {
@@ -404,6 +408,7 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
       sipUsername: agent.sipUsername,
       manualDial: false,
       callRecordingEnabled: false,
+      earlyMediaAvmdEnabled: false,
       eventType: "lead_call_started"
     });
     if (!created.ok) {
@@ -479,11 +484,23 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
         status: AdminOverviewResponse["campaigns"][number]["status"];
       }>(
         `
-          insert into campaigns (name, status, manual_dialing_enabled, call_recording_enabled)
-          values ($1, $2, $3, $4)
+          insert into campaigns (
+            name,
+            status,
+            manual_dialing_enabled,
+            call_recording_enabled,
+            early_media_avmd_enabled
+          )
+          values ($1, $2, $3, $4, $5)
           returning id, name, status
         `,
-        [input.name, input.status, input.manualDialingEnabled, input.callRecordingEnabled]
+        [
+          input.name,
+          input.status,
+          input.manualDialingEnabled,
+          input.callRecordingEnabled,
+          input.earlyMediaAvmdEnabled
+        ]
       );
 
       const row = result.rows[0];
@@ -493,7 +510,8 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
           name: row.name,
           status: row.status,
           loaded: 0,
-          callable: 0
+          callable: 0,
+          earlyMediaAvmdEnabled: input.earlyMediaAvmdEnabled
         }
       });
     }
@@ -512,10 +530,13 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
       const result = await pool.query(
         `
           update campaigns
-          set name = $2, status = $3, updated_at = now()
+          set name = $2,
+              status = $3,
+              early_media_avmd_enabled = $4,
+              updated_at = now()
           where id = $1
         `,
-        [params.campaignId, input.name, input.status]
+        [params.campaignId, input.name, input.status, input.earlyMediaAvmdEnabled]
       );
 
       if (!result.rowCount) {

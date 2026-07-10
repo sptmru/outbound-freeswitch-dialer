@@ -52,7 +52,8 @@ export async function buildAgentDeskResponse(
       status: campaign.status,
       callableLeads: Number(campaign.callable_leads),
       manualDialingEnabled: campaign.manual_dialing_enabled,
-      callRecordingEnabled: campaign.call_recording_enabled
+      callRecordingEnabled: campaign.call_recording_enabled,
+      earlyMediaAvmdEnabled: campaign.early_media_avmd_enabled
     },
     availableCampaigns,
     softphone: {

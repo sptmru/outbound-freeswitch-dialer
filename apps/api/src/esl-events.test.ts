@@ -60,6 +60,120 @@ describe("FreeSWITCH event helpers", () => {
     assert.ok(!queries.some((query) => query.sql.includes("call_recording_path = null")));
   });
 
+  it("marks a recording started from early media without marking the call bridged", async () => {
+    const queries: Array<{ params: readonly unknown[]; sql: string }> = [];
+    const pool = createQueryPool((sql, params) => {
+      queries.push({ sql, params });
+      if (sql.includes("update calls") && sql.includes("returning agent_id")) {
+        return rows([{ agent_id: "agent-1" }]);
+      }
+      return rows([]);
+    });
+
+    await __testing.startCallRecording(
+      { ...config, CALL_RECORDINGS_STORAGE_DIR: "/tmp" },
+      pool,
+      {
+        callId: "11111111-1111-4111-8111-111111111111",
+        customerLegUuid: "22222222-2222-4222-8222-222222222222",
+        phase: "early_media"
+      },
+      async () => ({ body: "+OK Success\n", headers: {}, raw: "" })
+    );
+
+    const started = queries.find((query) => query.sql.includes("'call_recording_started'"));
+    assert.equal(started?.params[2], "customer_dialing");
+    assert.match(String(started?.params[4]), /"phase":"early_media"/);
+  });
+
+  it("does not start AVMD in early media when the campaign setting is off", async () => {
+    const commands: string[] = [];
+    const pool = createQueryPool((sql) => {
+      if (sql.includes("select early_media_avmd_enabled")) {
+        return rows([{ early_media_avmd_enabled: false }]);
+      }
+      return rows([]);
+    });
+
+    await __testing.startVoicemailDetection(
+      config,
+      pool,
+      {
+        callId: "11111111-1111-4111-8111-111111111111",
+        customerLegUuid: "22222222-2222-4222-8222-222222222222",
+        phase: "early_media"
+      },
+      async (_config, command) => {
+        commands.push(command);
+        return { body: "true", headers: {}, raw: "" };
+      }
+    );
+
+    assert.deepEqual(commands, []);
+  });
+
+  it("starts only mod_avmd in early media when the campaign setting is on", async () => {
+    const commands: string[] = [];
+    const queries: Array<{ params: readonly unknown[]; sql: string }> = [];
+    const pool = createQueryPool((sql, params) => {
+      queries.push({ sql, params });
+      if (sql.includes("select early_media_avmd_enabled")) {
+        return rows([{ early_media_avmd_enabled: true }]);
+      }
+      return rows([]);
+    });
+
+    await __testing.startVoicemailDetection(
+      config,
+      pool,
+      {
+        callId: "11111111-1111-4111-8111-111111111111",
+        customerLegUuid: "22222222-2222-4222-8222-222222222222",
+        phase: "early_media"
+      },
+      async (_config, command) => {
+        commands.push(command);
+        return { body: command.startsWith("module_exists") ? "true" : "+OK Success", headers: {}, raw: "" };
+      }
+    );
+
+    assert.deepEqual(commands, [
+      "module_exists mod_avmd",
+      "avmd 22222222-2222-4222-8222-222222222222 start"
+    ]);
+    const started = queries.find(
+      (query) => query.sql.includes("insert into call_events") && query.sql.includes("'voicemail_detection_started'")
+    );
+    assert.equal(started?.params[1], "customer_dialing");
+    assert.match(String(started?.params[3]), /"phase":"early_media"/);
+  });
+
+  it("does not restart early AVMD on answer and still attempts mod_amd", async () => {
+    const commands: string[] = [];
+    const pool = createQueryPool((sql) => {
+      if (sql.includes("select raw_json")) {
+        return rows([{ raw_json: { phase: "early_media", modules: { mod_avmd: { status: "started" } } } }]);
+      }
+      return rows([]);
+    });
+
+    await __testing.startVoicemailDetection(
+      config,
+      pool,
+      {
+        callId: "11111111-1111-4111-8111-111111111111",
+        customerLegUuid: "22222222-2222-4222-8222-222222222222",
+        phase: "answered"
+      },
+      async (_config, command) => {
+        commands.push(command);
+        return { body: "false", headers: {}, raw: "" };
+      }
+    );
+
+    assert.deepEqual(commands, ["module_exists mod_amd"]);
+  });
+
   it("clears the recording path and records an event when FreeSWITCH rejects recording", async () => {
     const queries: Array<{ params: readonly unknown[]; sql: string }> = [];
     const pool = createQueryPool((sql, params) => {
@@ -87,7 +201,7 @@ describe("FreeSWITCH event helpers", () => {
 
     assert.ok(queries.some((query) => query.sql.includes("call_recording_path = null")));
     const failureEvent = queries.find((query) => query.sql.includes("'call_recording_failed'"));
-    assert.match(String(failureEvent?.params[3]), /media bug failed/);
+    assert.match(String(failureEvent?.params[4]), /media bug failed/);
   });
 
   it("extracts complete ESL frames and leaves partial frames buffered", () => {
@@ -143,6 +257,11 @@ describe("FreeSWITCH event helpers", () => {
     assert.equal(__testing.mapEventToCallState("CHANNEL_DESTROY"), "failed");
     assert.equal(__testing.mapEventToCallState("CHANNEL_HANGUP", "NORMAL_CLEARING", "agent"), "agent_released");
     assert.equal(__testing.mapEventToLegState("CHANNEL_DESTROY"), "ended");
+  });
+
+  it("subscribes to customer early-media events", () => {
+    assert.match(__testing.eventNames, /CHANNEL_PROGRESS_MEDIA/);
+    assert.equal(__testing.mapEventToCallState("CHANNEL_PROGRESS_MEDIA"), "customer_dialing");
   });
 
   it("resolves customer hangups using answer and voicemail context", () => {

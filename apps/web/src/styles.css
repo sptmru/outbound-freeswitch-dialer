@@ -270,6 +270,11 @@ input[type="checkbox"] {
   color: #607086;
 }
 
+.status-badge.warn {
+  background: #fff8e6;
+  color: #7a5a12;
+}
+
 .agent-grid {
   display: grid;
   gap: 16px;
@@ -718,6 +723,17 @@ input[type="checkbox"] {
   margin: 0;
 }
 
+.avmd-warning {
+  background: #fff8e6;
+  border: 1px solid #f1d58a;
+  border-radius: 8px;
+  color: #7a5a12;
+  font-size: 12px;
+  line-height: 1.45;
+  margin: 0;
+  padding: 9px 11px;
+}
+
 .selected-file {
   margin: -4px 0 0;
 }
@@ -1125,6 +1141,19 @@ input[type="checkbox"] {
   display: inline-flex;
   flex-direction: row;
   font-weight: 800;
+}
+
+.checkbox-label {
+  align-items: center;
+  display: flex;
+  flex-direction: row;
+  gap: 8px;
+}
+
+.campaign-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .import-result {

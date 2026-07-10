@@ -65,6 +65,17 @@ export async function originateAgentBridgeCall(
   config: AppConfig,
   input: OriginateAgentBridgeCallInput
 ): Promise<{ agentLegUuid: string; command: string; customerLegUuid: string; jobUuid: string }> {
+  const command = buildAgentBridgeOriginateCommand(config, input);
+  const response = await sendFreeSwitchBgapiCommand(config, command);
+  return {
+    agentLegUuid: input.agentLegUuid,
+    command,
+    customerLegUuid: input.customerLegUuid,
+    jobUuid: parseJobUuid(response)
+  };
+}
+
+function buildAgentBridgeOriginateCommand(config: AppConfig, input: OriginateAgentBridgeCallInput): string {
   const customerDialString = buildCustomerDialString(config, input.destinationNumber);
   const agentVariables = buildOriginateVariables([
     `origination_uuid=${input.agentLegUuid}`,
@@ -81,19 +92,13 @@ export async function originateAgentBridgeCall(
     `outbound_dialer_call_id=${input.callId}`,
     "outbound_dialer_leg_type=customer",
     "ignore_early_media=false",
+    "media_bug_answer_req=false",
     "originate_timeout=45",
     config.SIP_TRUNK_CALLER_ID
       ? `origination_caller_id_number=${escapeOriginateVariable(config.SIP_TRUNK_CALLER_ID)}`
       : null
   ]);
-  const command = `originate {${agentVariables}}user/${input.sipUsername}@${config.FREESWITCH_DOMAIN} &bridge({${customerVariables}}${customerDialString})`;
-  const response = await sendFreeSwitchBgapiCommand(config, command);
-  return {
-    agentLegUuid: input.agentLegUuid,
-    command,
-    customerLegUuid: input.customerLegUuid,
-    jobUuid: parseJobUuid(response)
-  };
+  return `originate {${agentVariables}}user/${input.sipUsername}@${config.FREESWITCH_DOMAIN} &bridge({${customerVariables}}${customerDialString})`;
 }
 
 export function canOriginateCustomerLeg(config: AppConfig): boolean {
@@ -243,6 +248,7 @@ function parseHeaders(value: string): Record<string, string> {
 }
 
 export const __testing = {
+  buildAgentBridgeOriginateCommand,
   buildCustomerDialString,
   buildOriginateVariables,
   escapeOriginateVariable,

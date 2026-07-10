@@ -213,6 +213,34 @@ describe("App Agent Desk empty states", () => {
     expect(screen.getAllByTitle("Finish the active call first")).toHaveLength(4);
   });
 
+  it("shows the campaign early-media AVMD setting with a false-positive warning", async () => {
+    const admin = userRow({ role: "admin" });
+    apiMocks.fetchMe.mockResolvedValue({ user: admin });
+    apiMocks.fetchAgentDesk.mockResolvedValue(deskResponse({ user: admin }));
+    apiMocks.fetchAdminOverview.mockResolvedValue(
+      adminResponse({
+        campaigns: [
+          {
+            id: "11111111-1111-4111-8111-111111111111",
+            name: "Selected campaign",
+            status: "active",
+            loaded: 10,
+            callable: 8,
+            earlyMediaAvmdEnabled: true
+          }
+        ]
+      })
+    );
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Campaigns" }));
+
+    expect(await screen.findByText("Early-media AVMD")).toBeInTheDocument();
+    fireEvent.click(screen.getByTitle("Edit campaign"));
+    expect(screen.getByRole("checkbox", { name: "Start AVMD during early media" })).toBeChecked();
+    expect(screen.getAllByText(/slightly increases the chance of false positives/i)).not.toHaveLength(0);
+  });
+
   it("plays a call recording and keeps technical events collapsed until requested", async () => {
     const admin = userRow({ role: "admin" });
     const call = callHistoryRow({ callRecordingPath: `/recordings/calls/${callHistoryRow().id}.wav` });
@@ -258,7 +286,8 @@ function deskResponse(overrides: Partial<AgentDeskResponse> = {}): AgentDeskResp
     status: "active" as const,
     callableLeads: 0,
     manualDialingEnabled: true,
-    callRecordingEnabled: false
+    callRecordingEnabled: false,
+    earlyMediaAvmdEnabled: false
   };
 
   return {

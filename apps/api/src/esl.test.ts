@@ -37,6 +37,19 @@ describe("ESL helpers", () => {
     assert.equal(__testing.escapeOriginateVariable("a,b{c}"), "abc");
   });
 
+  it("allows media bugs to process customer early media", () => {
+    const command = __testing.buildAgentBridgeOriginateCommand(config, {
+      agentLegUuid: "11111111-1111-4111-8111-111111111111",
+      callId: "22222222-2222-4222-8222-222222222222",
+      customerLegUuid: "33333333-3333-4333-8333-333333333333",
+      destinationNumber: "+14155550100",
+      sipUsername: "agent1000"
+    });
+
+    assert.match(command, /bridge_early_media=true/);
+    assert.match(command, /ignore_early_media=false,media_bug_answer_req=false/);
+  });
+
   it("parses bgapi job UUIDs from command response body", () => {
     assert.equal(
       __testing.parseJobUuid({

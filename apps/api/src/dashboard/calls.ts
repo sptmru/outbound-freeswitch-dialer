@@ -14,6 +14,7 @@ interface LockedCallableContact {
   phoneNumber: string;
   normalizedPhoneNumber: string;
   callRecordingEnabled: boolean;
+  earlyMediaAvmdEnabled: boolean;
 }
 
 async function getNextCallableContactForUpdate(
@@ -26,6 +27,7 @@ async function getNextCallableContactForUpdate(
     phone_number: string;
     normalized_phone_number: string;
     call_recording_enabled: boolean;
+    early_media_avmd_enabled: boolean;
   }>(
     `
       select
@@ -33,7 +35,8 @@ async function getNextCallableContactForUpdate(
         contacts.campaign_id,
         contacts.phone_number,
         contacts.normalized_phone_number,
-        campaigns.call_recording_enabled
+        campaigns.call_recording_enabled,
+        campaigns.early_media_avmd_enabled
       from contacts
       join campaigns on campaigns.id = contacts.campaign_id
       left join suppression_entries
@@ -59,7 +62,8 @@ async function getNextCallableContactForUpdate(
     campaignId: row.campaign_id,
     phoneNumber: row.phone_number,
     normalizedPhoneNumber: row.normalized_phone_number,
-    callRecordingEnabled: row.call_recording_enabled
+    callRecordingEnabled: row.call_recording_enabled,
+    earlyMediaAvmdEnabled: row.early_media_avmd_enabled
   };
 }
 
@@ -73,6 +77,7 @@ async function getCallableContactForUpdate(
     phone_number: string;
     normalized_phone_number: string;
     call_recording_enabled: boolean;
+    early_media_avmd_enabled: boolean;
   }>(
     `
       select
@@ -80,7 +85,8 @@ async function getCallableContactForUpdate(
         contacts.campaign_id,
         contacts.phone_number,
         contacts.normalized_phone_number,
-        campaigns.call_recording_enabled
+        campaigns.call_recording_enabled,
+        campaigns.early_media_avmd_enabled
       from contacts
       join campaigns on campaigns.id = contacts.campaign_id
       left join suppression_entries
@@ -105,7 +111,8 @@ async function getCallableContactForUpdate(
     campaignId: row.campaign_id,
     phoneNumber: row.phone_number,
     normalizedPhoneNumber: row.normalized_phone_number,
-    callRecordingEnabled: row.call_recording_enabled
+    callRecordingEnabled: row.call_recording_enabled,
+    earlyMediaAvmdEnabled: row.early_media_avmd_enabled
   };
 }
 
@@ -130,6 +137,7 @@ type CreateDialerCallResult =
 
 interface DialerCallContext {
   callRecordingEnabled: boolean;
+  earlyMediaAvmdEnabled: boolean;
   campaignId: string;
   contactId: string | null;
   destinationNumber: string;
@@ -148,6 +156,7 @@ export async function createDialerCall(
     sipUsername: string;
     manualDial: boolean;
     callRecordingEnabled: boolean;
+    earlyMediaAvmdEnabled: boolean;
     eventType: string;
   }
 ): Promise<CreateDialerCallResult> {
@@ -187,6 +196,7 @@ export async function createDialerCall(
       }
       callContext = {
         callRecordingEnabled: contact.callRecordingEnabled,
+        earlyMediaAvmdEnabled: contact.earlyMediaAvmdEnabled,
         campaignId: contact.campaignId,
         contactId: contact.id,
         destinationNumber: contact.phoneNumber,
@@ -200,6 +210,7 @@ export async function createDialerCall(
       }
       callContext = {
         callRecordingEnabled: contact.callRecordingEnabled,
+        earlyMediaAvmdEnabled: contact.earlyMediaAvmdEnabled,
         campaignId: contact.campaignId,
         contactId: contact.id,
         destinationNumber: contact.phoneNumber,
@@ -211,6 +222,7 @@ export async function createDialerCall(
       }
       callContext = {
         callRecordingEnabled: input.callRecordingEnabled,
+        earlyMediaAvmdEnabled: input.earlyMediaAvmdEnabled,
         campaignId: input.campaignId,
         contactId: null,
         destinationNumber: input.destinationNumber,
@@ -231,9 +243,10 @@ export async function createDialerCall(
           recording_id,
           manual_dial,
           call_recording_enabled,
+          early_media_avmd_enabled,
           started_at
         )
-        values ($1, $2, $3, $4, $5, 'customer_dialing', $6, $7, $8, now())
+        values ($1, $2, $3, $4, $5, 'customer_dialing', $6, $7, $8, $9, now())
         returning id
       `,
       [
@@ -244,7 +257,8 @@ export async function createDialerCall(
         callContext.normalizedDestinationNumber,
         recordingId,
         input.manualDial,
-        callContext.callRecordingEnabled
+        callContext.callRecordingEnabled,
+        callContext.earlyMediaAvmdEnabled
       ]
     );
     callId = call.rows[0].id;

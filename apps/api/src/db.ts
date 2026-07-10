@@ -34,7 +34,8 @@ export async function runMigrations(pool: pg.Pool): Promise<void> {
     "004_recording_duration_seconds.sql",
     "005_recording_file_size_bytes.sql",
     "006_active_call_unique_indexes.sql",
-    "007_agent_registration_state.sql"
+    "007_agent_registration_state.sql",
+    "008_early_media_avmd.sql"
   ];
 
   for (const filename of migrationFiles) {
