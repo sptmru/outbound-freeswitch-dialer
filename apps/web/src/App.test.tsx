@@ -102,6 +102,8 @@ describe("App Agent Desk empty states", () => {
     expect(await screen.findByText("Next lead")).toBeInTheDocument();
     expect(screen.getByText("Avery Johnson, +15551234567")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Start next call/ })).toBeInTheDocument();
+    expect(screen.queryByText("Company")).not.toBeInTheDocument();
+    expect(screen.queryByText("Solar Follow-up")).not.toBeInTheDocument();
     expect(screen.queryByText(/Recommended next:/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Default voicemail/)).not.toBeInTheDocument();
   });

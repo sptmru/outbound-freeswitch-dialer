@@ -659,14 +659,12 @@ function LeadQueue({
         <div className="lead-table-row lead-table-head" role="row">
           <span>Lead</span>
           <span>Phone</span>
-          <span>Company</span>
           <span>Action</span>
         </div>
         {leads.map((lead) => (
           <div className="lead-table-row" key={lead.id} role="row">
             <strong>{lead.name}</strong>
             <span>{lead.phoneNumber}</span>
-            <span>{lead.company || "—"}</span>
             <button
               className="pill-action"
               disabled={pending || lead.status !== "ready" || !canStartCalls}

@@ -390,7 +390,7 @@ input[type="checkbox"] {
   border-radius: 8px;
   display: grid;
   gap: 12px;
-  grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.95fr) minmax(0, 0.7fr) minmax(72px, 0.42fr);
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.95fr) minmax(72px, 0.42fr);
   min-height: 42px;
   padding: 0 10px;
 }
