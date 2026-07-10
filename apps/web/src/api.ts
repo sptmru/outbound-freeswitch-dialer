@@ -125,6 +125,15 @@ export async function fetchCallDetail(callId: string): Promise<CallDetailRespons
   return apiFetch<CallDetailResponse>(`/admin/calls/${callId}`);
 }
 
+export function getCallRecordingAudioUrl(callId: string): string | null {
+  const token = getStoredToken();
+  if (!token) {
+    return null;
+  }
+  const params = new URLSearchParams({ token });
+  return `${API_BASE_URL}/admin/calls/${callId}/recording?${params.toString()}`;
+}
+
 export async function fetchFreeSwitchDiagnostics(): Promise<FreeSwitchDiagnosticsResponse> {
   return apiFetch<FreeSwitchDiagnosticsResponse>("/admin/freeswitch/diagnostics");
 }

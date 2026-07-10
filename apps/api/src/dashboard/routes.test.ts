@@ -364,6 +364,18 @@ describe("dashboard route helpers", () => {
     }]);
   });
 
+  it("resolves a persisted call recording without exposing unrelated call data", async () => {
+    const callId = "44444444-4444-4444-8444-444444444444";
+    const recordingPath = `/var/lib/freeswitch/storage/recordings/calls/${callId}.wav`;
+    const pool = createQueryPool((sql, params) => {
+      assert.match(sql, /select call_recording_path/);
+      assert.deepEqual(params, [callId]);
+      return rows([{ call_recording_path: recordingPath }]);
+    });
+
+    assert.deepEqual(await __testing.getCallRecordingAudioFile(pool, callId), { filePath: recordingPath });
+  });
+
   it("returns an explicit empty desk state instead of demo campaign data", async () => {
     const pool = createQueryPool((sql) => {
       if (sql.includes("from campaigns")) {

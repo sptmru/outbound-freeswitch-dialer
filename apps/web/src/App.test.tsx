@@ -51,6 +51,7 @@ const softphoneRuntime = {
 describe("App Agent Desk empty states", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    window.localStorage.setItem("outbound_dialer_token", "test-token");
     apiMocks.getStoredToken.mockReturnValue("test-token");
     apiMocks.fetchMe.mockResolvedValue({ user: userRow() });
     apiMocks.fetchCsvImports.mockResolvedValue({ imports: [] });
@@ -210,9 +211,9 @@ describe("App Agent Desk empty states", () => {
     expect(screen.getAllByTitle("Finish the active call first")).toHaveLength(4);
   });
 
-  it("opens a call history entry with its event timeline", async () => {
+  it("plays a call recording and keeps technical events collapsed until requested", async () => {
     const admin = userRow({ role: "admin" });
-    const call = callHistoryRow();
+    const call = callHistoryRow({ callRecordingPath: `/recordings/calls/${callHistoryRow().id}.wav` });
     apiMocks.fetchMe.mockResolvedValue({ user: admin });
     apiMocks.fetchAgentDesk.mockResolvedValue(deskResponse({ user: admin }));
     apiMocks.fetchAdminOverview.mockResolvedValue(adminResponse({ callHistory: [call] }));
@@ -225,7 +226,15 @@ describe("App Agent Desk empty states", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Call History" }));
     fireEvent.click(await screen.findByRole("button", { name: /Avery Johnson/ }));
 
+    const player = await screen.findByLabelText("Call recording for Avery Johnson");
+    expect(player).toHaveAttribute(
+      "src",
+      `/api/admin/calls/${call.id}/recording?token=test-token`
+    );
+    expect(screen.queryByText("Customer connected")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Show technical details" }));
     expect(await screen.findByText("Customer connected")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Hide technical details" })).toHaveAttribute("aria-expanded", "true");
     expect(apiMocks.fetchCallDetail).toHaveBeenCalledWith(call.id);
   });
 });
@@ -324,7 +333,9 @@ function adminResponse(overrides: Partial<AdminOverviewResponse> = {}): AdminOve
   };
 }
 
-function callHistoryRow(): AdminOverviewResponse["callHistory"][number] {
+function callHistoryRow(
+  overrides: Partial<AdminOverviewResponse["callHistory"][number]> = {}
+): AdminOverviewResponse["callHistory"][number] {
   return {
     id: "66666666-6666-4666-8666-666666666666",
     leadName: "Avery Johnson",
@@ -335,6 +346,7 @@ function callHistoryRow(): AdminOverviewResponse["callHistory"][number] {
     outcome: "answered",
     createdAt: "2026-07-10T08:00:00.000Z",
     durationSeconds: 72,
-    callRecordingPath: null
+    callRecordingPath: null,
+    ...overrides
   };
 }

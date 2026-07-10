@@ -50,6 +50,7 @@ import {
   fetchAgentDesk,
   fetchFreeSwitchDiagnostics,
   fetchMe,
+  getCallRecordingAudioUrl,
   getRecordingAudioUrl,
   getStoredToken,
   importCampaignCsvFile,
@@ -2122,6 +2123,7 @@ function CreateUserForm({ onChanged }: { onChanged: () => Promise<void> }) {
 
 function HistoryView({ admin }: { admin: AdminOverviewResponse }) {
   const [selectedCallId, setSelectedCallId] = useState<string | null>(null);
+  const [technicalCallId, setTechnicalCallId] = useState<string | null>(null);
   const [detail, setDetail] = useState<CallDetailResponse | null>(null);
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -2129,10 +2131,12 @@ function HistoryView({ admin }: { admin: AdminOverviewResponse }) {
   async function toggleCall(callId: string) {
     if (selectedCallId === callId) {
       setSelectedCallId(null);
+      setTechnicalCallId(null);
       setDetail(null);
       return;
     }
     setSelectedCallId(callId);
+    setTechnicalCallId(null);
     setDetail(null);
     setPendingId(callId);
     setError(null);
@@ -2188,16 +2192,32 @@ function HistoryView({ admin }: { admin: AdminOverviewResponse }) {
                       <span><strong>Type</strong>{detail.call.manualDial ? "Manual dial" : "Campaign lead"}</span>
                       <span><strong>Answered</strong>{detail.call.answeredAt ? formatDateTime(detail.call.answeredAt) : "Not answered"}</span>
                       <span><strong>Ended</strong>{detail.call.endedAt ? formatDateTime(detail.call.endedAt) : "In progress"}</span>
-                      <span><strong>Recording</strong>{detail.call.callRecordingPath ? "Saved" : "Not available"}</span>
+                      <span><strong>Recording</strong>{detail.call.callRecordingPath ? "Available" : "Not available"}</span>
                     </div>
-                    <div className="history-timeline">
-                      {detail.timeline.map((item) => (
-                        <div className="timeline-item" key={`${item.at}-${item.eventType}-${item.state}`}>
-                          <span>{formatDateTime(item.at)}</span>
-                          <p>{item.label}</p>
+                    {detail.call.callRecordingPath && (
+                      <CallRecordingPlayer callId={detail.call.id} leadName={detail.call.leadName} />
+                    )}
+                    <div className="technical-details">
+                      <button
+                        aria-expanded={technicalCallId === call.id}
+                        className="secondary-action compact-action technical-toggle"
+                        onClick={() => setTechnicalCallId(technicalCallId === call.id ? null : call.id)}
+                        type="button"
+                      >
+                        <Activity size={14} />
+                        {technicalCallId === call.id ? "Hide technical details" : "Show technical details"}
+                      </button>
+                      {technicalCallId === call.id && (
+                        <div className="history-timeline">
+                          {detail.timeline.map((item) => (
+                            <div className="timeline-item" key={`${item.at}-${item.eventType}-${item.state}`}>
+                              <span>{formatDateTime(item.at)}</span>
+                              <p>{item.label}</p>
+                            </div>
+                          ))}
+                          {!detail.timeline.length && <p className="empty-state">No call events recorded.</p>}
                         </div>
-                      ))}
-                      {!detail.timeline.length && <p className="empty-state">No call events recorded.</p>}
+                      )}
                     </div>
                   </>
                 )}
@@ -2208,6 +2228,20 @@ function HistoryView({ admin }: { admin: AdminOverviewResponse }) {
         {!admin.callHistory.length && <div className="empty-row">No calls yet</div>}
       </div>
     </article>
+  );
+}
+
+function CallRecordingPlayer({ callId, leadName }: { callId: string; leadName: string }) {
+  const url = getCallRecordingAudioUrl(callId);
+  return (
+    <div className="call-recording-player">
+      <strong>Call recording</strong>
+      {url ? (
+        <audio aria-label={`Call recording for ${leadName}`} controls preload="metadata" src={url} />
+      ) : (
+        <span>Sign in again to play this recording.</span>
+      )}
+    </div>
   );
 }
 

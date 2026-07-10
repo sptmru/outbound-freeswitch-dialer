@@ -9,6 +9,87 @@ const config = {
 } as AppConfig;
 
 describe("FreeSWITCH event helpers", () => {
+  it("builds a stable WAV path for a call recording", () => {
+    assert.equal(
+      __testing.buildCallRecordingPath(
+        "/var/lib/freeswitch/storage/recordings/calls",
+        "11111111-1111-4111-8111-111111111111"
+      ),
+      "/var/lib/freeswitch/storage/recordings/calls/11111111-1111-4111-8111-111111111111.wav"
+    );
+  });
+
+  it("starts an enabled call recording once and persists its path", async () => {
+    const queries: Array<{ params: readonly unknown[]; sql: string }> = [];
+    const commands: string[] = [];
+    const pool = createQueryPool((sql, params) => {
+      queries.push({ sql, params });
+      if (sql.includes("update calls") && sql.includes("returning agent_id")) {
+        return rows([{ agent_id: "agent-1" }]);
+      }
+      return rows([]);
+    });
+
+    await __testing.startCallRecording(
+      {
+        ...config,
+        CALL_RECORDINGS_STORAGE_DIR: "/tmp"
+      },
+      pool,
+      {
+        callId: "11111111-1111-4111-8111-111111111111",
+        customerLegUuid: "22222222-2222-4222-8222-222222222222"
+      },
+      async (_config, command) => {
+        commands.push(command);
+        return { body: "+OK Success\n", headers: {}, raw: "" };
+      }
+    );
+
+    assert.deepEqual(commands, [
+      "uuid_record 22222222-2222-4222-8222-222222222222 start /tmp/11111111-1111-4111-8111-111111111111.wav"
+    ]);
+    assert.ok(
+      queries.some(
+        (query) =>
+          query.sql.includes("call_recording_path = $2") &&
+          query.params[1] === "/tmp/11111111-1111-4111-8111-111111111111.wav"
+      )
+    );
+    assert.ok(queries.some((query) => query.sql.includes("'call_recording_started'")));
+    assert.ok(!queries.some((query) => query.sql.includes("call_recording_path = null")));
+  });
+
+  it("clears the recording path and records an event when FreeSWITCH rejects recording", async () => {
+    const queries: Array<{ params: readonly unknown[]; sql: string }> = [];
+    const pool = createQueryPool((sql, params) => {
+      queries.push({ sql, params });
+      if (sql.includes("update calls") && sql.includes("returning agent_id")) {
+        return rows([{ agent_id: "agent-1" }]);
+      }
+      return rows([]);
+    });
+
+    await __testing.startCallRecording(
+      {
+        ...config,
+        CALL_RECORDINGS_STORAGE_DIR: "/tmp"
+      },
+      pool,
+      {
+        callId: "11111111-1111-4111-8111-111111111111",
+        customerLegUuid: "22222222-2222-4222-8222-222222222222"
+      },
+      async () => {
+        throw new Error("-ERR media bug failed");
+      }
+    );
+
+    assert.ok(queries.some((query) => query.sql.includes("call_recording_path = null")));
+    const failureEvent = queries.find((query) => query.sql.includes("'call_recording_failed'"));
+    assert.match(String(failureEvent?.params[3]), /media bug failed/);
+  });
+
   it("extracts complete ESL frames and leaves partial frames buffered", () => {
     const input =
       "Content-Type: text/event-plain\nContent-Length: 4\n\nbody" +

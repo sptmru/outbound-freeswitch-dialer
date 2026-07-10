@@ -1,4 +1,6 @@
 import net from "node:net";
+import { mkdir } from "node:fs/promises";
+import { join } from "node:path";
 import type pg from "pg";
 import type { AppConfig } from "./config.js";
 import { sendFreeSwitchApiCommand } from "./esl.js";
@@ -286,6 +288,10 @@ async function persistFreeSwitchEvent(config: AppConfig, pool: pg.Pool, frame: E
     );
 
     if (legType === "customer" && legUuid) {
+      await startCallRecording(config, pool, {
+        callId,
+        customerLegUuid: legUuid
+      });
       await startVoicemailDetection(config, pool, {
         callId,
         customerLegUuid: legUuid
@@ -362,6 +368,106 @@ async function persistFreeSwitchEvent(config: AppConfig, pool: pg.Pool, frame: E
       [callId]
     );
   }
+}
+
+type FreeSwitchApiCommandSender = typeof sendFreeSwitchApiCommand;
+
+async function startCallRecording(
+  config: AppConfig,
+  pool: pg.Pool,
+  input: { callId: string; customerLegUuid: string },
+  sendApiCommand: FreeSwitchApiCommandSender = sendFreeSwitchApiCommand
+): Promise<void> {
+  const recordingPath = buildCallRecordingPath(config.CALL_RECORDINGS_STORAGE_DIR, input.callId);
+  const claimed = await pool.query<{ agent_id: string | null }>(
+    `
+      update calls
+      set call_recording_path = $2,
+          updated_at = now()
+      where id = $1
+        and call_recording_enabled = true
+        and call_recording_path is null
+        and ended_at is null
+        and state not in ('completed', 'failed', 'canceled')
+      returning agent_id
+    `,
+    [input.callId, recordingPath]
+  );
+  const call = claimed.rows[0];
+  if (!call) {
+    return;
+  }
+
+  const command = `uuid_record ${input.customerLegUuid} start ${recordingPath}`;
+  try {
+    await mkdir(config.CALL_RECORDINGS_STORAGE_DIR, { recursive: true });
+    const response = await sendApiCommand(config, command);
+    await pool.query(
+      `
+        insert into call_events (
+          call_id,
+          agent_id,
+          event_type,
+          state,
+          api_command_name,
+          customer_leg_uuid,
+          raw_json
+        )
+        values ($1, $2, 'call_recording_started', 'bridged', 'uuid_record', $3, $4::jsonb)
+      `,
+      [
+        input.callId,
+        call.agent_id,
+        input.customerLegUuid,
+        JSON.stringify({ command, recordingPath, response: response.body.trim() })
+      ]
+    );
+  } catch (error) {
+    await pool.query(
+      `
+        update calls
+        set call_recording_path = null,
+            updated_at = now()
+        where id = $1
+          and call_recording_path = $2
+      `,
+      [input.callId, recordingPath]
+    );
+    await pool.query(
+      `
+        insert into call_events (
+          call_id,
+          agent_id,
+          event_type,
+          state,
+          api_command_name,
+          customer_leg_uuid,
+          raw_json
+        )
+        values ($1, $2, 'call_recording_failed', 'bridged', 'uuid_record', $3, $4::jsonb)
+      `,
+      [
+        input.callId,
+        call.agent_id,
+        input.customerLegUuid,
+        JSON.stringify({
+          command,
+          message: error instanceof Error ? error.message : String(error),
+          recordingPath
+        })
+      ]
+    );
+  }
+}
+
+function buildCallRecordingPath(storageDir: string, callId: string): string {
+  if (!isUuid(callId)) {
+    throw new Error("Invalid call ID for call recording path");
+  }
+  if (/\s/.test(storageDir)) {
+    throw new Error("CALL_RECORDINGS_STORAGE_DIR must not contain whitespace");
+  }
+  return join(storageDir, `${callId}.wav`);
 }
 
 async function startVoicemailDetection(
@@ -904,6 +1010,7 @@ function isUuid(value: string): boolean {
 }
 
 export const __testing = {
+  buildCallRecordingPath,
   extractFrames,
   isFailedBackgroundJob,
   isTerminalEvent,
@@ -915,6 +1022,7 @@ export const __testing = {
   mapEventToLegState,
   mapHangupCauseToOutcome,
   resolveCustomerHangupOutcome,
+  startCallRecording,
   persistFreeSwitchEvent,
   mapVoicemailDetectionSignal,
   parseConfidence,

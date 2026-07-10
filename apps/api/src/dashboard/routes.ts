@@ -87,6 +87,7 @@ import {
   formatElapsed,
   getActiveCallActions,
   getCallDetail,
+  getCallRecordingAudioFile,
   mapCallStatus,
   mapVoicemailSignal
 } from "./responders.js";
@@ -218,6 +219,33 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
       return reply.code(404).send({ message: "Call not found" });
     }
     return detail;
+  });
+
+  app.get("/admin/calls/:callId/recording", async (request, reply): Promise<void> => {
+    const user = await requireAdminWithOptionalQueryToken(request, reply, config, pool);
+    if (!user) {
+      return;
+    }
+
+    const params = z.object({ callId: z.string().uuid() }).parse(request.params);
+    const recording = await getCallRecordingAudioFile(pool, params.callId);
+    if (!recording) {
+      return reply.code(404).send({ message: "Call recording not found" });
+    }
+
+    const fileStat = await stat(recording.filePath).catch(() => null);
+    if (!fileStat?.isFile()) {
+      return reply.code(404).send({ message: "Call recording file not found" });
+    }
+    if (fileStat.size === 0) {
+      return reply.code(409).send({ message: "Call recording file is empty" });
+    }
+
+    reply
+      .header("Content-Type", getRecordingContentType(recording.filePath))
+      .header("Content-Length", fileStat.size)
+      .header("Content-Disposition", `inline; filename="${params.callId}.wav"`)
+      .send(await readFile(recording.filePath));
   });
 
   app.get(
@@ -1399,6 +1427,7 @@ export const __testing = {
   formatElapsed,
   getActiveCallActions,
   getCallDetail,
+  getCallRecordingAudioFile,
   getAgentCampaign,
   getAgentCampaignForDialerAction,
   inferAgentEndOutcome,

@@ -1396,7 +1396,59 @@ button.table-row {
 
 .history-timeline {
   display: grid;
+  gap: 6px;
+}
+
+.call-recording-player {
+  align-items: center;
+  background: #ffffff;
+  border: 1px solid #dfe7f0;
+  border-radius: 8px;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: auto minmax(240px, 1fr);
+  padding: 10px 12px;
+}
+
+.call-recording-player strong {
+  color: #17202a;
+  font-size: 13px;
+}
+
+.call-recording-player audio {
+  height: 36px;
+  width: 100%;
+}
+
+.call-recording-player span {
+  color: #607086;
+  font-size: 12px;
+}
+
+.technical-details {
+  display: grid;
   gap: 8px;
+  justify-items: start;
+}
+
+.technical-toggle {
+  font-size: 12px;
+}
+
+.history-timeline {
+  justify-self: stretch;
+  width: 100%;
+}
+
+.history-timeline .timeline-item {
+  gap: 8px;
+  grid-template-columns: 118px minmax(0, 1fr);
+  padding: 7px 9px;
+}
+
+.history-timeline .timeline-item span,
+.history-timeline .timeline-item p {
+  font-size: 11px;
 }
 
 .import-row {
@@ -1579,6 +1631,7 @@ button.table-row {
   .lead-table-row,
     .history-row,
     .call-detail-summary,
+    .call-recording-player,
     .import-row,
     .failure-row,
     .contact-row,

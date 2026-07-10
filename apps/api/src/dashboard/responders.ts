@@ -435,6 +435,23 @@ export async function getCallDetail(pool: pg.Pool, callId: string): Promise<Call
   };
 }
 
+export async function getCallRecordingAudioFile(
+  pool: pg.Pool,
+  callId: string
+): Promise<{ filePath: string } | null> {
+  const result = await pool.query<{ call_recording_path: string | null }>(
+    `
+      select call_recording_path
+      from calls
+      where id = $1
+      limit 1
+    `,
+    [callId]
+  );
+  const filePath = result.rows[0]?.call_recording_path;
+  return filePath ? { filePath } : null;
+}
+
 async function getSuppression(pool: pg.Pool): Promise<AdminOverviewResponse["suppression"]> {
   const result = await pool.query<{
     id: string;

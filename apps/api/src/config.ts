@@ -31,6 +31,7 @@ const envSchema = z.object({
   SIP_USERNAME_PREFIX: z.string().regex(/^[a-zA-Z0-9_-]+$/).default("agent"),
   FREESWITCH_GENERATED_CONFIG_DIR: z.string().default("/var/lib/outbound-dialer/freeswitch"),
   VOICEMAIL_RECORDINGS_STORAGE_DIR: z.string().default("/var/lib/freeswitch/storage/recordings"),
+  CALL_RECORDINGS_STORAGE_DIR: z.string().default("/var/lib/freeswitch/storage/recordings/calls"),
   FREESWITCH_DOMAIN: z.string().default("localhost"),
   FREESWITCH_WEBRTC_WSS_PORT: z.coerce.number().int().positive().default(7443),
   FREESWITCH_WEBRTC_PUBLIC_WS_URL: z.string().url().optional(),
