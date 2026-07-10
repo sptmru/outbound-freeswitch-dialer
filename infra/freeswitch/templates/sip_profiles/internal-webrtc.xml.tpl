@@ -13,6 +13,7 @@
     <param name="dtmf-duration" value="2000"/>
     <param name="inbound-codec-prefs" value="PCMU,PCMA,G729"/>
     <param name="outbound-codec-prefs" value="PCMU,PCMA,G729"/>
+    <param name="rtp-timer-name" value="soft"/>
     <param name="rtp-ip" value="$${local_ip_v4}"/>
     <param name="sip-ip" value="$${local_ip_v4}"/>
     <param name="ext-rtp-ip" value="__FREESWITCH_EXTERNAL_RTP_IP__"/>
