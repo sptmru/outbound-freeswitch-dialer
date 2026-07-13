@@ -47,7 +47,7 @@ compose() {
   APP_ENV_FILE="${ENV_FILE}" docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" "$@"
 }
 
-compose up -d postgres >/dev/null
+compose up -d --wait postgres >/dev/null
 if [[ "$(compose exec -T postgres psql --username "${POSTGRES_USER}" --dbname "${POSTGRES_DB}" --tuples-only --no-align --command "select to_regclass('public.calls') is not null")" == "t" ]]; then
   active_calls="$(compose exec -T postgres psql --username "${POSTGRES_USER}" --dbname "${POSTGRES_DB}" --tuples-only --no-align --command "select count(*) from calls where ended_at is null and state not in ('completed', 'failed', 'canceled')")"
   if [[ "${active_calls}" != "0" ]]; then

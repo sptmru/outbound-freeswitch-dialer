@@ -20,7 +20,7 @@
     "test:e2e": "playwright test",
     "test:freeswitch": "bash scripts/test-freeswitch-scenarios.sh",
     "test:load:desk": "node scripts/load-agent-desk.mjs",
-    "typecheck": "npm --workspace @outbound-dialer/shared run typecheck && npm --workspace @outbound-dialer/api run typecheck && npm --workspace @outbound-dialer/web run typecheck"
+    "typecheck": "npm --workspace @outbound-dialer/shared run build && npm --workspace @outbound-dialer/api run typecheck && npm --workspace @outbound-dialer/web run typecheck"
   },
   "engines": {
     "node": ">=22"
