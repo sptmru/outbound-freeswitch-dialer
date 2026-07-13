@@ -110,6 +110,22 @@ disable_module_load() {
   echo "Disabled unused FreeSWITCH module ${module} in ${modules_conf}"
 }
 
+configure_rtp_port_range() {
+  switch_conf="$CONFIG_DIR/autoload_configs/switch.conf.xml"
+  rtp_start="$(escape_xml_for_sed "$FREESWITCH_RTP_START_PORT")"
+  rtp_end="$(escape_xml_for_sed "$FREESWITCH_RTP_END_PORT")"
+
+  # rtp_start_port/rtp_end_port in vars.xml are convenient dialplan variables,
+  # but the core RTP allocator reads these switch.conf.xml parameters.
+  sed -i \
+    -e "/<param name=\"rtp-start-port\"/c\\    <param name=\"rtp-start-port\" value=\"${rtp_start}\"/>" \
+    -e "/<param name=\"rtp-end-port\"/c\\    <param name=\"rtp-end-port\" value=\"${rtp_end}\"/>" \
+    "$switch_conf"
+
+  grep -Fq "<param name=\"rtp-start-port\" value=\"${FREESWITCH_RTP_START_PORT}\"/>" "$switch_conf"
+  grep -Fq "<param name=\"rtp-end-port\" value=\"${FREESWITCH_RTP_END_PORT}\"/>" "$switch_conf"
+}
+
 legacy_env() {
   name="$1"
   legacy_prefix="MA${EMPTY:-}XO"
@@ -167,6 +183,7 @@ render "$TEMPLATE_DIR/sip_profiles/internal-webrtc.xml.tpl" "$CONFIG_DIR/sip_pro
 render "$TEMPLATE_DIR/dialplan/default/voicemail-drop.xml.tpl" "$CONFIG_DIR/dialplan/default/voicemail-drop.xml"
 render "$TEMPLATE_DIR/dialplan/agent-ingress/reject.xml.tpl" "$CONFIG_DIR/dialplan/agent-ingress/reject.xml"
 render "$TEMPLATE_DIR/dialplan/public/reject.xml.tpl" "$CONFIG_DIR/dialplan/public/reject.xml"
+configure_rtp_port_range
 ensure_module_load "mod_avmd"
 ensure_module_load "mod_amd"
 disable_module_load "mod_signalwire"
