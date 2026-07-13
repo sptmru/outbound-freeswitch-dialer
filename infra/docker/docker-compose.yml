@@ -36,7 +36,7 @@ services:
       - freeswitch_generated:/var/lib/outbound-dialer/freeswitch
       - ../freeswitch/recordings:/var/lib/freeswitch/storage/recordings
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -69,8 +69,11 @@ services:
         condition: service_healthy
       web:
         condition: service_healthy
+      grafana:
+        condition: service_started
     environment:
       LETSENCRYPT_DOMAIN: ${LETSENCRYPT_DOMAIN}
+      GRAFANA_DOMAIN: ${GRAFANA_DOMAIN:-grafana.localhost}
       FREESWITCH_WS_UPSTREAM_SCHEME: ${FREESWITCH_WS_UPSTREAM_SCHEME:-http}
       FREESWITCH_WS_UPSTREAM: ${FREESWITCH_WS_UPSTREAM:-host.docker.internal:5066}
     extra_hosts:
@@ -154,6 +157,141 @@ services:
       - ../fail2ban/filter.d/freeswitch-sip-scan.conf:/data/filter.d/freeswitch-sip-scan.conf:ro
       - freeswitch_logs:/var/log/freeswitch:ro
 
+  monitoring-config:
+    image: node:22-alpine
+    profiles:
+      - tools
+    env_file:
+      - ${APP_ENV_FILE:-../../.env}
+    working_dir: /workspace
+    command: ["node", "scripts/render-monitoring-config.mjs", "monitoring/generated"]
+    volumes:
+      - ../..:/workspace
+
+  prometheus:
+    image: prom/prometheus:v3.12.0
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=${PROMETHEUS_RETENTION:-30d}
+      - --web.enable-lifecycle
+    volumes:
+      - ../../monitoring/generated/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../../monitoring/prometheus/rules.yml:/etc/prometheus/rules/rules.yml:ro
+      - prometheus_data:/prometheus
+    depends_on:
+      - api
+      - alertmanager
+      - node-exporter
+      - cadvisor
+      - postgres-exporter
+      - blackbox-exporter
+
+  alertmanager:
+    image: prom/alertmanager:v0.32.1
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+      - --data.retention=${ALERTMANAGER_RETENTION:-120h}
+    volumes:
+      - ../../monitoring/generated/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager_data:/alertmanager
+
+  grafana:
+    image: grafana/grafana:13.0.2
+    restart: unless-stopped
+    environment:
+      GF_SERVER_DOMAIN: ${GRAFANA_DOMAIN:-grafana.localhost}
+      GF_SERVER_ROOT_URL: https://${GRAFANA_DOMAIN:-grafana.localhost}
+      GF_SERVER_ENFORCE_DOMAIN: "true"
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-monitoring-password-not-configured}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_METRICS_ENABLED: "true"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_PLUGINS_PREINSTALL_DISABLED: "true"
+      GF_PLUGINS_PREINSTALL_AUTO_UPDATE: "false"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ../../monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../../monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - prometheus
+      - loki
+
+  node-exporter:
+    image: prom/node-exporter:v1.11.1
+    restart: unless-stopped
+    pid: host
+    command:
+      - --path.rootfs=/host
+      - --collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)
+    volumes:
+      - /:/host:ro,rslave
+
+  cadvisor:
+    image: ghcr.io/google/cadvisor:v0.57.0
+    restart: unless-stopped
+    privileged: true
+    devices:
+      - /dev/kmsg:/dev/kmsg
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker:/var/lib/docker:ro
+      - /dev/disk:/dev/disk:ro
+
+  postgres-exporter:
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.19.1
+    restart: unless-stopped
+    environment:
+      DATA_SOURCE_NAME: ${DATABASE_URL}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  blackbox-exporter:
+    image: prom/blackbox-exporter:v0.28.0
+    restart: unless-stopped
+    volumes:
+      - ../../monitoring/blackbox/blackbox.yml:/etc/blackbox_exporter/config.yml:ro
+
+  loki:
+    image: grafana/loki:3.7.2
+    restart: unless-stopped
+    command:
+      - -config.file=/etc/loki/loki.yml
+      - -config.expand-env=true
+    environment:
+      LOKI_RETENTION_PERIOD: ${LOKI_RETENTION_PERIOD:-336h}
+    volumes:
+      - ../../monitoring/loki/loki.yml:/etc/loki/loki.yml:ro
+      - loki_data:/loki
+
+  alloy:
+    image: grafana/alloy:v1.16.1
+    restart: unless-stopped
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+    environment:
+      MONITORING_COMPOSE_PROJECT: ${COMPOSE_PROJECT_NAME:-docker}
+    volumes:
+      - ../../monitoring/alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ../../logs:/var/log/outbound-dialer:ro
+      - freeswitch_logs:/var/log/freeswitch:ro
+      - alloy_data:/var/lib/alloy/data
+    depends_on:
+      - loki
+
 volumes:
   postgres_data:
   freeswitch_generated:
@@ -161,3 +299,8 @@ volumes:
   fail2ban_data:
   letsencrypt:
   certbot_www:
+  prometheus_data:
+  alertmanager_data:
+  grafana_data:
+  loki_data:
+  alloy_data:

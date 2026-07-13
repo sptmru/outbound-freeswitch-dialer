@@ -35,6 +35,7 @@ const envSchema = z.object({
   FREESWITCH_DOMAIN: z.string().default("localhost"),
   FREESWITCH_WEBRTC_WSS_PORT: z.coerce.number().int().positive().default(7443),
   FREESWITCH_WEBRTC_PUBLIC_WS_URL: z.string().url().optional(),
+  MONITORING_STUCK_CALL_SECONDS: z.coerce.number().int().positive().default(900),
   SIP_TRUNK_MODE: z.enum(["registration", "ip_auth"]).default("registration"),
   SIP_TRUNK_PROXY: z.string().optional(),
   SIP_TRUNK_USERNAME: z.string().optional(),

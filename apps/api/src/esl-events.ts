@@ -4,6 +4,12 @@ import { join } from "node:path";
 import type pg from "pg";
 import type { AppConfig } from "./config.js";
 import { sendFreeSwitchApiCommand } from "./esl.js";
+import {
+  recordFreeSwitchEslReconnect,
+  recordFreeSwitchEventError,
+  recordFreeSwitchEventProcessed,
+  setFreeSwitchEventListenerConnected
+} from "./metrics.js";
 
 interface Logger {
   error: (value: unknown, message?: string) => void;
@@ -40,6 +46,7 @@ type AgentRegistrationEvent = {
 
 export function startFreeSwitchEventListener(config: AppConfig, pool: pg.Pool, logger: Logger): () => void {
   if (!config.FREESWITCH_ESL_ENABLED) {
+    setFreeSwitchEventListenerConnected(false);
     logger.info({ enabled: false }, "FreeSWITCH event listener disabled");
     return () => undefined;
   }
@@ -105,6 +112,7 @@ export function startFreeSwitchEventListener(config: AppConfig, pool: pg.Pool, l
           ) {
             nextSocket.setTimeout(0);
             stage = "events";
+            setFreeSwitchEventListenerConnected(true);
             logger.info({ events: EVENT_NAMES }, "FreeSWITCH event listener subscribed");
             continue;
           }
@@ -126,9 +134,12 @@ export function startFreeSwitchEventListener(config: AppConfig, pool: pg.Pool, l
               "FreeSWITCH tagged event received"
             );
           }
-          void persistFreeSwitchEvent(config, pool, frame).catch((error: unknown) => {
-            logger.error(error, "failed to persist FreeSWITCH event");
-          });
+          void persistFreeSwitchEvent(config, pool, frame)
+            .then(() => recordFreeSwitchEventProcessed(frame.headers["event-name"]))
+            .catch((error: unknown) => {
+              recordFreeSwitchEventError();
+              logger.error(error, "failed to persist FreeSWITCH event");
+            });
         }
       }
     });
@@ -151,8 +162,12 @@ export function startFreeSwitchEventListener(config: AppConfig, pool: pg.Pool, l
     });
 
     nextSocket.on("close", () => {
+      setFreeSwitchEventListenerConnected(false);
       if (socket === nextSocket) {
         socket = null;
+      }
+      if (!stopped) {
+        recordFreeSwitchEslReconnect();
       }
       scheduleReconnect();
     });
@@ -162,6 +177,7 @@ export function startFreeSwitchEventListener(config: AppConfig, pool: pg.Pool, l
 
   return () => {
     stopped = true;
+    setFreeSwitchEventListenerConnected(false);
     if (reconnectTimer) {
       clearTimeout(reconnectTimer);
       reconnectTimer = null;

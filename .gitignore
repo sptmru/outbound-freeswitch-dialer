@@ -6,6 +6,7 @@ dist-test/
 .env.local
 *.log
 logs/
+monitoring/generated/
 coverage/
 .DS_Store
 infra/freeswitch/recordings/*

@@ -6,7 +6,13 @@ import { checkPostgres } from "./db.js";
 import { checkFreeSwitchEsl } from "./esl.js";
 
 export function registerHealthRoutes(app: FastifyInstance, config: AppConfig, pool: pg.Pool): void {
-  app.get("/health", async (): Promise<HealthResponse> => {
+  app.get("/health/live", async () => ({
+    status: "ok",
+    service: "api",
+    uptimeSeconds: Math.round(process.uptime())
+  }));
+
+  const readiness = async (): Promise<HealthResponse> => {
     const postgres = await check(() => checkPostgres(pool));
     const freeswitchEsl = config.FREESWITCH_ESL_ENABLED
       ? await check(() => checkFreeSwitchEsl(config))
@@ -23,7 +29,14 @@ export function registerHealthRoutes(app: FastifyInstance, config: AppConfig, po
         freeswitchEsl
       }
     };
-  });
+  };
+
+  for (const path of ["/health", "/health/ready"] as const) {
+    app.get(path, async (_request, reply) => {
+      const response = await readiness();
+      return reply.code(response.status === "ok" ? 200 : 503).send(response);
+    });
+  }
 }
 
 async function check(fn: () => Promise<string>) {

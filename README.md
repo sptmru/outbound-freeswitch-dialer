@@ -39,7 +39,7 @@ The first backend slice is now scaffolded:
 - `apps/web` - React + Vite operator UI based on the Figma v1 Agent Desk and admin flows.
 - `packages/shared` - shared call state, outcome, role, and health contracts.
 - `apps/api/db/migrations` - initial PostgreSQL schema for users, agents, campaigns, contacts, calls, call events, recordings, suppression, settings, and VM/beep signal events.
-- `infra/docker/docker-compose.yml` - PostgreSQL, API, Web UI, HTTPS proxy, certbot, FreeSWITCH, and fail2ban services. FreeSWITCH runs with `network_mode: host` so SIP, WSS, and RTP bind directly on the deployment host.
+- `infra/docker/docker-compose.yml` - PostgreSQL, API, Web UI, HTTPS proxy, certbot, FreeSWITCH, fail2ban, and the monitoring stack. FreeSWITCH runs with `network_mode: host` so SIP, WSS, and RTP bind directly on the deployment host.
 - `scripts/deploy.sh` - Docker deployment entrypoint using `.env`.
 
 ## Local Setup
@@ -77,7 +77,13 @@ Fill the required values in `.env`, especially:
 - `FREESWITCH_DOMAIN`
 - `LETSENCRYPT_DOMAIN`
 - `LETSENCRYPT_EMAIL`
+- `GRAFANA_DOMAIN`
+- `GRAFANA_ADMIN_PASSWORD`
 - SIP trunk values once the provider details are available.
+
+Before deployment, point both `LETSENCRYPT_DOMAIN` and `GRAFANA_DOMAIN` to the
+deployment host in DNS. They must be different hostnames. The deploy script
+requests one Let's Encrypt certificate containing both names.
 
 Deploy:
 
@@ -146,7 +152,8 @@ Set `WEB_SMOKE_URL` to target a different URL, for example the outer proxy
 origin.
 
 `./scripts/deploy.sh` starts the proxy, runs certbot with the webroot challenge
-for `LETSENCRYPT_DOMAIN`, and reloads nginx after the certificate is issued.
+for `LETSENCRYPT_DOMAIN` and `GRAFANA_DOMAIN`, and reloads nginx after the
+certificate is issued.
 The proxy starts with a short-lived self-signed fallback certificate only so the
 container can boot before the first Let's Encrypt certificate exists.
 
@@ -155,6 +162,61 @@ installs a daily cron entry through `scripts/install-cert-renew-cron.sh`; renewa
 logs are written to `logs/cert-renew.log`.
 
 Health output includes PostgreSQL and FreeSWITCH ESL connectivity. The ESL check can be temporarily disabled with `FREESWITCH_ESL_ENABLED=false` while FreeSWITCH runtime configuration is still being finalized.
+
+The API provides process liveness separately from dependency readiness:
+
+```text
+GET /health/live
+GET /health/ready
+GET /health
+```
+
+`/health/ready` and the backward-compatible `/health` return HTTP 503 when
+PostgreSQL or enabled ESL connectivity is unavailable. Docker uses
+`/health/ready`; `/health/live` only verifies that the API process can respond.
+
+## Monitoring
+
+The deployment includes Prometheus, Alertmanager, Grafana, Loki, Alloy,
+node-exporter, cAdvisor, postgres-exporter, and blackbox-exporter. Grafana is
+available only through the HTTPS proxy at:
+
+```text
+https://<GRAFANA_DOMAIN>
+```
+
+Prometheus, Loki, Alertmanager, exporters, and API metrics remain on the private
+Compose network and do not publish host ports. The public proxy explicitly
+blocks `/api/metrics`. Grafana is provisioned with the `Outbound Dialer
+Overview` dashboard and Prometheus, Loki, and Alertmanager data sources.
+
+Configure monitoring in `.env`:
+
+```text
+GRAFANA_DOMAIN=grafana.example.com
+GRAFANA_ADMIN_USER=admin
+GRAFANA_ADMIN_PASSWORD=<at-least-16-random-characters>
+PROMETHEUS_RETENTION=30d
+LOKI_RETENTION_PERIOD=336h
+ALERTMANAGER_RETENTION=120h
+ALERTMANAGER_REPEAT_INTERVAL=4h
+ALERTMANAGER_WEBHOOK_URL=
+ALERTMANAGER_TELEGRAM_BOT_TOKEN=
+ALERTMANAGER_TELEGRAM_CHAT_ID=
+MONITORING_STUCK_CALL_SECONDS=900
+```
+
+Alert delivery is optional: set a webhook URL, or both Telegram values. Without
+them, alerts remain visible in Alertmanager and Grafana. The default rules cover
+target availability, public HTTPS checks and certificate expiry, API/DB/ESL/SIP
+trunk state, stuck calls, recent call failures, recording/voicemail errors, host
+resources, disk space, and container restarts.
+
+Alloy collects Docker logs only from this Compose project, plus the FreeSWITCH
+and certificate-renewal log files. The blackbox checks run from the deployment
+host's stack, so they verify the public HTTPS path but cannot detect a complete
+host or network outage. Add an off-host uptime check later if that failure mode
+must page independently.
 
 FreeSWITCH is started in host network mode. Keep `FREESWITCH_ESL_HOST=host.docker.internal` for the API container unless the API is also moved to host networking.
 The default `FREESWITCH_ESL_ACL=any_v4.auto` allows the API container to reach host-mode ESL; restrict host firewall access to port `8021` in production.

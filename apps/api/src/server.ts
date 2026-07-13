@@ -9,6 +9,7 @@ import { createPool, runMigrations } from "./db.js";
 import { startFreeSwitchEventListener } from "./esl-events.js";
 import { provisionAllAgentDirectories } from "./freeswitch/provisioning.js";
 import { registerHealthRoutes } from "./health.js";
+import { registerMetrics } from "./metrics.js";
 import { bootstrapAdmin } from "./users.js";
 
 const config = loadConfig();
@@ -74,6 +75,7 @@ await app.register(multipart, {
 });
 
 registerHealthRoutes(app, config, pool);
+registerMetrics(app, config, pool);
 registerAuthRoutes(app, config, pool);
 registerDashboardRoutes(app, config, pool);
 

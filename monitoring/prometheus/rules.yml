@@ -1,0 +1,148 @@
+groups:
+  - name: outbound-dialer-availability
+    rules:
+      - alert: PrometheusTargetDown
+        expr: up == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Prometheus target is down"
+          description: "{{ $labels.job }} target {{ $labels.instance }} has been unreachable for more than 2 minutes."
+
+      - alert: ExternalHttpProbeFailed
+        expr: probe_success{job="blackbox-http"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "External HTTP check failed"
+          description: "{{ $labels.instance }} has failed its HTTP readiness check for more than 2 minutes."
+
+      - alert: TlsCertificateExpiresSoon
+        expr: (probe_ssl_earliest_cert_expiry{job="blackbox-http"} - time()) < 14 * 24 * 60 * 60
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "TLS certificate expires soon"
+          description: "{{ $labels.instance }} certificate expires in less than 14 days."
+
+      - alert: ApplicationMetricsDatabaseQueryFailed
+        expr: outbound_dialer_database_metrics_up == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Application monitoring cannot query PostgreSQL"
+          description: "The API metrics snapshot query has failed for more than 2 minutes."
+
+      - alert: ApiHighServerErrorRate
+        expr: sum(rate(outbound_dialer_http_requests_total{status_class="5xx"}[5m])) / clamp_min(sum(rate(outbound_dialer_http_requests_total[5m])), 0.001) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "API server error rate is high"
+          description: "More than 5% of API requests have returned 5xx for 5 minutes."
+
+  - name: outbound-dialer-telephony
+    rules:
+      - alert: FreeSwitchEslListenerDisconnected
+        expr: outbound_dialer_esl_listener_enabled == 1 and outbound_dialer_esl_listener_connected == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "FreeSWITCH ESL listener is disconnected"
+          description: "The long-lived ESL event listener has not been subscribed for more than 2 minutes."
+
+      - alert: SipTrunkUnavailable
+        expr: outbound_dialer_sip_trunk_configured == 1 and outbound_dialer_sip_trunk_ready == 0
+        for: 3m
+        labels:
+          severity: critical
+        annotations:
+          summary: "SIP trunk is unavailable"
+          description: "The configured {{ $labels.mode }} SIP trunk has not been ready for more than 3 minutes."
+
+      - alert: StuckOutboundCalls
+        expr: outbound_dialer_stuck_calls > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Outbound calls are stuck"
+          description: "{{ $value }} call(s) exceeded the configured active-call threshold."
+
+      - alert: HighOutboundCallFailureRate
+        expr: outbound_dialer_calls_attempted_window >= 5 and outbound_dialer_calls_failed_window / outbound_dialer_calls_attempted_window > 0.5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Outbound call failure rate is high"
+          description: "More than half of at least five calls in the last 15 minutes failed."
+
+      - alert: CallRecordingFailures
+        expr: outbound_dialer_recording_failures_window > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Call recordings are failing"
+          description: "{{ $value }} call recording failure(s) were recorded during the last 24 hours."
+
+      - alert: FreeSwitchEventPersistenceErrors
+        expr: increase(outbound_dialer_esl_event_errors_total[10m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "FreeSWITCH events failed to persist"
+          description: "At least one ESL event failed during persistence in the last 10 minutes."
+
+  - name: outbound-dialer-host
+    rules:
+      - alert: HostHighCpu
+        expr: 100 - (avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 85
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Host CPU usage is high"
+          description: "CPU usage has been above 85% for 10 minutes."
+
+      - alert: HostMemoryPressure
+        expr: 100 * (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) > 90
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Host memory usage is high"
+          description: "Memory usage has been above 90% for 10 minutes."
+
+      - alert: HostLowDisk
+        expr: 100 * node_filesystem_avail_bytes{fstype!~"tmpfs|overlay|squashfs"} / node_filesystem_size_bytes{fstype!~"tmpfs|overlay|squashfs"} < 15
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Host disk space is low"
+          description: "{{ $labels.mountpoint }} has less than 15% free space."
+
+      - alert: HostLowInodes
+        expr: 100 * node_filesystem_files_free{fstype!~"tmpfs|overlay|squashfs"} / node_filesystem_files{fstype!~"tmpfs|overlay|squashfs"} < 15
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Host inode space is low"
+          description: "{{ $labels.mountpoint }} has less than 15% free inodes."
+
+      - alert: ContainerRestartLoop
+        expr: changes(container_start_time_seconds{name!=""}[15m]) > 2
+        labels:
+          severity: warning
+        annotations:
+          summary: "Container is restarting repeatedly"
+          description: "{{ $labels.name }} restarted more than twice during the last 15 minutes."

@@ -10,9 +10,31 @@ upstream outbound_dialer_freeswitch_ws {
   server ${FREESWITCH_WS_UPSTREAM};
 }
 
+upstream outbound_dialer_grafana {
+  server grafana:3000;
+}
+
+map $http_upgrade $connection_upgrade {
+  default upgrade;
+  '' close;
+}
+
 server {
   listen 80;
   server_name ${LETSENCRYPT_DOMAIN};
+
+  location /.well-known/acme-challenge/ {
+    root /var/www/certbot;
+  }
+
+  location / {
+    return 301 https://$host$request_uri;
+  }
+}
+
+server {
+  listen 80;
+  server_name ${GRAFANA_DOMAIN};
 
   location /.well-known/acme-challenge/ {
     root /var/www/certbot;
@@ -48,6 +70,10 @@ server {
     proxy_pass http://outbound_dialer_api/;
   }
 
+  location = /api/metrics {
+    return 404;
+  }
+
   location /freeswitch-ws {
     proxy_http_version 1.1;
     proxy_set_header Host $host;
@@ -68,5 +94,33 @@ server {
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto https;
     proxy_pass http://outbound_dialer_web;
+  }
+}
+
+server {
+  listen 443 ssl;
+  http2 on;
+  server_name ${GRAFANA_DOMAIN};
+
+  ssl_certificate ${OUTBOUND_DIALER_SSL_CERTIFICATE};
+  ssl_certificate_key ${OUTBOUND_DIALER_SSL_CERTIFICATE_KEY};
+  ssl_session_cache shared:SSL:10m;
+  ssl_session_timeout 1d;
+  ssl_protocols TLSv1.2 TLSv1.3;
+  ssl_prefer_server_ciphers off;
+
+  location /.well-known/acme-challenge/ {
+    root /var/www/certbot;
+  }
+
+  location / {
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto https;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection $connection_upgrade;
+    proxy_pass http://outbound_dialer_grafana;
   }
 }

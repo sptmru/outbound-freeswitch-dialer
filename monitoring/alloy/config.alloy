@@ -1,0 +1,65 @@
+discovery.docker "containers" {
+	host             = "unix:///var/run/docker.sock"
+	refresh_interval = "5s"
+}
+
+discovery.relabel "containers" {
+	targets = discovery.docker.containers.targets
+
+	rule {
+		source_labels = ["__meta_docker_container_label_com_docker_compose_project"]
+		regex         = sys.env("MONITORING_COMPOSE_PROJECT")
+		action        = "keep"
+	}
+
+	rule {
+		source_labels = ["__meta_docker_container_name"]
+		regex         = "/(.*)"
+		target_label  = "container"
+	}
+
+	rule {
+		source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+		target_label  = "service"
+	}
+
+	rule {
+		source_labels = ["__meta_docker_container_label_com_docker_compose_project"]
+		target_label  = "compose_project"
+	}
+}
+
+loki.source.docker "containers" {
+	host       = "unix:///var/run/docker.sock"
+	targets    = discovery.relabel.containers.output
+	labels     = {environment = "production"}
+	forward_to = [loki.process.default.receiver]
+}
+
+loki.source.file "freeswitch" {
+	targets = [{
+		__path__    = "/var/log/freeswitch/freeswitch.log",
+		service     = "freeswitch",
+		environment = "production",
+	}]
+	forward_to = [loki.process.default.receiver]
+}
+
+loki.source.file "certificate_renewal" {
+	targets = [{
+		__path__    = "/var/log/outbound-dialer/cert-renew.log",
+		service     = "certbot",
+		environment = "production",
+	}]
+	forward_to = [loki.process.default.receiver]
+}
+
+loki.process "default" {
+	forward_to = [loki.write.default.receiver]
+}
+
+loki.write "default" {
+	endpoint {
+		url = "http://loki:3100/loki/api/v1/push"
+	}
+}

@@ -2,6 +2,7 @@
 set -eu
 
 domain="${LETSENCRYPT_DOMAIN:-localhost}"
+grafana_domain="${GRAFANA_DOMAIN:-grafana.localhost}"
 real_cert="/etc/letsencrypt/live/${domain}/fullchain.pem"
 real_key="/etc/letsencrypt/live/${domain}/privkey.pem"
 fallback_dir="/etc/nginx/fallback-certs"
@@ -30,7 +31,8 @@ else
 fi
 
 export FREESWITCH_WS_UPSTREAM_SCHEME="${FREESWITCH_WS_UPSTREAM_SCHEME:-http}"
+export GRAFANA_DOMAIN="${grafana_domain}"
 
-envsubst '${LETSENCRYPT_DOMAIN} ${OUTBOUND_DIALER_SSL_CERTIFICATE} ${OUTBOUND_DIALER_SSL_CERTIFICATE_KEY} ${FREESWITCH_WS_UPSTREAM} ${FREESWITCH_WS_UPSTREAM_SCHEME}' \
+envsubst '${LETSENCRYPT_DOMAIN} ${GRAFANA_DOMAIN} ${OUTBOUND_DIALER_SSL_CERTIFICATE} ${OUTBOUND_DIALER_SSL_CERTIFICATE_KEY} ${FREESWITCH_WS_UPSTREAM} ${FREESWITCH_WS_UPSTREAM_SCHEME}' \
   < /etc/nginx/templates/outbound-dialer.conf.tpl \
   > /etc/nginx/conf.d/default.conf

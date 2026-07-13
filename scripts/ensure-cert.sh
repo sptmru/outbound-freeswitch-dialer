@@ -24,6 +24,11 @@ if [[ -z "${LETSENCRYPT_EMAIL:-}" ]]; then
   exit 1
 fi
 
+if [[ -z "${GRAFANA_DOMAIN:-}" ]]; then
+  echo "Missing GRAFANA_DOMAIN in .env." >&2
+  exit 1
+fi
+
 APP_ENV_FILE="${ENV_FILE}" docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" up -d proxy
 APP_ENV_FILE="${ENV_FILE}" docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" run --rm certbot \
   certonly \
@@ -31,9 +36,13 @@ APP_ENV_FILE="${ENV_FILE}" docker compose --env-file "${ENV_FILE}" -f "${COMPOSE
   --webroot-path /var/www/certbot \
   --email "${LETSENCRYPT_EMAIL}" \
   --agree-tos \
+  --non-interactive \
   --no-eff-email \
   --keep-until-expiring \
-  -d "${LETSENCRYPT_DOMAIN}"
+  --expand \
+  --cert-name "${LETSENCRYPT_DOMAIN}" \
+  -d "${LETSENCRYPT_DOMAIN}" \
+  -d "${GRAFANA_DOMAIN}"
 APP_ENV_FILE="${ENV_FILE}" docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" exec -T proxy \
   /docker-entrypoint.d/20-render-outbound-dialer-proxy.sh
 APP_ENV_FILE="${ENV_FILE}" docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" exec -T proxy nginx -s reload
