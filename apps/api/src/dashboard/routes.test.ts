@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, it } from "node:test";
 import type { PublicUser } from "@outbound-dialer/shared";
+import Fastify from "fastify";
 import type pg from "pg";
 import type { AppConfig } from "../config.js";
 import { getAgentCampaign, getAgentCampaignForDialerAction } from "./campaigns.js";
@@ -23,6 +27,57 @@ const config = {
 } as AppConfig;
 
 describe("dashboard route helpers", () => {
+  it("streams the requested audio byte range before completing the async route", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "outbound-dialer-audio-"));
+    const filePath = join(directory, "recording.wav");
+    const audio = Buffer.from("RIFF-test-audio-body");
+    await writeFile(filePath, audio);
+
+    const app = Fastify();
+    app.get("/audio", async (request, reply) =>
+      __testing.sendAudioFile(request, reply, filePath, "recording.wav", audio.length)
+    );
+
+    try {
+      const response = await app.inject({
+        method: "GET",
+        url: "/audio",
+        headers: { range: "bytes=5-8" }
+      });
+
+      assert.equal(response.statusCode, 206);
+      assert.equal(response.headers["content-range"], `bytes 5-8/${audio.length}`);
+      assert.equal(response.headers["content-length"], "4");
+      assert.deepEqual(response.rawPayload, audio.subarray(5, 9));
+    } finally {
+      await app.close();
+      await rm(directory, { force: true, recursive: true });
+    }
+  });
+
+  it("streams the complete audio file when no byte range is requested", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "outbound-dialer-audio-"));
+    const filePath = join(directory, "recording.wav");
+    const audio = Buffer.from("RIFF-complete-audio-body");
+    await writeFile(filePath, audio);
+
+    const app = Fastify();
+    app.get("/audio", async (request, reply) =>
+      __testing.sendAudioFile(request, reply, filePath, "recording.wav", audio.length)
+    );
+
+    try {
+      const response = await app.inject({ method: "GET", url: "/audio" });
+
+      assert.equal(response.statusCode, 200);
+      assert.equal(response.headers["content-length"], String(audio.length));
+      assert.deepEqual(response.rawPayload, audio);
+    } finally {
+      await app.close();
+      await rm(directory, { force: true, recursive: true });
+    }
+  });
+
   it("parses quoted CSV fields and escaped quotes", () => {
     const parsed = parseCsv('Name,Phone,Company\n"Doe, Jane","+1 415 555 0100","Acme ""Labs"""');
 

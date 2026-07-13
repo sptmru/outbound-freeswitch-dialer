@@ -96,6 +96,9 @@ compose up -d --wait postgres freeswitch
 compose run --rm --no-deps api npm --workspace @outbound-dialer/api run migrate
 ENV_FILE="${ENV_FILE}" "${ROOT_DIR}/scripts/configure-monitoring-db-role.sh"
 compose up -d --wait
+# Generated monitoring files are bind-mounted, so Compose does not recreate an
+# already-running Prometheus container when only their contents change.
+compose exec -T prometheus wget -q -O /dev/null --post-data="" http://127.0.0.1:9090/-/reload
 ENV_FILE="${ENV_FILE}" APP_VERSION="${new_version}" "${ROOT_DIR}/scripts/ensure-cert.sh"
 ENV_FILE="${ENV_FILE}" "${ROOT_DIR}/scripts/install-cert-renew-cron.sh"
 ENV_FILE="${ENV_FILE}" "${ROOT_DIR}/scripts/install-backup-cron.sh"

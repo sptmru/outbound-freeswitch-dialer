@@ -142,6 +142,7 @@ if [[ "${RESTORE_RECORDINGS:-true}" == "true" ]]; then
 fi
 
 compose up -d --wait
+compose exec -T prometheus wget -q -O /dev/null --post-data="" http://127.0.0.1:9090/-/reload
 ENV_FILE="${ENV_FILE}" APP_VERSION="${APP_VERSION}" "${ROOT_DIR}/scripts/ensure-cert.sh"
 WEB_SMOKE_URL="${WEB_SMOKE_URL:-https://${LETSENCRYPT_DOMAIN}}" "${ROOT_DIR}/scripts/smoke-web.sh"
 ENV_FILE="${ENV_FILE}" "${ROOT_DIR}/scripts/install-cert-renew-cron.sh"

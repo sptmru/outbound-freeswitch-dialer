@@ -1578,12 +1578,11 @@ function sendAudioFile(
   filePath: string,
   filename: string,
   size: number
-): void {
+): FastifyReply {
   const rangeHeader = typeof request.headers.range === "string" ? request.headers.range : undefined;
   const range = parseSingleByteRange(rangeHeader, size);
   if (rangeHeader && !range) {
-    reply.code(416).header("Content-Range", `bytes */${size}`).send();
-    return;
+    return reply.code(416).header("Content-Range", `bytes */${size}`).send();
   }
 
   reply
@@ -1592,14 +1591,13 @@ function sendAudioFile(
     .header("Cache-Control", "private, no-store")
     .header("Content-Disposition", `inline; filename="${filename.replace(/["\r\n]/g, "")}"`);
   if (range) {
-    reply
+    return reply
       .code(206)
       .header("Content-Range", `bytes ${range.start}-${range.end}/${size}`)
       .header("Content-Length", range.end - range.start + 1)
       .send(createReadStream(filePath, range));
-    return;
   }
-  reply.header("Content-Length", size).send(createReadStream(filePath));
+  return reply.header("Content-Length", size).send(createReadStream(filePath));
 }
 
 function csvCell(value: string): string {
@@ -2036,6 +2034,7 @@ export const __testing = {
   mapVoicemailSignal,
   normalizePhoneNumber,
   parseCsv,
+  sendAudioFile,
   syncFreeSwitchOriginate,
   validateDialableNumber
 };
