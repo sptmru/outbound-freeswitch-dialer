@@ -3,12 +3,39 @@ set -euo pipefail
 
 WEB_SMOKE_URL="${WEB_SMOKE_URL:-http://127.0.0.1:${WEB_PUBLIC_PORT:-8080}}"
 WEB_SMOKE_CURL_TIMEOUT_SECONDS="${WEB_SMOKE_CURL_TIMEOUT_SECONDS:-5}"
+WEB_SMOKE_RETRY_ATTEMPTS="${WEB_SMOKE_RETRY_ATTEMPTS:-10}"
+WEB_SMOKE_RETRY_DELAY_SECONDS="${WEB_SMOKE_RETRY_DELAY_SECONDS:-1}"
+
+[[ "${WEB_SMOKE_RETRY_ATTEMPTS}" =~ ^[1-9][0-9]*$ ]] \
+  || { echo "WEB_SMOKE_RETRY_ATTEMPTS must be a positive integer" >&2; exit 1; }
+[[ "${WEB_SMOKE_RETRY_DELAY_SECONDS}" =~ ^[0-9]+$ ]] \
+  || { echo "WEB_SMOKE_RETRY_DELAY_SECONDS must be a non-negative integer" >&2; exit 1; }
 
 base_url="${WEB_SMOKE_URL%/}"
 
 fetch() {
   local path="$1"
-  curl -fsS --max-time "${WEB_SMOKE_CURL_TIMEOUT_SECONDS}" "${base_url}${path}"
+  local attempt
+  local curl_error_file
+  local response
+
+  curl_error_file="$(mktemp)"
+  for ((attempt = 1; attempt <= WEB_SMOKE_RETRY_ATTEMPTS; attempt += 1)); do
+    if response="$(curl -fsS --max-time "${WEB_SMOKE_CURL_TIMEOUT_SECONDS}" "${base_url}${path}" 2>"${curl_error_file}")"; then
+      rm -f "${curl_error_file}"
+      printf '%s' "${response}"
+      return 0
+    fi
+
+    if ((attempt < WEB_SMOKE_RETRY_ATTEMPTS)); then
+      sleep "${WEB_SMOKE_RETRY_DELAY_SECONDS}"
+    fi
+  done
+
+  cat "${curl_error_file}" >&2
+  rm -f "${curl_error_file}"
+  echo "Web smoke request failed after ${WEB_SMOKE_RETRY_ATTEMPTS} attempt(s): ${base_url}${path}" >&2
+  return 1
 }
 
 index_html="$(fetch "/")"
