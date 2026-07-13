@@ -243,11 +243,11 @@ export function App() {
               <Radio size={19} />
             </div>
             <div>
-              <strong>Relay</strong>
+              <strong>Dialer</strong>
             </div>
           </div>
           <div className="workspace-label">
-            <span>Workspace</span>
+            <span>Campaign</span>
             <strong>{desk.campaign?.name ?? "Outbound calling"}</strong>
           </div>
           <nav className="nav-list">
@@ -348,7 +348,7 @@ function LoginScreen({
             <Radio size={19} />
           </div>
           <div>
-            <strong>Relay</strong>
+            <strong>Dialer</strong>
             <span>Outbound calling workspace</span>
           </div>
         </div>
@@ -663,7 +663,7 @@ function LeadQueue({
   const [query, setQuery] = useState("");
   const recommended = leads.find((lead) => lead.status === "ready") ?? leads[0];
   const visibleLeads = leads.filter((lead) =>
-    `${lead.name} ${lead.company} ${lead.phoneNumber}`.toLowerCase().includes(query.trim().toLowerCase())
+    `${lead.name} ${getDisplayCompany(lead.company)} ${lead.phoneNumber}`.toLowerCase().includes(query.trim().toLowerCase())
   );
   const activeQueue = !showRecommendedCall;
 
@@ -699,12 +699,14 @@ function LeadQueue({
         />
       </label>
       <div className="lead-table" role="table" aria-label="Next leads">
-        {visibleLeads.map((lead) => (
+        {visibleLeads.map((lead) => {
+          const company = getDisplayCompany(lead.company);
+          return (
           <div className={`lead-table-row lead-${lead.status}`} key={lead.id} role="row">
             <span className="lead-avatar" aria-hidden="true">{getInitials(lead.name)}</span>
             <div className="lead-identity">
               <strong>{lead.name}</strong>
-              {activeQueue && lead.company && <small>{lead.company}</small>}
+              {activeQueue && company && <small>{company}</small>}
               <span>{lead.phoneNumber}</span>
             </div>
             <div className="lead-row-state">
@@ -721,7 +723,8 @@ function LeadQueue({
               )}
             </div>
           </div>
-        ))}
+          );
+        })}
         {!visibleLeads.length && (
           <div className="lead-table-empty" role="row">
             {leads.length ? "No leads match your search." : "No leads are queued for this campaign."}
@@ -741,7 +744,13 @@ function getInitials(name: string): string {
     .join("") || "?";
 }
 
+function getDisplayCompany(company: string | null | undefined): string {
+  const value = company?.trim() ?? "";
+  return value.toLowerCase() === "unmapped company" ? "" : value;
+}
+
 function LeadContextPanel({ lead }: { lead?: LeadSummary }) {
+  const company = getDisplayCompany(lead?.company);
   const visibleFields = lead?.fields
     .filter(({ label }) => !["company", "name", "phone"].includes(label.toLowerCase()))
     .slice(0, 5) ?? [];
@@ -752,11 +761,13 @@ function LeadContextPanel({ lead }: { lead?: LeadSummary }) {
         <h2>Lead context</h2>
         <p>Visible throughout the call</p>
       </div>
-      <div className="company-card">
-        <span>Company</span>
-        <strong>{lead?.company || "Manual call"}</strong>
-        <small>{lead ? "Campaign lead" : "No lead profile is linked"}</small>
-      </div>
+      {company && (
+        <div className="company-card">
+          <span>Company</span>
+          <strong>{company}</strong>
+          <small>Campaign lead</small>
+        </div>
+      )}
       <div className="lead-facts">
         {visibleFields.map((field) => (
           <div key={field.label}>
@@ -1580,7 +1591,7 @@ function CampaignContacts({
         {contacts?.contacts.map((contact) => (
           <div className="table-row contact-row" key={contact.id}>
             <strong>{contact.name}</strong>
-            <span>{contact.company}</span>
+            <span>{getDisplayCompany(contact.company)}</span>
             <span>{contact.phoneNumber}</span>
             <b>{contact.status}</b>
             <div className="row-actions">

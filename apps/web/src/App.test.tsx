@@ -213,6 +213,32 @@ describe("App Agent Desk empty states", () => {
     expect(screen.getAllByTitle("Finish the active call first")).toHaveLength(5);
   });
 
+  it("uses Dialer campaign branding and hides the unmapped company placeholder", async () => {
+    const admin = userRow({ role: "admin" });
+    apiMocks.fetchMe.mockResolvedValue({ user: admin });
+    apiMocks.fetchAgentDesk.mockResolvedValue(
+      deskResponse({
+        user: admin,
+        activeCall: activeCallRow(),
+        leads: [{
+          id: "22222222-2222-4222-8222-222222222222",
+          name: "Avery Johnson",
+          company: "Unmapped company",
+          phoneNumber: "+15551234567",
+          status: "calling",
+          fields: []
+        }]
+      })
+    );
+
+    render(<App />);
+
+    expect(await screen.findByText("Dialer")).toBeInTheDocument();
+    expect(screen.getByText("Campaign")).toBeInTheDocument();
+    expect(screen.queryByText("Relay")).not.toBeInTheDocument();
+    expect(screen.queryByText("Unmapped company")).not.toBeInTheDocument();
+  });
+
   it("shows the campaign early-media AVMD warning only while the setting is enabled", async () => {
     const admin = userRow({ role: "admin" });
     apiMocks.fetchMe.mockResolvedValue({ user: admin });

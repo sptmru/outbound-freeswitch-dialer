@@ -730,7 +730,7 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
         item: {
           id: row.id,
           name: row.display_name ?? input.name,
-          company: String(row.mapped_fields_json.Company ?? row.mapped_fields_json.company ?? "Unmapped company"),
+          company: String(row.mapped_fields_json.Company ?? row.mapped_fields_json.company ?? ""),
           phoneNumber: row.phone_number,
           status: suppression ? "suppressed" : "ready",
           fields: Object.entries(row.mapped_fields_json ?? {}).map(([label, value]) => ({
@@ -1366,7 +1366,7 @@ async function getContactListItem(pool: pg.Pool, contactId: string): Promise<Cam
   return {
     id: row.id,
     name: row.display_name ?? "Unknown contact",
-    company: row.company ?? "Unmapped company",
+    company: row.company ?? "",
     phoneNumber: row.phone_number,
     status: row.contact_status,
     createdAt: row.created_at.toISOString(),
@@ -1430,7 +1430,7 @@ async function getCampaignContacts(
     contacts: result.rows.map((row) => ({
       id: row.id,
       name: row.display_name ?? "Unknown contact",
-      company: row.company ?? "Unmapped company",
+      company: row.company ?? "",
       phoneNumber: row.phone_number,
       status: row.contact_status,
       createdAt: row.created_at.toISOString(),

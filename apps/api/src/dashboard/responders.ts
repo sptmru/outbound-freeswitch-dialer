@@ -124,7 +124,7 @@ async function getLeadQueue(pool: pg.Pool, campaignId: string): Promise<LeadSumm
   return result.rows.map((row) => ({
     id: row.id,
     name: row.display_name ?? "Unknown contact",
-    company: row.company ?? "Unmapped company",
+    company: row.company ?? "",
     phoneNumber: row.phone_number,
     status: row.status,
     fields: Object.entries(row.mapped_fields_json ?? {})
