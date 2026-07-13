@@ -48,7 +48,10 @@ Total items returned: 2
     assert.match(queries[0]?.sql ?? "", /set registered = sip_username = any\(\$1::text\[\]\)/);
     assert.match(queries[0]?.sql ?? "", /last_registered_at/);
     assert.match(queries[0]?.sql ?? "", /last_unregistered_at/);
-    assert.match(queries[0]?.sql ?? "", /when sip_username = any\(\$1::text\[\]\) and status = 'offline' then 'ready'/);
+    assert.match(
+      queries[0]?.sql ?? "",
+      /when sip_username = any\(\$1::text\[\]\) and status = 'offline' then 'ready'/
+    );
     assert.match(queries[0]?.sql ?? "", /then 'offline'/);
   });
 

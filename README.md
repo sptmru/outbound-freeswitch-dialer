@@ -1,169 +1,103 @@
 # Outbound Dialer
 
-Outbound dialer with a Web UI softphone, backend-owned call control, FreeSWITCH ESL, Docker, Node.js, and TypeScript.
+Single-tenant outbound dialer with a browser softphone, backend-owned call control, FreeSWITCH ESL, PostgreSQL, React, Fastify, TypeScript, and Docker Compose.
 
-The product target is an agent dashboard that supports click-to-call, live call state, manual voicemail drop, prerecorded audio playback into the customer leg, and agent release once playback starts.
+The repository now contains the planned operational MVP: agent calling, manual voicemail drop with agent release, campaign/contact administration, suppression, recordings, history, audit, monitoring, retention, deployment, backup, restore, and rollback tooling. Repository implementation and automated checks are not a substitute for production acceptance; SIP-provider integration, real external calls/mailboxes, compliance decisions, and operational drills remain open.
 
-## Planning Documents
+## Implemented Product Surface
 
-- [Implementation plan](docs/implementation-plan.md) - end-to-end delivery plan from discovery to production handover.
-- [Requirements](docs/requirements.md) - confirmed product and deployment decisions.
-- [Architecture](docs/architecture.md) - proposed system architecture, call-control model, and call flows.
-- [Design plan](docs/design-plan.md) - Figma-first product design workflow and UI scope.
-- [AI development workflow](docs/ai-development-workflow.md) - how AI-assisted implementation should be run safely and repeatably.
-- [Open questions](docs/open-questions.md) - remaining unknowns after the first scope clarification.
-- [ADR 0001](docs/adr/0001-initial-architecture.md) - initial architecture decision record.
-- [ADR 0002](docs/adr/0002-product-scope-decisions.md) - first product-scope decisions after requirement clarification.
-- [ADR 0003](docs/adr/0003-near-term-ux-scope.md) - near-term admin, automatic outcome, and CSV usability scope.
+- Agent Desk with SIP.js registration over WSS, campaign leads, manual dialing, DTMF, backend-owned call controls, automatic outcomes, and background voicemail jobs.
+- Event-driven voicemail lifecycle: `voicemail_drop_requested`, `voicemail_playback_started`, `agent_released`, and terminal completed/failed/interrupted events. Active calls are reconciled against FreeSWITCH after ESL reconnect.
+- Retry-safe contact selection with row locking, three attempts and a 15-minute retry delay by default (`CONTACT_MAX_ATTEMPTS=3`, `CONTACT_RETRY_DELAY_SECONDS=900`).
+- Campaign create/edit/pause/archive, narrow `name` + `phone` CSV import, contact search/status, and suppression checks before originate.
+- Admin user lifecycle with edit, deactivate/reactivate, password reset, session revocation, preserved historical attribution, and administrative mutation audit.
+- Paginated/filterable call history, detail timelines, bounded CSV export, call-recording playback, suppression search/import/removal, and suppression event history.
+- WAV/MP3 voicemail uploads transcoded by ffmpeg to mono 8 kHz signed 16-bit PCM WAV with loudness normalization and a five-minute limit.
+- HttpOnly `SameSite=Strict` browser session cookie, Origin-based CSRF protection for cookie-authenticated mutations, login rate limiting, and Bearer compatibility for non-browser API clients.
+- Credentialed SSE at `GET /agent/events`, backed by PostgreSQL notifications, browser reconnect, and periodic HTTP fallback refresh.
+- Short-lived, scoped, hashed media tickets and HTTP byte-range streaming. Browser media URLs do not contain the session JWT.
+- Scheduled call/recording retention with PostgreSQL advisory locking, metrics, dry-run/manual execution, and failure-safe recording deletion.
+- Prometheus/Grafana/Loki/Alertmanager monitoring, guarded SHA-tagged deployment/rollback, authenticated encrypted backups, and transactional database restore.
 
-## Proposed Repository Shape
+## Status And Acceptance
+
+The source-backed implementation status is maintained in:
+
+- [Implementation status and remaining work](docs/implementation-plan.md)
+- [Production acceptance checklist](docs/acceptance-checklist.md)
+- [Known limitations](docs/known-limitations.md)
+- [External decisions still open](docs/open-questions.md)
+
+No document in this repository should be read as proof that a live provider call, far-end voicemail recording, clean-host restore, load/soak target, or client handover has passed. Those items require recorded evidence from the target environment.
+
+Firewall policy and changes to host-published ports were intentionally excluded from this implementation pass. The current Compose network/port shape remains unchanged and must be reviewed by the deployment owner before production acceptance.
+
+## Documentation
+
+- [Requirements](docs/requirements.md)
+- [Architecture](docs/architecture.md)
+- [Design plan](docs/design-plan.md)
+- [Agent guide](docs/agent-guide.md)
+- [Administrator guide](docs/admin-guide.md)
+- [Deployment and rollback](docs/runbooks/deployment.md)
+- [Backup and restore](docs/runbooks/backup-restore.md)
+- [Incident response](docs/runbooks/incident-response.md)
+- [SIP/RTP capture](docs/runbooks/pcap.md)
+- [AI development workflow](docs/ai-development-workflow.md)
+- [Architecture decisions](docs/adr/0001-initial-architecture.md)
+
+## Repository Shape
 
 ```text
-apps/
-  api/                 # Node.js TypeScript backend, REST/WebSocket API, ESL orchestration
-  web/                 # Agent/admin Web UI with embedded WebRTC softphone
-packages/
-  shared/              # Shared TypeScript types, validation schemas, call-state contracts
-infra/
-  docker/              # Compose files and container entrypoints
-  freeswitch/          # FreeSWITCH profiles, dialplans, vars, recordings mount docs
-docs/
-  adr/                 # Architecture decision records
+apps/api/                 Fastify API, PostgreSQL migrations, ESL orchestration
+apps/web/                 React/Vite agent and administrator UI
+packages/shared/          Shared TypeScript contracts
+infra/docker/             Compose deployment and container configuration
+infra/freeswitch/         Runtime templates, dialplans, and recordings mount
+monitoring/               Metrics, dashboards, alerts, and log collection
+scripts/                  Quality, deployment, backup, restore, and smoke tooling
+docs/                     Requirements, status, guides, ADRs, and runbooks
 ```
 
-## Backend Foundation
+## Local Validation
 
-The first backend slice is now scaffolded:
-
-- `apps/api` - Fastify + TypeScript API with `/health`.
-- `apps/web` - React + Vite operator UI based on the Figma v1 Agent Desk and admin flows.
-- `packages/shared` - shared call state, outcome, role, and health contracts.
-- `apps/api/db/migrations` - initial PostgreSQL schema for users, agents, campaigns, contacts, calls, call events, recordings, suppression, settings, and VM/beep signal events.
-- `infra/docker/docker-compose.yml` - PostgreSQL, API, Web UI, HTTPS proxy, certbot, FreeSWITCH, fail2ban, and the monitoring stack. FreeSWITCH runs with `network_mode: host` so SIP, WSS, and RTP bind directly on the deployment host.
-- `scripts/deploy.sh` - Docker deployment entrypoint using `.env`.
-
-## Local Setup
-
-Install dependencies and build:
+Node.js 22 or newer is required.
 
 ```bash
-npm install
-npm run build
+npm ci
+npm run quality
 ```
 
-Validate the Docker Compose file against the example env:
+`npm run quality` runs lint, formatting checks, TypeScript checks, workspace tests, and production builds. Additional environment-backed checks are separate:
+
+```bash
+npm run test:e2e
+npm run test:freeswitch
+npm run test:load:desk
+```
+
+Validate the Compose model with example values:
 
 ```bash
 APP_ENV_FILE="$(pwd)/.env.example" docker compose --env-file .env.example -f infra/docker/docker-compose.yml config
 ```
 
-## Docker Deployment
+## Deployment
 
-Create a real env file:
+Create `.env`, replace every placeholder, keep it mode `0600`, and follow the deployment runbook:
 
 ```bash
 cp .env.example .env
-```
-
-Fill the required values in `.env`, especially:
-
-- `POSTGRES_PASSWORD`
-- `DATABASE_URL`
-- `FREESWITCH_ESL_PASSWORD`
-- `JWT_SECRET`
-- `BOOTSTRAP_ADMIN_EMAIL`
-- `BOOTSTRAP_ADMIN_PASSWORD`
-- `PUBLIC_APP_URL`
-- `FREESWITCH_DOMAIN`
-- `LETSENCRYPT_DOMAIN`
-- `LETSENCRYPT_EMAIL`
-- `GRAFANA_DOMAIN`
-- `GRAFANA_ADMIN_PASSWORD`
-- SIP trunk values once the provider details are available.
-
-Before deployment, point both `LETSENCRYPT_DOMAIN` and `GRAFANA_DOMAIN` to the
-deployment host in DNS. They must be different hostnames. The deploy script
-requests one Let's Encrypt certificate containing both names.
-
-Deploy:
-
-```bash
+chmod 600 .env
+./scripts/preflight.sh
 ./scripts/deploy.sh
 ```
 
-The API exposes:
+Production preflight requires strong independent secrets (including `POSTGRES_EXPORTER_PASSWORD`), a pinned FreeSWITCH image, TLS/Grafana domains, an alert receiver or explicit exception, and an off-host backup destination or explicit local-only risk acceptance. Deploy/restore validate each monitoring config with its runtime binary and configure the exporter through a dedicated read-only PostgreSQL role.
 
-```text
-GET /health
-POST /auth/login
-GET /auth/me
-GET /agent/desk
-GET /agent/softphone/provisioning
-POST /agent/manual-dial/validate
-POST /agent/manual-dial/start
-POST /agent/call-next
-POST /agent/leads/:contactId/call
-POST /agent/calls/:callId/end
-GET /admin/overview
-GET /admin/calls/:callId
-GET /admin/csv-imports
-GET /admin/csv-imports/:importId
-GET /admin/campaigns/:campaignId/contacts
-POST /admin/campaigns
-POST /admin/contacts
-POST /admin/contacts/:contactId/complete
-POST /admin/contacts/:contactId/suppress
-POST /admin/campaigns/:campaignId/import-csv
-POST /admin/campaigns/:campaignId/import-csv-file
-POST /admin/suppression
-```
+SIP credential encryption must use the two-stage `v1` to `v2` procedure in the [deployment runbook](docs/runbooks/deployment.md#two-stage-sip-credential-encryption-rollout). Do not enable `v2` writes until the immediately previous rollback image is confirmed to support dual reads.
 
-The Web UI is served by the `web` container and published through the `proxy`
-container. Production UI traffic should use:
-
-```text
-https://<LETSENCRYPT_DOMAIN>
-```
-
-The proxy also forwards API requests under:
-
-```text
-https://<LETSENCRYPT_DOMAIN>/api/*
-```
-
-By default the internal `web` service is also exposed for local checks at:
-
-```text
-http://127.0.0.1:8080
-```
-
-Set `WEB_PUBLIC_PORT` to change that direct host port. For deployed builds,
-keep `VITE_API_BASE_URL=/api` so the browser uses the same HTTPS origin as the
-UI.
-
-After the stack is running, smoke-test the direct web port and its `/api`
-proxy:
-
-```bash
-npm run smoke:web
-```
-
-Set `WEB_SMOKE_URL` to target a different URL, for example the outer proxy
-origin.
-
-`./scripts/deploy.sh` starts the proxy, runs certbot with the webroot challenge
-for `LETSENCRYPT_DOMAIN` and `GRAFANA_DOMAIN`, and reloads nginx after the
-certificate is issued.
-The proxy starts with a short-lived self-signed fallback certificate only so the
-container can boot before the first Let's Encrypt certificate exists.
-
-Certificate renewal is handled by `scripts/renew-cert.sh`. The deploy script
-installs a daily cron entry through `scripts/install-cert-renew-cron.sh`; renewal
-logs are written to `logs/cert-renew.log`.
-
-Health output includes PostgreSQL and FreeSWITCH ESL connectivity. The ESL check can be temporarily disabled with `FREESWITCH_ESL_ENABLED=false` while FreeSWITCH runtime configuration is still being finalized.
-
-The API provides process liveness separately from dependency readiness:
+Health endpoints:
 
 ```text
 GET /health/live
@@ -171,86 +105,29 @@ GET /health/ready
 GET /health
 ```
 
-`/health/ready` and the backward-compatible `/health` return HTTP 503 when
-PostgreSQL or enabled ESL connectivity is unavailable. Docker uses
-`/health/ready`; `/health/live` only verifies that the API process can respond.
+Readiness includes PostgreSQL, a one-off ESL command, and the long-lived FreeSWITCH event subscription. ESL persistence backlog/retries/overflows are exported to Prometheus; periodic active-call reconciliation is coalesced behind the ordered event queue.
 
-## Monitoring
-
-The deployment includes Prometheus, Alertmanager, Grafana, Loki, Alloy,
-node-exporter, cAdvisor, postgres-exporter, and blackbox-exporter. Grafana is
-available only through the HTTPS proxy at:
+The public UI and API normally share one HTTPS origin:
 
 ```text
-https://<GRAFANA_DOMAIN>
+https://<LETSENCRYPT_DOMAIN>
+https://<LETSENCRYPT_DOMAIN>/api/*
 ```
 
-Prometheus, Loki, Alertmanager, exporters, and API metrics remain on the private
-Compose network and do not publish host ports. The public proxy explicitly
-blocks `/api/metrics`. Grafana is provisioned with the `Outbound Dialer
-Overview` dashboard and Prometheus, Loki, and Alertmanager data sources.
+Grafana is exposed through its configured HTTPS hostname. Prometheus, Loki, Alertmanager, and exporters stay on the private Compose network.
 
-Configure monitoring in `.env`:
+## Backup, Retention, And Recovery
+
+`scripts/backup.sh` creates an `ODBACKUP2` AES-256-GCM authenticated envelope containing a PostgreSQL custom-format dump, voicemail/call recordings, and source metadata, then self-verifies it before upload or success-metric publication. `scripts/verify-backup.sh` is also available for independent checks. `scripts/restore.sh` requires an explicit confirmation, exact/approved-compatible release provenance, restores PostgreSQL with `--single-transaction`, snapshots existing recordings, runs the web smoke check, records stable deployment state, and reinstalls backup/certificate cron jobs.
+
+Default application retention is:
 
 ```text
-GRAFANA_DOMAIN=grafana.example.com
-GRAFANA_ADMIN_USER=admin
-GRAFANA_ADMIN_PASSWORD=<at-least-16-random-characters>
-PROMETHEUS_RETENTION=30d
-LOKI_RETENTION_PERIOD=336h
-ALERTMANAGER_RETENTION=120h
-ALERTMANAGER_REPEAT_INTERVAL=4h
-ALERTMANAGER_WEBHOOK_URL=
-ALERTMANAGER_TELEGRAM_BOT_TOKEN=
-ALERTMANAGER_TELEGRAM_CHAT_ID=
-MONITORING_STUCK_CALL_SECONDS=900
+CALL_LOG_RETENTION_DAYS=7
+CALL_RECORDING_RETENTION_DAYS=30
+RETENTION_RUN_INTERVAL_SECONDS=86400
 ```
 
-Alert delivery is optional: set a webhook URL, or both Telegram values. Without
-them, alerts remain visible in Alertmanager and Grafana. The default rules cover
-target availability, public HTTPS checks and certificate expiry, API/DB/ESL/SIP
-trunk state, stuck calls, recent call failures, recording/voicemail errors, host
-resources, disk space, and container restarts.
+Calls that still reference a recording are retained until the recording becomes eligible. Recording metadata is cleared only after the file is deleted or confirmed absent; other unlink failures preserve both metadata and the call row for a later retry.
 
-Alloy collects Docker logs only from this Compose project, plus the FreeSWITCH
-and certificate-renewal log files. The blackbox checks run from the deployment
-host's stack, so they verify the public HTTPS path but cannot detect a complete
-host or network outage. Add an off-host uptime check later if that failure mode
-must page independently.
-
-FreeSWITCH is started in host network mode. Keep `FREESWITCH_ESL_HOST=host.docker.internal` for the API container unless the API is also moved to host networking.
-The default `FREESWITCH_ESL_ACL=any_v4.auto` allows the API container to reach host-mode ESL; restrict host firewall access to port `8021` in production.
-
-Auth endpoints:
-
-```text
-POST /auth/login
-GET /auth/me
-POST /admin/users
-```
-
-`BOOTSTRAP_ADMIN_EMAIL` and `BOOTSTRAP_ADMIN_PASSWORD` create the first admin account on startup if it does not already exist. Creating a user with `role: "agent"` automatically creates SIP credentials and returns the SIP password once in the response.
-
-Agent SIP directory files are rendered into the shared `freeswitch_generated` Docker volume. The API writes files under `directory/default`, and the FreeSWITCH wrapper image links that path into `/etc/freeswitch/directory/default` before startup.
-
-FreeSWITCH runtime config is rendered at container startup from templates in `infra/freeswitch/templates`:
-
-- ESL password and ACL.
-- Global domain, RTP range, and advertised SIP/RTP IPs.
-- Internal WebRTC SIP profile.
-- Codec preference is `PCMU,PCMA,G729` (`ulaw`, `alaw`, `g729`) for both internal and external SIP profiles; the FreeSWITCH image build fails if `mod_g729.so` is not present.
-- Optional SIP trunk registration gateway when `SIP_TRUNK_MODE=registration` and trunk credentials are present.
-- IP-auth outbound routing skeleton for `SIP_TRUNK_MODE=ip_auth`.
-- Manual voicemail-drop dialplan context.
-
-Browser softphone registration uses SIP.js over WebSocket. In production the
-API provisions `wss://<FREESWITCH_DOMAIN>/freeswitch-ws` by default, and the
-HTTPS proxy terminates the public Let's Encrypt certificate before forwarding
-the WebSocket to FreeSWITCH's internal `ws-binding` on port `5066`. Override
-`FREESWITCH_WEBRTC_PUBLIC_WS_URL` only when a deployment intentionally exposes a
-different trusted WSS endpoint.
-
-Fail2ban runs as a separate host-network container and watches FreeSWITCH logs
-for SIP scanner noise such as `Can't find user [...] from <ip>` and unsolicited
-`sofia/external` INVITEs. The jail lives in `infra/fail2ban`, bans matching IPs
-after repeated misses, and uses incremental bantime for repeat offenders.
+See the [backup/restore runbook](docs/runbooks/backup-restore.md) and exercise it on an isolated host before declaring recovery accepted.

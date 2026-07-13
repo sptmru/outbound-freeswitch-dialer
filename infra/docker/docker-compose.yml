@@ -15,14 +15,77 @@ services:
       retries: 5
 
   api:
+    image: outbound-dialer-api:${APP_VERSION:-local}
     build:
       context: ../..
       dockerfile: apps/api/Dockerfile
     restart: unless-stopped
-    env_file:
-      - ${APP_ENV_FILE:-../../.env}
+    init: true
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=256m
+    labels:
+      com.outbound-dialer.version: ${APP_VERSION:-local}
     environment:
+      NODE_ENV: ${NODE_ENV:-production}
+      API_HOST: 0.0.0.0
+      API_PORT: 3000
+      PUBLIC_APP_URL: ${PUBLIC_APP_URL}
+      DATABASE_URL: ${DATABASE_URL}
+      FREESWITCH_ESL_HOST: ${FREESWITCH_ESL_HOST:-host.docker.internal}
+      FREESWITCH_ESL_PORT: ${FREESWITCH_ESL_PORT:-8021}
+      FREESWITCH_ESL_PASSWORD: ${FREESWITCH_ESL_PASSWORD}
+      FREESWITCH_ESL_ENABLED: ${FREESWITCH_ESL_ENABLED:-true}
+      FREESWITCH_ESL_EVENT_QUEUE_MAX_SIZE: ${FREESWITCH_ESL_EVENT_QUEUE_MAX_SIZE:-1000}
+      FREESWITCH_ESL_EVENT_RETRY_INITIAL_MS: ${FREESWITCH_ESL_EVENT_RETRY_INITIAL_MS:-250}
+      FREESWITCH_ESL_EVENT_RETRY_MAX_MS: ${FREESWITCH_ESL_EVENT_RETRY_MAX_MS:-30000}
+      FREESWITCH_ESL_RECONCILE_INTERVAL_SECONDS: ${FREESWITCH_ESL_RECONCILE_INTERVAL_SECONDS:-60}
+      CORS_ORIGINS: ${CORS_ORIGINS}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_EXPIRES_SECONDS: ${JWT_EXPIRES_SECONDS:-28800}
+      SIP_SECRET_ENCRYPTION_KEY: ${SIP_SECRET_ENCRYPTION_KEY:-}
+      SIP_SECRET_WRITE_VERSION: ${SIP_SECRET_WRITE_VERSION:-v1}
+      LOGIN_RATE_LIMIT_MAX: ${LOGIN_RATE_LIMIT_MAX:-10}
+      LOGIN_RATE_LIMIT_WINDOW_SECONDS: ${LOGIN_RATE_LIMIT_WINDOW_SECONDS:-300}
+      CONTACT_MAX_ATTEMPTS: ${CONTACT_MAX_ATTEMPTS:-3}
+      CONTACT_RETRY_DELAY_SECONDS: ${CONTACT_RETRY_DELAY_SECONDS:-900}
+      AGENT_WRAP_UP_SECONDS: ${AGENT_WRAP_UP_SECONDS:-30}
+      ORIGINATE_AGENT_WATCHDOG_SECONDS: ${ORIGINATE_AGENT_WATCHDOG_SECONDS:-35}
+      ORIGINATE_CUSTOMER_WATCHDOG_SECONDS: ${ORIGINATE_CUSTOMER_WATCHDOG_SECONDS:-50}
+      ORIGINATE_WATCHDOG_RETRY_SECONDS: ${ORIGINATE_WATCHDOG_RETRY_SECONDS:-5}
+      ORIGINATE_WATCHDOG_MAX_RETRIES: ${ORIGINATE_WATCHDOG_MAX_RETRIES:-3}
+      CALL_HISTORY_EXPORT_MAX_ROWS: ${CALL_HISTORY_EXPORT_MAX_ROWS:-50000}
+      BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:-}
+      BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-}
+      BOOTSTRAP_ADMIN_NAME: ${BOOTSTRAP_ADMIN_NAME:-Admin}
+      DEFAULT_PHONE_COUNTRY_CODE: ${DEFAULT_PHONE_COUNTRY_CODE:-US}
+      SIP_USERNAME_PREFIX: ${SIP_USERNAME_PREFIX:-agent}
       FREESWITCH_GENERATED_CONFIG_DIR: /var/lib/outbound-dialer/freeswitch
+      VOICEMAIL_RECORDINGS_STORAGE_DIR: /var/lib/freeswitch/storage/recordings
+      VOICEMAIL_UPLOAD_MAX_BYTES: ${VOICEMAIL_UPLOAD_MAX_BYTES:-67108864}
+      VOICEMAIL_DROP_START_TIMEOUT_SECONDS: ${VOICEMAIL_DROP_START_TIMEOUT_SECONDS:-120}
+      CALL_RECORDINGS_STORAGE_DIR: /var/lib/freeswitch/storage/recordings/calls
+      CALL_LOG_RETENTION_DAYS: ${CALL_LOG_RETENTION_DAYS:-7}
+      CALL_RECORDING_RETENTION_DAYS: ${CALL_RECORDING_RETENTION_DAYS:-30}
+      RETENTION_ENABLED: ${RETENTION_ENABLED:-true}
+      RETENTION_RUN_INTERVAL_SECONDS: ${RETENTION_RUN_INTERVAL_SECONDS:-86400}
+      MEDIA_TICKET_TTL_SECONDS: ${MEDIA_TICKET_TTL_SECONDS:-60}
+      MEDIA_TICKET_MAX_LIFETIME_SECONDS: ${MEDIA_TICKET_MAX_LIFETIME_SECONDS:-14400}
+      FFMPEG_PATH: ${FFMPEG_PATH:-ffmpeg}
+      FFPROBE_PATH: ${FFPROBE_PATH:-ffprobe}
+      FREESWITCH_DOMAIN: ${FREESWITCH_DOMAIN}
+      FREESWITCH_WEBRTC_WSS_PORT: ${FREESWITCH_WEBRTC_WSS_PORT:-7443}
+      FREESWITCH_WEBRTC_PUBLIC_WS_URL: ${FREESWITCH_WEBRTC_PUBLIC_WS_URL:-}
+      MONITORING_STUCK_CALL_SECONDS: ${MONITORING_STUCK_CALL_SECONDS:-900}
+      SIP_TRUNK_MODE: ${SIP_TRUNK_MODE:-registration}
+      SIP_TRUNK_PROXY: ${SIP_TRUNK_PROXY:-}
+      SIP_TRUNK_USERNAME: ${SIP_TRUNK_USERNAME:-}
+      SIP_TRUNK_CALLER_ID: ${SIP_TRUNK_CALLER_ID:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -36,18 +99,28 @@ services:
       - freeswitch_generated:/var/lib/outbound-dialer/freeswitch
       - ../freeswitch/recordings:/var/lib/freeswitch/storage/recordings
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+        ]
       interval: 15s
       timeout: 5s
       retries: 5
 
   web:
+    image: outbound-dialer-web:${APP_VERSION:-local}
     build:
       context: ../..
       dockerfile: apps/web/Dockerfile
       args:
         VITE_API_BASE_URL: ${VITE_API_BASE_URL:-/api}
+        VITE_SIP_DIAGNOSTICS: ${VITE_SIP_DIAGNOSTICS:-false}
     restart: unless-stopped
+    labels:
+      com.outbound-dialer.version: ${APP_VERSION:-local}
     depends_on:
       api:
         condition: service_healthy
@@ -60,10 +133,13 @@ services:
       retries: 5
 
   proxy:
+    image: outbound-dialer-proxy:${APP_VERSION:-local}
     build:
       context: ../..
       dockerfile: infra/proxy/Dockerfile
     restart: unless-stopped
+    labels:
+      com.outbound-dialer.version: ${APP_VERSION:-local}
     depends_on:
       api:
         condition: service_healthy
@@ -76,6 +152,9 @@ services:
       GRAFANA_DOMAIN: ${GRAFANA_DOMAIN:-grafana.localhost}
       FREESWITCH_WS_UPSTREAM_SCHEME: ${FREESWITCH_WS_UPSTREAM_SCHEME:-http}
       FREESWITCH_WS_UPSTREAM: ${FREESWITCH_WS_UPSTREAM:-host.docker.internal:5066}
+      FREESWITCH_WS_UPSTREAM_TLS_VERIFY: ${FREESWITCH_WS_UPSTREAM_TLS_VERIFY:-on}
+      FREESWITCH_WS_UPSTREAM_TLS_SERVER_NAME: ${FREESWITCH_WS_UPSTREAM_TLS_SERVER_NAME:-${LETSENCRYPT_DOMAIN}}
+      PROXY_MAX_REQUEST_BODY_SIZE: ${PROXY_MAX_REQUEST_BODY_SIZE:-70m}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
@@ -91,7 +170,7 @@ services:
       retries: 5
 
   certbot:
-    image: certbot/certbot:latest
+    image: ${CERTBOT_IMAGE:-certbot/certbot@sha256:6bb19cff0b3972a69855686e0ccbd20b98dbfae2aa43845a5df48947ba1401b4}
     profiles:
       - tools
     volumes:
@@ -99,12 +178,15 @@ services:
       - certbot_www:/var/www/certbot
 
   freeswitch:
+    image: outbound-dialer-freeswitch:${APP_VERSION:-local}
     build:
       context: ../..
       dockerfile: infra/freeswitch/Dockerfile
       args:
-        FREESWITCH_BASE_IMAGE: ${FREESWITCH_BASE_IMAGE:-safarov/freeswitch:latest}
+        FREESWITCH_BASE_IMAGE: ${FREESWITCH_BASE_IMAGE:-safarov/freeswitch@sha256:b31c743f4c911a19687c61e3214968f2a24f93f9d3d667cc26284192e158ffc6}
     restart: unless-stopped
+    labels:
+      com.outbound-dialer.version: ${APP_VERSION:-local}
     network_mode: host
     environment:
       FREESWITCH_ESL_PASSWORD: ${FREESWITCH_ESL_PASSWORD}
@@ -127,18 +209,17 @@ services:
       SIP_TRUNK_PASSWORD: ${SIP_TRUNK_PASSWORD}
       SIP_TRUNK_CALLER_ID: ${SIP_TRUNK_CALLER_ID}
     healthcheck:
-      test: ["CMD-SHELL", "fs_cli -H 127.0.0.1 -P 8021 -p \"$${FREESWITCH_ESL_PASSWORD}\" -x status >/dev/null"]
+      test: ["CMD-SHELL", 'fs_cli -H 127.0.0.1 -P 8021 -p "$${FREESWITCH_ESL_PASSWORD}" -x status >/dev/null']
       interval: 15s
       timeout: 5s
       retries: 5
     volumes:
-      - ../freeswitch/templates:/opt/outbound-dialer/templates:ro
       - freeswitch_generated:/var/lib/outbound-dialer/freeswitch
       - freeswitch_logs:/var/log/freeswitch
       - ../freeswitch/recordings:/var/lib/freeswitch/storage/recordings
 
   fail2ban:
-    image: crazymax/fail2ban:latest
+    image: ${FAIL2BAN_IMAGE:-crazymax/fail2ban@sha256:7cd8a427a44675397398a8dace2a3d755e62c72527f8730e4fd37697731a9321}
     restart: unless-stopped
     network_mode: host
     cap_add:
@@ -161,12 +242,20 @@ services:
     image: node:22-alpine
     profiles:
       - tools
-    env_file:
-      - ${APP_ENV_FILE:-../../.env}
+    environment:
+      LETSENCRYPT_DOMAIN: ${LETSENCRYPT_DOMAIN}
+      GRAFANA_DOMAIN: ${GRAFANA_DOMAIN}
+      GRAFANA_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+      ALERTMANAGER_REPEAT_INTERVAL: ${ALERTMANAGER_REPEAT_INTERVAL:-4h}
+      ALERTMANAGER_WEBHOOK_URL: ${ALERTMANAGER_WEBHOOK_URL:-}
+      ALERTMANAGER_TELEGRAM_BOT_TOKEN: ${ALERTMANAGER_TELEGRAM_BOT_TOKEN:-}
+      ALERTMANAGER_TELEGRAM_CHAT_ID: ${ALERTMANAGER_TELEGRAM_CHAT_ID:-}
     working_dir: /workspace
-    command: ["node", "scripts/render-monitoring-config.mjs", "monitoring/generated"]
+    command: ["node", "/workspace/render-monitoring-config.mjs", "/output"]
     volumes:
-      - ../..:/workspace
+      - ../../scripts/render-monitoring-config.mjs:/workspace/render-monitoring-config.mjs:ro
+      - ../../monitoring:/workspace/monitoring:ro
+      - ../../monitoring/generated:/output
 
   prometheus:
     image: prom/prometheus:v3.12.0
@@ -198,6 +287,8 @@ services:
     volumes:
       - ../../monitoring/generated/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
       - alertmanager_data:/alertmanager
+    group_add:
+      - "0"
 
   grafana:
     image: grafana/grafana:13.0.2
@@ -230,8 +321,10 @@ services:
     command:
       - --path.rootfs=/host
       - --collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)
+      - --collector.textfile.directory=/var/lib/node_exporter/textfile_collector
     volumes:
       - /:/host:ro,rslave
+      - ../../monitoring/textfile:/var/lib/node_exporter/textfile_collector:ro
 
   cadvisor:
     image: ghcr.io/google/cadvisor:v0.57.0
@@ -250,7 +343,9 @@ services:
     image: quay.io/prometheuscommunity/postgres-exporter:v0.19.1
     restart: unless-stopped
     environment:
-      DATA_SOURCE_NAME: ${DATABASE_URL}?sslmode=disable
+      DATA_SOURCE_URI: postgres:5432/${POSTGRES_DB}?sslmode=disable
+      DATA_SOURCE_USER: outbound_dialer_exporter
+      DATA_SOURCE_PASS: ${POSTGRES_EXPORTER_PASSWORD:-monitoring-password-not-configured}
     depends_on:
       postgres:
         condition: service_healthy
@@ -273,6 +368,30 @@ services:
       - ../../monitoring/loki/loki.yml:/etc/loki/loki.yml:ro
       - loki_data:/loki
 
+  docker-socket-proxy:
+    image: ghcr.io/tecnativa/docker-socket-proxy@sha256:1f3a6f303320723d199d2316a3e82b2e2685d86c275d5e3deeaf182573b47476
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+      - /run:rw,noexec,nosuid,size=1m
+      - /var/lib/haproxy:rw,noexec,nosuid,size=1m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      CONTAINERS: "1"
+      EVENTS: "1"
+      INFO: "1"
+      PING: "1"
+      POST: "0"
+      VERSION: "1"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - docker-monitoring
+
   alloy:
     image: grafana/alloy:v1.16.1
     restart: unless-stopped
@@ -285,12 +404,19 @@ services:
       MONITORING_COMPOSE_PROJECT: ${COMPOSE_PROJECT_NAME:-docker}
     volumes:
       - ../../monitoring/alloy/config.alloy:/etc/alloy/config.alloy:ro
-      - /var/run/docker.sock:/var/run/docker.sock:ro
       - ../../logs:/var/log/outbound-dialer:ro
       - freeswitch_logs:/var/log/freeswitch:ro
       - alloy_data:/var/lib/alloy/data
     depends_on:
       - loki
+      - docker-socket-proxy
+    networks:
+      - default
+      - docker-monitoring
+
+networks:
+  docker-monitoring:
+    internal: true
 
 volumes:
   postgres_data:

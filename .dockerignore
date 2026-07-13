@@ -2,5 +2,12 @@
 node_modules
 dist
 coverage
-.env
+.env*
 *.log
+backups
+infra/freeswitch/recordings
+logs
+monitoring/generated
+playwright-report
+test-results
+**/dist-test

@@ -4,11 +4,7 @@ import { fetchSoftphoneProvisioning } from "./api";
 import type { PublicUser } from "./types";
 
 export type SoftphoneRuntimeState =
-  | "idle"
-  | "requesting_microphone"
-  | "registering"
-  | "registered"
-  | "failed";
+  "idle" | "requesting_microphone" | "registering" | "registered" | "failed";
 
 export interface SoftphoneRuntime {
   registered: boolean;
@@ -39,8 +35,13 @@ const idleRuntime: SoftphoneRuntime = {
 };
 
 const registrationTimeoutMs = 20_000;
+const sipDiagnosticsEnabled = import.meta.env.DEV || import.meta.env.VITE_SIP_DIAGNOSTICS === "true";
 
-function toRegistrationFailureRuntime(current: SoftphoneRuntime, detail: string, error: string): SoftphoneRuntime {
+function toRegistrationFailureRuntime(
+  current: SoftphoneRuntime,
+  detail: string,
+  error: string
+): SoftphoneRuntime {
   return {
     ...current,
     registered: false,
@@ -158,7 +159,11 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
       declineIncomingCall,
       hangUpSoftphoneCall
     });
-    const failRegistration = (detail: string, error: string, options: { preserveExistingError?: boolean } = {}) => {
+    const failRegistration = (
+      detail: string,
+      error: string,
+      options: { preserveExistingError?: boolean } = {}
+    ) => {
       clearRegistrationTimer();
       invitationRef.current = null;
       clearRemoteAudio();
@@ -218,8 +223,8 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
           authorizationPassword: provisioning.sipPassword,
           authorizationUsername: provisioning.sipUsername,
           displayName: provisioning.displayName,
-          logBuiltinEnabled: true,
-          logLevel: "debug",
+          logBuiltinEnabled: sipDiagnosticsEnabled,
+          logLevel: sipDiagnosticsEnabled ? "debug" : "warn",
           delegate: {
             onInvite: (invitation) => {
               if (invitationRef.current) {
@@ -244,7 +249,9 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
                 if (state === SessionState.Terminated) {
                   invitationRef.current = null;
                   clearRemoteAudio();
-                  setRuntime((current) => toCallIdleRuntime(current, `${provisioning.sipUsername}@${provisioning.domain}`));
+                  setRuntime((current) =>
+                    toCallIdleRuntime(current, `${provisioning.sipUsername}@${provisioning.domain}`)
+                  );
                 }
               });
 
@@ -270,7 +277,7 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
           },
           transportOptions: {
             server: provisioning.websocketUrl,
-            traceSip: true
+            traceSip: sipDiagnosticsEnabled
           },
           uri,
           sessionDescriptionHandlerFactoryOptions: {
@@ -302,9 +309,13 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
 
           if (state === RegistererState.Unregistered || state === RegistererState.Terminated) {
             if (state === RegistererState.Terminated) {
-              failRegistration("SIP registration terminated", "SIP.js registerer terminated before this browser was registered", {
-                preserveExistingError: true
-              });
+              failRegistration(
+                "SIP registration terminated",
+                "SIP.js registerer terminated before this browser was registered",
+                {
+                  preserveExistingError: true
+                }
+              );
               return;
             }
             failRegistration(
@@ -373,10 +384,7 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
           microphoneAllowed: true,
           state: current.state === "registered" ? current.state : "registering",
           label: current.state === "registered" ? current.label : "Registration sent",
-          detail:
-            current.state === "registered"
-              ? current.detail
-              : "Waiting for accepted SIP registration",
+          detail: current.state === "registered" ? current.detail : "Waiting for accepted SIP registration",
           error: current.state === "registered" ? null : current.error,
           ...getActions()
         }));

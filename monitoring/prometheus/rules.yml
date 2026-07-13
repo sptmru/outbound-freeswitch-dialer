@@ -37,6 +37,50 @@ groups:
           summary: "Application monitoring cannot query PostgreSQL"
           description: "The API metrics snapshot query has failed for more than 2 minutes."
 
+      - alert: BackupMissing
+        expr: absent(outbound_dialer_backup_last_success_timestamp_seconds)
+        for: 30m
+        labels:
+          severity: critical
+        annotations:
+          summary: "No successful backup has been recorded"
+          description: "Run scripts/backup.sh and verify the node-exporter textfile collector mount."
+
+      - alert: BackupStale
+        expr: time() - outbound_dialer_backup_last_success_timestamp_seconds > 26 * 60 * 60
+        for: 30m
+        labels:
+          severity: critical
+        annotations:
+          summary: "The latest backup is stale"
+          description: "No successful encrypted backup has completed during the last 26 hours."
+
+      - alert: RetentionRunFailing
+        expr: increase(outbound_dialer_retention_failures_total[30m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Automatic retention failed"
+          description: "At least one call/recording retention run failed during the last 30 minutes; metadata is preserved for retry."
+
+      - alert: RetentionRunMissing
+        expr: outbound_dialer_retention_enabled == 1 and absent(outbound_dialer_retention_last_success_timestamp_seconds)
+        for: 2h
+        labels:
+          severity: warning
+        annotations:
+          summary: "No successful retention run has been recorded"
+          description: "Retention is enabled but the API has not recorded a successful run."
+
+      - alert: RetentionRunStale
+        expr: outbound_dialer_retention_enabled == 1 and time() - outbound_dialer_retention_last_success_timestamp_seconds > 30 * 60 * 60
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "The latest retention run is stale"
+          description: "No successful retention run has completed during the last 30 hours."
+
       - alert: ApiHighServerErrorRate
         expr: sum(rate(outbound_dialer_http_requests_total{status_class="5xx"}[5m])) / clamp_min(sum(rate(outbound_dialer_http_requests_total[5m])), 0.001) > 0.05
         for: 5m
@@ -94,12 +138,29 @@ groups:
           description: "{{ $value }} call recording failure(s) were recorded during the last 24 hours."
 
       - alert: FreeSwitchEventPersistenceErrors
-        expr: increase(outbound_dialer_esl_event_errors_total[10m]) > 0
+        expr: increase(outbound_dialer_esl_event_errors_total[10m]) > 0 or increase(outbound_dialer_esl_persistence_retries_total[10m]) > 0
         labels:
           severity: warning
         annotations:
           summary: "FreeSWITCH events failed to persist"
-          description: "At least one ESL event failed during persistence in the last 10 minutes."
+          description: "At least one ESL event failed or required a transient persistence retry in the last 10 minutes."
+
+      - alert: FreeSwitchEventPersistenceBacklog
+        expr: outbound_dialer_esl_persistence_queue_depth > 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "FreeSWITCH event persistence queue is not draining"
+          description: "{{ $value }} ESL event(s) have remained queued for more than 2 minutes."
+
+      - alert: FreeSwitchEventPersistenceOverflow
+        expr: increase(outbound_dialer_esl_persistence_overflows_total[10m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "FreeSWITCH event persistence queue overflowed"
+          description: "The listener disconnected after its bounded persistence queue filled; active-call reconciliation will run after recovery."
 
   - name: outbound-dialer-host
     rules:

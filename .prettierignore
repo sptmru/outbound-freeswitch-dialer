@@ -1,0 +1,8 @@
+apps/api/dist/
+apps/api/dist-test/
+apps/web/dist/
+node_modules/
+monitoring/generated/
+infra/freeswitch/recordings/
+logs/
+package-lock.json

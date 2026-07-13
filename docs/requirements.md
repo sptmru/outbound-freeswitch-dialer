@@ -1,100 +1,148 @@
 # Requirements
 
-## Confirmed Scope
+This document is the current product and operational contract. Items described as implemented are present in the repository; live-provider and production acceptance are tracked separately in [acceptance-checklist.md](acceptance-checklist.md).
 
-The system is a single-tenant outbound dialer with a Web UI softphone. Agents work in the browser, but all PSTN call control is owned by the backend through FreeSWITCH ESL.
+## Product Boundary
+
+- Single tenant.
+- One interactive call per agent. A released voicemail customer leg may continue as a background job while the agent starts the next interactive call.
+- Browser softphone for agent media; all PSTN origination and call control remain backend-owned through FreeSWITCH ESL.
+- Local accounts with `agent` and `admin` roles. Admins may use Agent Desk, but SIP registration and microphone access start only while that view is open.
+- Manual voicemail drop and automatically determined outcomes are the current product behavior. Progressive dialing, mandatory agent dispositions, and automatic voicemail drop are not part of this version.
+
+## Authentication And Browser Security
+
+- The browser authenticates with an HttpOnly session cookie named `outbound_dialer_session`.
+- The cookie is `SameSite=Strict`, scoped to `/`, expires with `JWT_EXPIRES_SECONDS`, and is `Secure` in production.
+- Cookie-authenticated unsafe methods require an `Origin` matching `PUBLIC_APP_URL` or `CORS_ORIGINS`.
+- Bearer authentication remains supported for non-browser API clients and is not subject to ambient-cookie CSRF checks.
+- The browser must not persist the JWT or place it in media URLs. The login response retains the token only for API-client compatibility.
+- Login attempts are rate-limited per client IP. Defaults are 10 attempts per 300 seconds.
+- Password reset and user deactivation increment `auth_version`, revoking existing sessions.
+- Proxy-derived client addresses are trusted only from loopback/private/link-local peers.
+
+## Live State Updates
+
+- Authenticated clients subscribe to credentialed SSE at `GET /agent/events`.
+- PostgreSQL statement-level notifications publish refresh hints for agent, call, campaign, contact, recording, suppression, and user changes.
+- EventSource reconnects automatically; the server advertises a three-second retry and sends 15-second heartbeats.
+- The UI retains periodic HTTP refresh as a fallback. SSE is a refresh signal, not the authoritative state payload; REST responses remain authoritative.
+
+## Agent Availability
+
+- Agent availability is independent from browser-phone registration and has three server-owned states: `available`, `paused`, and `wrap_up`.
+- Agents and admins using Agent Desk can pause or resume themselves through `PATCH /agent/availability`; availability cannot be changed during an active interactive call.
+- Paused agents cannot start campaign, lead, or manual calls. A completed wrap-up expires automatically on the backend, and the operator may select **Ready now** to end it early.
+- Ordinary call completion/failure starts `AGENT_WRAP_UP_SECONDS` of wrap-up (30 seconds by default, `0` to disable) when the phone remains registered.
+- Confirmed voicemail agent release is immediately available for the next interactive call. A pause selected while background voicemail continues must remain paused when that background job later completes.
 
 ## Telephony
 
-- Support SIP trunk integration.
-- Support both SIP registration and IP-authenticated trunk modes.
-- Trunk configuration can be file/environment driven; trunk setup through the Web UI is not required for the first version.
-- Use provider-supplied SIP proxy, realm, outbound proxy, credentials, caller ID rules, and allowlisted production IPs.
-- No explicit TLS/SRTP requirement for the SIP trunk, but WebRTC still requires secure browser transport.
-- Use an efficient WebRTC codec path where possible, with Opus preferred for browser media and PSTN-compatible fallback/transcoding as required by FreeSWITCH and the SIP trunk provider.
-- Concurrency is naturally limited by online agents rather than a hard business limit.
+- Support provider-neutral SIP registration and IP-authenticated trunk modes through runtime configuration.
+- Keep provider credentials and routing details out of the product UI.
+- Browser SIP uses WSS. PSTN codec/routing behavior must be validated with the selected provider.
+- Use a backend-owned, agent-first originate/bridge flow; the browser never receives authority to choose the PSTN endpoint.
+- Store calls, legs, state-changing events, UUIDs, commands, hangup causes, and automatic outcomes required for diagnosis.
+- Allow DTMF only when the backend reports the action eligible.
+- Persist subscribed ESL events in arrival order through a bounded queue. Retry transient database failures with backoff; if the queue fills, disconnect/reconnect the listener and raise an observable overflow rather than silently discarding backlog.
+- Reconcile unfinished database calls with FreeSWITCH `uuid_exists` after ESL subscription/reconnect and periodically. Missing calls are closed, orphaned agent legs are released when possible, and active voicemail playback is recovered or finalized.
+
+## Contact Retry Policy
+
+- Campaign contacts are selected transactionally with `FOR UPDATE SKIP LOCKED`.
+- Suppressed, completed, currently calling, and exhausted contacts are not callable.
+- `attempt_count` increments when a contact call is committed.
+- The default maximum is `CONTACT_MAX_ATTEMPTS=3`.
+- The default delay before a non-terminal contact becomes callable again is `CONTACT_RETRY_DELAY_SECONDS=900` (15 minutes).
+- `answered`, `customer_hung_up`, `voicemail_detected`, and successful voicemail-drop outcomes complete the contact. Busy/no-answer/failure/cancel paths return it to the callable lifecycle until the configured attempt limit.
+- The client must approve final outcome-specific retry policy, permitted calling windows, and timezone before production use.
 
 ## Voicemail Drop
 
-- Manual "Drop Voicemail" is required for MVP.
-- Automatic voicemail/beep detection is not the source of truth for MVP, but the UI should surface detected VM/beep signals so the team can evaluate whether automation is reliable later.
-- After voicemail playback completes, the customer leg should hang up automatically.
-- Agents should be able to choose a voicemail recording, but one global default recording should be selected so agents do not need to choose every time.
-- Recordings are global for the first version.
-- Admins upload WAV or MP3; the backend transcodes to the runtime format needed by FreeSWITCH.
+- Agents manually request a drop only when the call is eligible and select a recording or use the global default.
+- The request is claimed transactionally and must be idempotent under repeated/concurrent clicks.
+- FreeSWITCH emits application-owned custom events for playback start, completion, and playback failure; customer-channel terminal events classify interruption/hangup.
+- The database lifecycle distinguishes `voicemail_drop_requested`, `voicemail_playback_started`, `agent_released`, and terminal completion/failure/interruption.
+- The agent leg is marked released only after playback has started and the release is confirmed (or the channel is already absent). The customer leg remains tracked until a terminal event.
+- Successful playback produces `voicemail_dropped`; failure/interruption records a distinct technical event and appropriate automatic outcome.
+- Reconnect reconciliation must not infer success merely from a local file or a previous transfer request.
+- VM/beep detection is advisory and visible when available; it does not automatically trigger a drop.
+- Production acceptance requires proof from representative external mailboxes. Local FreeSWITCH playback completion alone is insufficient.
 
-## Campaigns, Contacts, And Dialing
+## Voicemail And Call Recordings
 
-- Campaigns are in scope for the first version.
-- Contacts/leads are imported from CSV.
-- The current CSV workflow requires only `name` and `phone` columns. Interactive field mapping is deferred until client CSV samples require it.
-- Agents can call campaign contacts/leads.
-- Agents may also type arbitrary phone numbers when an admin setting allows manual dialing.
-- Manual dialing must still pass backend authorization and suppression checks.
+- Admins can upload WAV or MP3 voicemail audio, choose a default, preview, and deactivate/delete a recording.
+- Uploads are decoded and transcoded before activation to mono, 8 kHz, signed 16-bit PCM WAV with loudness normalization.
+- Audio with no valid stream, unavailable processing, malformed content, or duration over five minutes is rejected.
+- Call recording remains campaign-controlled and is started on the customer leg through FreeSWITCH.
+- Media playback supports single byte ranges for browser seeking.
+- Browser media access uses short-lived opaque tickets scoped to one user, resource type, resource ID, and route. Only ticket hashes are stored in PostgreSQL.
+- Default ticket TTL is 60 seconds; renewal is bounded by `MEDIA_TICKET_MAX_LIFETIME_SECONDS`.
+- Recording storage, consent, legal hold, and deletion rules require client approval before production acceptance.
 
-## Outcomes And Dispositions
+## Campaigns, Contacts, And Suppression
 
-Initial call outcomes should include:
+- Campaign states are `draft`, `active`, `paused`, and `archived`.
+- Admins can create/edit campaigns and configure manual dialing, call recording, and early-media AVMD per campaign.
+- Archived campaigns preserve operational history and are not callable.
+- Current contact import is intentionally limited to required `name` and `phone` columns. The importer normalizes numbers, reports row errors, and avoids duplicates.
+- Manual numbers and campaign contacts both pass backend authorization and normalized suppression checks before originate.
+- Suppression supports add/update, search, pagination, CSV import, and removal.
+- Suppression changes and blocked manual-dial attempts create durable `suppression_events`.
 
-- `answered`
-- `not_answered`
-- `busy`
-- `failed`
-- `voicemail_detected`
-- `voicemail_dropped`
-- `agent_canceled`
-- `customer_hung_up`
-- `suppressed`
+## Users And Administrative Audit
 
-The implementation may add lower-level technical reason codes, but the UI should keep agent-facing dispositions concise.
+- Admins can create, edit, deactivate/reactivate, change role, and reset passwords.
+- Deactivation is rejected while the user has an active interactive call, revokes sessions, removes agent registration material, and preserves historical attribution.
+- Successful mutating `/admin/*` requests create `admin_audit_events` with actor, request ID, method, route, response status, source IP, user agent, bounded string route parameters, and timestamp.
+- Audit history is paginated and filterable by actor, method, and date.
+- Audit/retention/legal-hold duration is an external policy decision; it must not be assumed from call-log retention.
 
-Outcomes are determined automatically from the call lifecycle for the current version. A mandatory agent-selected post-call disposition is deferred pending client feedback.
+## History And Reporting
 
-## DNCR And Suppression
+- Admin call history is paginated and filterable by text, campaign, agent, outcome, date range, voicemail drop/signal, and recording availability.
+- Call detail includes lifecycle events and technical identifiers needed for diagnosis.
+- CSV export applies the same filters and refuses exports above `CALL_HISTORY_EXPORT_MAX_ROWS` (50,000 by default).
+- Outcomes are derived from backend call events. Agents do not select a mandatory post-call disposition in this version.
 
-- DNCR/suppression-list handling is in scope for MVP.
-- Suppression checks must run before the backend originates any outbound customer leg.
-- Suppression hits should be logged as call attempts or blocked actions, depending on final reporting needs.
-- Broader legal/compliance ownership is out of scope for this build.
+## Retention
 
-## Call Recording
+- Automatic retention is enabled by default and runs at API startup and then every `RETENTION_RUN_INTERVAL_SECONDS` (86,400 seconds by default).
+- PostgreSQL advisory locking prevents two API instances from performing the same retention run concurrently.
+- Default call-log retention is seven days; default call-recording retention is 30 days.
+- Only terminal `completed`, `failed`, and `canceled` calls are eligible.
+- A call with recording metadata is retained until the recording reaches its own retention age.
+- Recording metadata is cleared only after unlink succeeds or the file is confirmed absent. Any other unlink failure preserves metadata and the call row for retry.
+- Admins can run the same policy as a dry run or immediate execution through `POST /admin/retention/run`.
+- Retention success/failure/deletion metrics are exported. Legal holds and audit retention remain external policy requirements.
 
-- The product must support call recording.
-- Call recording can be enabled or disabled by configuration/admin controls.
-- Recording metadata should be stored with the call.
-- Recording storage, retention, and backup policy need to remain operationally configurable.
+## Backup, Restore, And Deployment
 
-## Users And Auth
+- Backups contain a PostgreSQL custom-format dump, voicemail/call recordings, UTC/source metadata, and use an authenticated `ODBACKUP2` AES-256-GCM envelope derived with scrypt.
+- The passphrase must be at least 32 characters and stored outside the host.
+- Production preflight requires `BACKUP_S3_URI` unless `ALLOW_LOCAL_ONLY_BACKUPS=true` explicitly accepts the risk.
+- Verification must authenticate/decrypt the envelope, validate both tar archives, and run `pg_restore --list`.
+- Restore requires `RESTORE_CONFIRM=restore-<database>`, restores PostgreSQL with `--single-transaction`, snapshots current recordings before replacement, restarts the stack, and runs a web smoke test.
+- Legacy unauthenticated AES-CBC archives are rejected unless `ALLOW_LEGACY_UNAUTHENTICATED_BACKUP=true` is set for a specifically trusted archive.
+- Deployments are SHA-tagged, preflighted, quality-gated, blocked when active calls exist by default, backed up before migration, health-waited, smoke-tested, and recorded in `logs/deployment-state.env`.
+- Database migrations are forward-only; application rollback reuses the previous compatible image and never rolls schema backward.
+- SIP credential encryption moves from JWT-derived `v1` to independent-key `v2` only through the documented two-stage rollout, retaining a dual-read rollback target.
 
-- Use local username/password authentication.
-- Roles for the first version are `agent` and `admin`.
-- Admins primarily manage the system but may also open and use Agent Desk.
-- Agent SIP credentials should be created automatically when an agent is created.
-- Dynamic short-lived SIP credentials are not required for the first version unless needed for security hardening later.
+## Monitoring And Operations
 
-## Production And Operations
+- Structured application logs, health/readiness endpoints, Prometheus metrics, Grafana dashboards, Alertmanager rules, and Loki collection are included.
+- The production owner must configure a real alert destination and an off-host uptime probe.
+- SIP/RTP incidents must be correlatable by call ID, leg UUIDs, timestamps, event records, and deployed SHA.
+- Firewall policy and host-port changes are explicitly outside this implementation pass. The deployment owner must assess and approve the existing network exposure separately.
 
-- Production target is Ubuntu 24 with current Docker.
-- Deployment must allow the Web UI and WebRTC WSS domain to be configured at deploy time.
-- Let's Encrypt certificate issuance/renewal should be automated.
-- DNS and TLS are owned by the implementation team.
-- Production is likely AWS-hosted and may sit behind NAT, so SIP/RTP/WebRTC NAT behavior must be part of the deployment design.
-- Client owns persistent backups.
-- Call logs should be retained for one week by default.
-- Production alerts go to the client team.
-- Troubleshooting must support collecting PCAP files and inspecting application, FreeSWITCH, ESL, and SIP/RTP logs.
+## Production Acceptance Boundary
 
-## Design
+The repository can prove implementation and automated behavior. The following require target-environment evidence and remain open until recorded in [acceptance-checklist.md](acceptance-checklist.md):
 
-- No existing brand/style guide.
-- Single-tenant UI for the first version.
-- During a call, agents should see the lead name and phone number. Additional imported lead fields can be added when the CSV scope expands.
-- If VM/beep detection signals are available, the active call UI must show them.
-- Required admin screens should be derived from project scope:
-  - Campaigns.
-  - CSV imports for the current `name` and `phone` contract.
-  - Recordings.
-  - Users/agents.
-  - Suppression list.
-  - Call history and call detail timelines.
-  - System settings for manual dialing, call recording, trunk/deployment status where safe to expose.
+- selected SIP-provider registration/routing and caller ID;
+- real WSS, ringback/early media, DTMF, hangup causes, and external audio;
+- full far-end voicemail recording on representative mailboxes;
+- agreed concurrency/load/soak and restart/reconnect drills;
+- off-host backup delivery and clean-host restore within approved RPO/RTO;
+- legal approval for calling windows, retries, recording consent, DNCR evidence, retention, and legal hold;
+- client training, runbook exercise, and formal sign-off.

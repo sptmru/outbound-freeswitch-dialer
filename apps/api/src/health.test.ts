@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import Fastify from "fastify";
 import type pg from "pg";
 import type { AppConfig } from "./config.js";
+import { setFreeSwitchEventListenerSubscribed } from "./esl-listener-state.js";
 import { registerHealthRoutes } from "./health.js";
 
 describe("health routes", () => {
@@ -37,6 +38,29 @@ describe("health routes", () => {
 
     assert.equal(response.statusCode, 200);
     assert.equal(response.json().status, "ok");
+    await app.close();
+  });
+
+  it("reports an enabled but unsubscribed event listener as not ready", async () => {
+    setFreeSwitchEventListenerSubscribed(false);
+    const app = Fastify();
+    registerHealthRoutes(
+      app,
+      {
+        ...config(),
+        FREESWITCH_ESL_ENABLED: true,
+        FREESWITCH_ESL_HOST: "127.0.0.1",
+        FREESWITCH_ESL_PORT: 1,
+        FREESWITCH_ESL_PASSWORD: "test"
+      } as AppConfig,
+      healthyPool()
+    );
+
+    const response = await app.inject({ method: "GET", url: "/health/ready" });
+
+    assert.equal(response.statusCode, 503);
+    assert.equal(response.json().checks.freeswitchEventListener.status, "error");
+    assert.equal(response.json().checks.freeswitchEventListener.message, "event listener is not subscribed");
     await app.close();
   });
 });

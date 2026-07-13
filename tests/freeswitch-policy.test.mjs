@@ -1,0 +1,68 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import test from "node:test";
+
+const rootDirectory = fileURLToPath(new URL("..", import.meta.url));
+
+test("agent SIP ingress cannot route PSTN calls outside backend-owned ESL control", async () => {
+  const [profile, provisioning, entrypoint, agentPolicy, publicPolicy] = await Promise.all([
+    read("infra/freeswitch/templates/sip_profiles/internal-webrtc.xml.tpl"),
+    read("apps/api/src/freeswitch/provisioning.ts"),
+    read("infra/freeswitch/entrypoint.sh"),
+    read("infra/freeswitch/templates/dialplan/agent-ingress/reject.xml.tpl"),
+    read("infra/freeswitch/templates/dialplan/public/reject.xml.tpl")
+  ]);
+
+  assert.match(profile, /<param name="context" value="agent-ingress"\/>/);
+  assert.doesNotMatch(profile, /<param name="context" value="default"\/>/);
+  assert.match(provisioning, /<variable name="user_context" value="agent-ingress"\/>/);
+  assert.match(
+    entrypoint,
+    /rm -rf "\$CONFIG_DIR\/dialplan\/default".*dialplan\/agent-ingress.*dialplan\/public/
+  );
+  assert.match(entrypoint, /escape_xml_for_sed/);
+  assert.match(entrypoint, /s\/&\/\\&amp;\/g/);
+  assert.doesNotMatch(entrypoint, /outbound-sip-trunk\.xml/);
+  assert.match(agentPolicy, /403 Backend call control required/);
+  assert.match(agentPolicy, /hangup" data="CALL_REJECTED"/);
+  assert.match(publicPolicy, /403 Inbound calling is not enabled/);
+  assert.doesNotMatch(`${agentPolicy}\n${publicPolicy}`, /sofia\/(?:gateway|external)/);
+});
+
+test("Docker build context excludes runtime media and generated secrets", async () => {
+  const dockerignore = await read(".dockerignore");
+  for (const pattern of [".env*", "backups", "infra/freeswitch/recordings", "logs", "monitoring/generated"]) {
+    assert.match(dockerignore, new RegExp(`^${pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "m"));
+  }
+});
+
+test("production proxy accepts the configured voicemail upload envelope", async () => {
+  const [proxyTemplate, proxyEntrypoint] = await Promise.all([
+    read("infra/proxy/nginx.conf.tpl"),
+    read("infra/proxy/entrypoint.sh")
+  ]);
+  assert.match(
+    proxyTemplate,
+    /location \/api\/ \{\s+client_max_body_size \$\{PROXY_MAX_REQUEST_BODY_SIZE\};/
+  );
+  assert.match(proxyEntrypoint, /proxy_max_request_body_size="\$\{PROXY_MAX_REQUEST_BODY_SIZE:-70m\}"/);
+  assert.match(proxyEntrypoint, /export PROXY_MAX_REQUEST_BODY_SIZE="\$\{proxy_max_request_body_size\}"/);
+  assert.match(proxyEntrypoint, /grep -Eq '\^\[1-9\]\[0-9\]\*\[kKmMgG\]\?\$'/);
+});
+
+test("monitoring cannot mutate the Docker daemon through a raw socket", async () => {
+  const [compose, alloy] = await Promise.all([
+    read("infra/docker/docker-compose.yml"),
+    read("monitoring/alloy/config.alloy")
+  ]);
+  assert.match(compose, /docker-socket-proxy:/);
+  assert.match(compose, /POST: "0"/);
+  assert.doesNotMatch(compose.match(/ {2}alloy:[\s\S]*?(?=\nvolumes:)/)?.[0] ?? "", /docker\.sock/);
+  assert.match(alloy, /tcp:\/\/docker-socket-proxy:2375/);
+});
+
+function read(relativePath) {
+  return readFile(join(rootDirectory, relativePath), "utf8");
+}

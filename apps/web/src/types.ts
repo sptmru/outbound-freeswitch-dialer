@@ -1,9 +1,14 @@
 export type {
   AdminOverviewResponse,
+  AdminAuditResponse,
+  AdminCampaignListResponse,
+  AdminRecordingListResponse,
+  AdminUserListResponse,
   AgentDeskResponse,
   CampaignContactsResponse,
   CampaignContactListItem,
   CallDetailResponse,
+  CallHistoryResponse,
   CreateCampaignRequest,
   CreateContactRequest,
   CreateRecordingResponse,
@@ -23,11 +28,17 @@ export type {
   LeadSummary,
   ManualDialValidationResponse,
   MutationResponse,
+  MediaTicketResponse,
   PublicUser,
+  SuppressionImportResponse,
+  SuppressionListResponse,
   SendDtmfRequest,
   SoftphoneProvisioningResponse,
   StartNextCallRequest,
   StartManualCallRequest,
   SuppressContactRequest,
-  UpdateCampaignRequest
+  UpdateCampaignRequest,
+  UpdateAgentAvailabilityRequest,
+  UpdateUserRequest,
+  UpdateUserResponse
 } from "@outbound-dialer/shared";

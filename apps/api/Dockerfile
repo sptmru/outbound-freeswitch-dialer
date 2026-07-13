@@ -6,7 +6,7 @@ COPY package.json package-lock.json* tsconfig.base.json ./
 COPY packages/shared/package.json packages/shared/package.json
 COPY apps/api/package.json apps/api/package.json
 
-RUN npm install
+RUN npm ci
 
 COPY packages packages
 COPY apps/api apps/api
@@ -19,10 +19,14 @@ FROM node:22-bookworm-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates ffmpeg \
+  && rm -rf /var/lib/apt/lists/*
+
 COPY package.json package-lock.json* ./
 COPY packages/shared/package.json packages/shared/package.json
 COPY apps/api/package.json apps/api/package.json
-RUN npm install --omit=dev
+RUN npm ci --omit=dev
 
 COPY --from=build /app/packages/shared/dist packages/shared/dist
 COPY --from=build /app/apps/api/dist apps/api/dist

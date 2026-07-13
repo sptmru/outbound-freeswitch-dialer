@@ -3,11 +3,14 @@ import { access, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
+import type pg from "pg";
 import type { AppConfig } from "./config.js";
+import { encryptSecret } from "./auth/crypto.js";
 import {
   deleteAgentDirectory,
   ensureAgentDirectory,
   provisionAgentDirectory,
+  reconcileAgentDirectories,
   refreshDeletedAgentRegistrations
 } from "./freeswitch/provisioning.js";
 
@@ -68,9 +71,13 @@ describe("FreeSWITCH provisioning helpers", () => {
     const commands: string[] = [];
     const config = createConfig("/tmp/outbound-dialer-test", { FREESWITCH_ESL_ENABLED: true });
 
-    const result = await refreshDeletedAgentRegistrations(config, ["agent.remove", "agent.remove"], async (_config, command) => {
-      commands.push(command);
-    });
+    const result = await refreshDeletedAgentRegistrations(
+      config,
+      ["agent.remove", "agent.remove"],
+      async (_config, command) => {
+        commands.push(command);
+      }
+    );
 
     assert.deepEqual(commands, [
       "reloadxml",
@@ -80,9 +87,13 @@ describe("FreeSWITCH provisioning helpers", () => {
   });
 
   it("skips deleted registration refresh when ESL is disabled", async () => {
-    const result = await refreshDeletedAgentRegistrations(createConfig("/tmp/outbound-dialer-test"), ["agent.remove"], async () => {
-      throw new Error("ESL should not be called");
-    });
+    const result = await refreshDeletedAgentRegistrations(
+      createConfig("/tmp/outbound-dialer-test"),
+      ["agent.remove"],
+      async () => {
+        throw new Error("ESL should not be called");
+      }
+    );
 
     assert.deepEqual(result, { commands: [], errors: [], skipped: true });
   });
@@ -106,6 +117,50 @@ describe("FreeSWITCH provisioning helpers", () => {
       skipped: false
     });
   });
+
+  it("reconciles active directory files and removes inactive ones", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "outbound-dialer-fs-"));
+    const config = createConfig(tempDir);
+    const pool = {
+      query: async (sql: string) => {
+        if (sql.includes("where users.is_active = true")) {
+          return {
+            rows: [
+              {
+                sip_username: "agent_active",
+                sip_password_encrypted: encryptSecret(config, "active-secret"),
+                display_name: "Active Agent"
+              }
+            ],
+            rowCount: 1
+          };
+        }
+        if (sql.includes("where users.is_active = false")) {
+          return { rows: [{ sip_username: "agent_inactive" }], rowCount: 1 };
+        }
+        throw new Error(`Unexpected query: ${sql}`);
+      }
+    } as unknown as pg.Pool;
+
+    try {
+      await provisionAgentDirectory(config, {
+        sipUsername: "agent_inactive",
+        sipPassword: "old-secret",
+        displayName: "Inactive Agent"
+      });
+
+      const result = await reconcileAgentDirectories(pool, config);
+
+      assert.deepEqual(result, { provisioned: 1, removed: 1, refreshErrors: 0 });
+      assert.match(
+        await readFile(join(tempDir, "directory", "default", "agent_active.xml"), "utf8"),
+        /active-secret/
+      );
+      await assertFileMissing(join(tempDir, "directory", "default", "agent_inactive.xml"));
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
 });
 
 function createConfig(generatedConfigDir: string, overrides: Partial<AppConfig> = {}): AppConfig {
@@ -113,6 +168,8 @@ function createConfig(generatedConfigDir: string, overrides: Partial<AppConfig> 
     FREESWITCH_GENERATED_CONFIG_DIR: generatedConfigDir,
     FREESWITCH_DOMAIN: "dialer.local",
     FREESWITCH_ESL_ENABLED: false,
+    JWT_SECRET: "test-jwt-secret-that-is-at-least-32-bytes",
+    SIP_SECRET_WRITE_VERSION: "v1",
     ...overrides
   } as AppConfig;
 }

@@ -26,11 +26,11 @@ export async function validateDialableNumber(
       ? "Number is callable"
       : !normalized.ok
         ? normalizedFailureReason
-      : suppression
-        ? suppression.reason ?? "Number is suppressed"
-        : manualDialing.status === "fail"
-          ? manualDialing.detail
-          : "Number is not callable",
+        : suppression
+          ? (suppression.reason ?? "Number is suppressed")
+          : manualDialing.status === "fail"
+            ? manualDialing.detail
+            : "Number is not callable",
     checks: [
       {
         label: "Phone number",

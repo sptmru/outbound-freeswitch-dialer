@@ -1,9 +1,7 @@
 import { isSupportedCountry, parsePhoneNumberFromString } from "libphonenumber-js";
 import type { CountryCode } from "libphonenumber-js";
 
-export type PhoneNormalizationResult =
-  | { ok: true; number: string }
-  | { ok: false; reason: string };
+export type PhoneNormalizationResult = { ok: true; number: string } | { ok: false; reason: string };
 
 export function normalizePhoneNumber(value: string, defaultCountryCode?: string): PhoneNormalizationResult {
   const raw = value.trim();

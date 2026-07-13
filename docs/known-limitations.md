@@ -1,0 +1,27 @@
+# Known Limitations And Decision Boundaries
+
+- The product is single-tenant and the deployment is a single-host Docker topology; it is not a high-availability control plane.
+- Each agent has one interactive call at a time. A released voicemail customer leg can remain as a tracked background job while the same agent starts another interactive call.
+- Agent pause and configurable post-call wrap-up are implemented, but scheduled callbacks, supervisor-controlled requeue, reason-coded pauses, and workforce-management reporting are not.
+- VM/beep/AVMD detection is advisory. It neither decides human versus machine nor triggers an automatic voicemail drop.
+- FreeSWITCH playback completion proves the local application flow, not that the far-end mailbox stored the entire message. Representative carrier/device testing is required.
+- Provider routing, caller ID, codecs/DTMF, throughput, hangup mapping, WSS/NAT behavior, and external audio have not been accepted until evidenced in the target environment.
+- The default retry policy is three attempts with a 15-minute delay. It is a technical default, not approval of calling windows, jurisdictional limits, or outcome-specific retry rules.
+- Automatic outcomes are backend-derived. There is no mandatory agent-selected disposition/override workflow in this version.
+- CSV import intentionally accepts only `name` and `phone`; arbitrary field mapping and additional lead attributes are deferred.
+- Campaign status supports archive but not a separate automatic `completed` state. Archiving is an administrator action.
+- Voicemail assets are global with one default; there are no per-campaign/per-agent recording libraries.
+- Uploads are limited to one WAV/MP3 up to the API multipart limit and five minutes of decoded audio. Canonical output is mono 8 kHz PCM WAV.
+- Call-history CSV export is bounded by `CALL_HISTORY_EXPORT_MAX_ROWS` (50,000 by default) and must be narrowed with filters above that limit.
+- Media tickets are intentionally short-lived and resource-scoped. A long-open browser player may need to request a new ticket.
+- SSE sends refresh hints rather than full event/state payloads. Correctness still depends on an authenticated REST refetch; periodic polling remains a fallback.
+- Retention applies only to terminal `completed`, `failed`, and `canceled` calls. Audit/legal-hold retention is not implemented as a policy engine and requires client rules.
+- A recording unlink error other than “file absent” intentionally prevents metadata/call deletion. This favors recoverability and can require operator remediation for persistent filesystem errors.
+- Local backup retention does not guarantee disaster recovery. Production needs authenticated off-host delivery and a clean-host restore drill with approved RPO/RTO.
+- Legacy unauthenticated AES-CBC backup restore is disabled by default. The emergency override must only be used for a separately trusted pre-upgrade archive.
+- Database migrations are forward-only. Application rollback requires a backward-compatible expand/migrate/contract sequence; it does not undo schema/data changes.
+- SIP credential `v2` writes make rollback unsafe to an old `v1`-only image. The immediately previous image must be confirmed dual-read compatible before stage 2.
+- Same-host monitoring cannot detect total host/network loss; an off-host uptime check and real alert receiver are required.
+- Firewall policy and changes to host-published ports were explicitly excluded from this implementation pass. Existing network exposure must be assessed independently before production acceptance.
+- Automatic/progressive dialing, automatic voicemail drop, scheduled callbacks, multi-tenancy, object storage, legal hold, and high availability are outside the current MVP.
+- Repository tests and source inspection do not constitute provider, live-call, mailbox, load, restore, legal, training, or production sign-off.

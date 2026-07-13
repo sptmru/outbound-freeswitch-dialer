@@ -1,9 +1,14 @@
 import type {
   AdminOverviewResponse,
+  AdminAuditResponse,
+  AdminCampaignListResponse,
+  AdminRecordingListResponse,
+  AdminUserListResponse,
   AgentDeskResponse,
   CampaignContactListItem,
   CampaignContactsResponse,
   CallDetailResponse,
+  CallHistoryResponse,
   CreateCampaignRequest,
   CreateContactRequest,
   CreateRecordingResponse,
@@ -20,18 +25,23 @@ import type {
   ImportCsvRequest,
   ImportCsvResponse,
   ManualDialValidationResponse,
+  MediaTicketResponse,
   MutationResponse,
   PublicUser,
+  SuppressionImportResponse,
+  SuppressionListResponse,
   SendDtmfRequest,
   SoftphoneProvisioningResponse,
   StartNextCallRequest,
   StartManualCallRequest,
   SuppressContactRequest,
-  UpdateCampaignRequest
+  UpdateCampaignRequest,
+  UpdateAgentAvailabilityRequest,
+  UpdateUserRequest,
+  UpdateUserResponse
 } from "./types";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "/api";
-const TOKEN_KEY = "outbound_dialer_token";
 
 type LoginResponse = {
   token: string;
@@ -54,27 +64,14 @@ export function isApiError(error: unknown): error is ApiError {
   return error instanceof ApiError;
 }
 
-export function getStoredToken(): string | null {
-  return window.localStorage.getItem(TOKEN_KEY);
-}
-
-export function setStoredToken(token: string): void {
-  window.localStorage.setItem(TOKEN_KEY, token);
-}
-
-export function clearStoredToken(): void {
-  window.localStorage.removeItem(TOKEN_KEY);
-}
-
 async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const token = getStoredToken();
   const isFormData = options.body instanceof FormData;
   const hasBody = options.body !== undefined && options.body !== null;
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...options,
+    credentials: "include",
     headers: {
       ...(hasBody && !isFormData ? { "Content-Type": "application/json" } : {}),
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...options.headers
     }
   });
@@ -86,8 +83,12 @@ async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> 
         ? errorBody.error
         : isRecord(errorBody) && typeof errorBody.message === "string"
           ? errorBody.message
-        : `Request failed with ${response.status}`;
+          : `Request failed with ${response.status}`;
     throw new ApiError(message, response.status, errorBody);
+  }
+
+  if (response.status === 204) {
+    return undefined as T;
   }
 
   return response.json() as Promise<T>;
@@ -108,9 +109,38 @@ export async function fetchMe(): Promise<{ user: PublicUser }> {
   return apiFetch<{ user: PublicUser }>("/auth/me");
 }
 
+export async function logout(): Promise<void> {
+  return apiFetch<void>("/auth/logout", { method: "POST" });
+}
+
+/**
+ * Native EventSource reconnects automatically after transient failures. The
+ * caller keeps a periodic HTTP refresh as a fallback for blocked/unsupported
+ * SSE connections and closes this subscription when the session ends.
+ */
+export function subscribeAgentEvents(input: {
+  onConnectionChange?: (connected: boolean) => void;
+  onRefresh: () => void;
+}): () => void {
+  const source = new EventSource(`${API_BASE_URL}/agent/events`, { withCredentials: true });
+  source.addEventListener("open", () => input.onConnectionChange?.(true));
+  source.addEventListener("refresh", input.onRefresh);
+  source.addEventListener("error", () => input.onConnectionChange?.(false));
+  return () => source.close();
+}
+
 export async function fetchAgentDesk(campaignId?: string): Promise<AgentDeskResponse> {
   const query = campaignId ? `?campaignId=${encodeURIComponent(campaignId)}` : "";
   return apiFetch<AgentDeskResponse>(`/agent/desk${query}`);
+}
+
+export async function updateAgentAvailability(
+  input: UpdateAgentAvailabilityRequest
+): Promise<AgentDeskResponse> {
+  return apiFetch<AgentDeskResponse>("/agent/availability", {
+    method: "PATCH",
+    body: JSON.stringify(input)
+  });
 }
 
 export async function fetchSoftphoneProvisioning(): Promise<SoftphoneProvisioningResponse> {
@@ -121,17 +151,76 @@ export async function fetchAdminOverview(): Promise<AdminOverviewResponse> {
   return apiFetch<AdminOverviewResponse>("/admin/overview");
 }
 
+export async function fetchAdminAudit(
+  filters: {
+    page?: number;
+    pageSize?: number;
+    actorId?: string;
+    method?: "DELETE" | "PATCH" | "POST" | "PUT";
+    dateFrom?: string;
+    dateTo?: string;
+  } = {}
+): Promise<AdminAuditResponse> {
+  const query = toQuery(filters);
+  return apiFetch<AdminAuditResponse>(`/admin/audit-events${query ? `?${query}` : ""}`);
+}
+
 export async function fetchCallDetail(callId: string): Promise<CallDetailResponse> {
   return apiFetch<CallDetailResponse>(`/admin/calls/${callId}`);
 }
 
-export function getCallRecordingAudioUrl(callId: string): string | null {
-  const token = getStoredToken();
-  if (!token) {
-    return null;
+export async function getCallRecordingAudioUrl(callId: string): Promise<string> {
+  const ticket = await apiFetch<MediaTicketResponse>(`/admin/calls/${callId}/recording-ticket`, {
+    method: "POST"
+  });
+  return `${API_BASE_URL}${ticket.url}`;
+}
+
+export type CallHistoryFilters = {
+  page?: number;
+  pageSize?: number;
+  q?: string;
+  campaignId?: string;
+  agentId?: string;
+  outcome?: string;
+  from?: string;
+  to?: string;
+  voicemail?: "drop" | "signal";
+  recording?: "available" | "missing";
+};
+
+export type AdminLibraryFilters = {
+  page?: number;
+  pageSize?: number;
+  q?: string;
+};
+
+function toQuery(filters: Record<string, string | number | undefined>): string {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(filters)) {
+    if (value !== undefined && value !== "") {
+      params.set(key, String(value));
+    }
   }
-  const params = new URLSearchParams({ token });
-  return `${API_BASE_URL}/admin/calls/${callId}/recording?${params.toString()}`;
+  return params.toString();
+}
+
+export async function fetchCallHistory(filters: CallHistoryFilters = {}): Promise<CallHistoryResponse> {
+  const query = toQuery(filters);
+  return apiFetch<CallHistoryResponse>(`/admin/calls${query ? `?${query}` : ""}`);
+}
+
+export async function downloadCallHistoryCsv(
+  filters: Omit<CallHistoryFilters, "page" | "pageSize"> = {}
+): Promise<Blob> {
+  const query = toQuery(filters);
+  const response = await fetch(`${API_BASE_URL}/admin/calls/export.csv${query ? `?${query}` : ""}`, {
+    credentials: "include"
+  });
+  if (!response.ok) {
+    throw new ApiError("Could not export call history", response.status, await response.text());
+  }
+  return response.blob();
 }
 
 export async function fetchFreeSwitchDiagnostics(): Promise<FreeSwitchDiagnosticsResponse> {
@@ -144,8 +233,28 @@ export async function runFreeSwitchSafeTest(): Promise<FreeSwitchSafeTestRespons
   });
 }
 
-export async function fetchCsvImports(): Promise<CsvImportHistoryResponse> {
-  return apiFetch<CsvImportHistoryResponse>("/admin/csv-imports");
+export async function fetchAdminCampaigns(
+  filters: AdminLibraryFilters = {}
+): Promise<AdminCampaignListResponse> {
+  const query = toQuery(filters);
+  return apiFetch<AdminCampaignListResponse>(`/admin/campaigns${query ? `?${query}` : ""}`);
+}
+
+export async function fetchAdminRecordings(
+  filters: AdminLibraryFilters = {}
+): Promise<AdminRecordingListResponse> {
+  const query = toQuery(filters);
+  return apiFetch<AdminRecordingListResponse>(`/admin/recordings${query ? `?${query}` : ""}`);
+}
+
+export async function fetchAdminUsers(filters: AdminLibraryFilters = {}): Promise<AdminUserListResponse> {
+  const query = toQuery(filters);
+  return apiFetch<AdminUserListResponse>(`/admin/users${query ? `?${query}` : ""}`);
+}
+
+export async function fetchCsvImports(filters: AdminLibraryFilters = {}): Promise<CsvImportHistoryResponse> {
+  const query = toQuery(filters);
+  return apiFetch<CsvImportHistoryResponse>(`/admin/csv-imports${query ? `?${query}` : ""}`);
 }
 
 export async function fetchCsvImportDetail(importId: string): Promise<CsvImportDetailResponse> {
@@ -164,7 +273,9 @@ export async function fetchCampaignContacts(
     params.set("status", filters.status);
   }
   const query = params.toString();
-  return apiFetch<CampaignContactsResponse>(`/admin/campaigns/${campaignId}/contacts${query ? `?${query}` : ""}`);
+  return apiFetch<CampaignContactsResponse>(
+    `/admin/campaigns/${campaignId}/contacts${query ? `?${query}` : ""}`
+  );
 }
 
 export async function validateManualDial(
@@ -204,7 +315,10 @@ export async function endCall(callId: string, input: EndCallRequest = {}): Promi
   });
 }
 
-export async function dropVoicemail(callId: string, input: DropVoicemailRequest = {}): Promise<AgentDeskResponse> {
+export async function dropVoicemail(
+  callId: string,
+  input: DropVoicemailRequest = {}
+): Promise<AgentDeskResponse> {
   return apiFetch<AgentDeskResponse>(`/agent/calls/${callId}/drop-voicemail`, {
     method: "POST",
     body: JSON.stringify(input)
@@ -237,10 +351,13 @@ export async function updateCampaign(
   campaignId: string,
   input: UpdateCampaignRequest
 ): Promise<MutationResponse<AdminOverviewResponse["campaigns"][number]>> {
-  return apiFetch<MutationResponse<AdminOverviewResponse["campaigns"][number]>>(`/admin/campaigns/${campaignId}`, {
-    method: "PATCH",
-    body: JSON.stringify(input)
-  });
+  return apiFetch<MutationResponse<AdminOverviewResponse["campaigns"][number]>>(
+    `/admin/campaigns/${campaignId}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify(input)
+    }
+  );
 }
 
 export async function uploadRecording(input: {
@@ -276,13 +393,11 @@ export async function deleteRecording(recordingId: string): Promise<DeleteRespon
   });
 }
 
-export function getRecordingAudioUrl(recordingId: string): string | null {
-  const token = getStoredToken();
-  if (!token) {
-    return null;
-  }
-  const params = new URLSearchParams({ token });
-  return `${API_BASE_URL}/admin/recordings/${recordingId}/audio?${params.toString()}`;
+export async function getRecordingAudioUrl(recordingId: string): Promise<string> {
+  const ticket = await apiFetch<MediaTicketResponse>(`/admin/recordings/${recordingId}/audio-ticket`, {
+    method: "POST"
+  });
+  return `${API_BASE_URL}${ticket.url}`;
 }
 
 export async function createUser(input: CreateUserRequest): Promise<CreateUserResponse> {
@@ -298,7 +413,16 @@ export async function deleteUser(userId: string): Promise<DeleteResponse> {
   });
 }
 
-export async function createContact(input: CreateContactRequest): Promise<MutationResponse<AgentDeskResponse["leads"][number]>> {
+export async function updateUser(userId: string, input: UpdateUserRequest): Promise<UpdateUserResponse> {
+  return apiFetch<UpdateUserResponse>(`/admin/users/${userId}`, {
+    method: "PATCH",
+    body: JSON.stringify(input)
+  });
+}
+
+export async function createContact(
+  input: CreateContactRequest
+): Promise<MutationResponse<AgentDeskResponse["leads"][number]>> {
   return apiFetch<MutationResponse<AgentDeskResponse["leads"][number]>>("/admin/contacts", {
     method: "POST",
     body: JSON.stringify(input)
@@ -317,6 +441,22 @@ export async function createSuppression(
 export async function deleteSuppression(suppressionId: string): Promise<DeleteResponse> {
   return apiFetch<DeleteResponse>(`/admin/suppression/${suppressionId}`, {
     method: "DELETE"
+  });
+}
+
+export async function fetchSuppression(
+  filters: { q?: string; page?: number; pageSize?: number } = {}
+): Promise<SuppressionListResponse> {
+  const query = toQuery(filters);
+  return apiFetch<SuppressionListResponse>(`/admin/suppression${query ? `?${query}` : ""}`);
+}
+
+export async function importSuppressionCsvFile(file: File): Promise<SuppressionImportResponse> {
+  const formData = new FormData();
+  formData.append("file", file);
+  return apiFetch<SuppressionImportResponse>("/admin/suppression/import-csv-file", {
+    method: "POST",
+    body: formData
   });
 }
 

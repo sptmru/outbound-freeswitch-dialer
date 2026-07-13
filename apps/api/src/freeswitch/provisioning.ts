@@ -21,6 +21,11 @@ interface AgentDirectoryRecord {
   display_name: string;
 }
 
+interface AgentDirectoryReconciliationLogger {
+  info: (value: unknown, message?: string) => void;
+  warn: (value: unknown, message?: string) => void;
+}
+
 export async function provisionAgentDirectory(
   config: AppConfig,
   agent: { sipUsername: string; sipPassword: string; displayName: string }
@@ -87,7 +92,9 @@ export async function provisionAllAgentDirectories(pool: pg.Pool, config: AppCon
     `
       select sip_username, sip_password_encrypted, display_name
       from agents
-      order by created_at asc
+      join users on users.id = agents.user_id
+      where users.is_active = true
+      order by agents.created_at asc
     `
   );
 
@@ -100,6 +107,66 @@ export async function provisionAllAgentDirectories(pool: pg.Pool, config: AppCon
   }
 
   return result.rowCount ?? 0;
+}
+
+export async function reconcileAgentDirectories(
+  pool: pg.Pool,
+  config: AppConfig
+): Promise<{ provisioned: number; removed: number; refreshErrors: number }> {
+  const provisioned = await provisionAllAgentDirectories(pool, config);
+  const inactive = await pool.query<{ sip_username: string }>(
+    `
+      select agents.sip_username
+      from agents
+      join users on users.id = agents.user_id
+      where users.is_active = false
+      order by agents.created_at asc
+    `
+  );
+  const removedUsernames: string[] = [];
+  for (const agent of inactive.rows) {
+    await deleteAgentDirectory(config, agent.sip_username);
+    removedUsernames.push(agent.sip_username);
+  }
+  const refresh = await refreshDeletedAgentRegistrations(config, removedUsernames);
+  return {
+    provisioned,
+    removed: removedUsernames.length,
+    refreshErrors: refresh.errors.length
+  };
+}
+
+export function startAgentDirectoryReconciler(
+  pool: pg.Pool,
+  config: AppConfig,
+  logger: AgentDirectoryReconciliationLogger,
+  intervalMilliseconds = 60_000
+): () => void {
+  let stopped = false;
+  let running = false;
+  const reconcile = async () => {
+    if (stopped || running) return;
+    running = true;
+    try {
+      const result = await reconcileAgentDirectories(pool, config);
+      if (result.removed || result.refreshErrors) {
+        logger.info(result, "FreeSWITCH agent directory reconciliation completed");
+      }
+    } catch (error) {
+      logger.warn(
+        { message: error instanceof Error ? error.message : String(error) },
+        "FreeSWITCH agent directory reconciliation failed; it will retry"
+      );
+    } finally {
+      running = false;
+    }
+  };
+  const interval = setInterval(() => void reconcile(), intervalMilliseconds);
+  interval.unref();
+  return () => {
+    stopped = true;
+    clearInterval(interval);
+  };
 }
 
 function agentDirectoryPath(config: AppConfig): string {
@@ -129,7 +196,7 @@ function renderAgentDirectoryXml(
       <param name="vm-password" value="${escapeXml(agent.sipPassword)}"/>
     </params>
     <variables>
-      <variable name="user_context" value="default"/>
+      <variable name="user_context" value="agent-ingress"/>
       <variable name="effective_caller_id_name" value="${escapeXml(agent.displayName)}"/>
       <variable name="effective_caller_id_number" value="${escapeXml(agent.sipUsername)}"/>
       <variable name="domain_name" value="${escapeXml(config.FREESWITCH_DOMAIN)}"/>

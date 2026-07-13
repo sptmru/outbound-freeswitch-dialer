@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import type { AdminOverviewResponse, AgentDeskResponse, PublicUser } from "./types";
@@ -9,9 +9,13 @@ const apiMocks = vi.hoisted(() => ({
   fetchAdminOverview: vi.fn(),
   fetchAgentDesk: vi.fn(),
   fetchCallDetail: vi.fn(),
+  fetchCallHistory: vi.fn(),
   fetchCsvImports: vi.fn(),
   fetchMe: vi.fn(),
-  getStoredToken: vi.fn(),
+  getCallRecordingAudioUrl: vi.fn(),
+  logout: vi.fn(),
+  subscribeAgentEvents: vi.fn(),
+  updateAgentAvailability: vi.fn(),
   useSoftphoneRegistration: vi.fn()
 }));
 
@@ -24,9 +28,13 @@ vi.mock("./api", async () => {
     fetchAdminOverview: apiMocks.fetchAdminOverview,
     fetchAgentDesk: apiMocks.fetchAgentDesk,
     fetchCallDetail: apiMocks.fetchCallDetail,
+    fetchCallHistory: apiMocks.fetchCallHistory,
     fetchCsvImports: apiMocks.fetchCsvImports,
     fetchMe: apiMocks.fetchMe,
-    getStoredToken: apiMocks.getStoredToken
+    getCallRecordingAudioUrl: apiMocks.getCallRecordingAudioUrl,
+    logout: apiMocks.logout,
+    subscribeAgentEvents: apiMocks.subscribeAgentEvents,
+    updateAgentAvailability: apiMocks.updateAgentAvailability
   };
 });
 
@@ -35,28 +43,90 @@ vi.mock("./softphone", () => ({
 }));
 
 const softphoneRuntime = {
-    registered: false,
-    microphoneAllowed: true,
-    state: "idle",
-    callState: "none",
-    label: "Softphone offline",
-    detail: "Not registered in tests",
-    error: null,
-    incomingCallLabel: null,
-    answerIncomingCall: async () => undefined,
-    declineIncomingCall: async () => undefined,
-    hangUpSoftphoneCall: async () => undefined
-  };
+  registered: false,
+  microphoneAllowed: true,
+  state: "idle",
+  callState: "none",
+  label: "Softphone offline",
+  detail: "Not registered in tests",
+  error: null,
+  incomingCallLabel: null,
+  answerIncomingCall: async () => undefined,
+  declineIncomingCall: async () => undefined,
+  hangUpSoftphoneCall: async () => undefined
+};
 
 describe("App Agent Desk empty states", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    window.localStorage.setItem("outbound_dialer_token", "test-token");
-    apiMocks.getStoredToken.mockReturnValue("test-token");
     apiMocks.fetchMe.mockResolvedValue({ user: userRow() });
     apiMocks.fetchCsvImports.mockResolvedValue({ imports: [] });
     apiMocks.fetchAdminOverview.mockResolvedValue(adminResponse());
+    apiMocks.fetchCallHistory.mockResolvedValue({
+      items: [],
+      page: 1,
+      pageSize: 25,
+      total: 0,
+      totalPages: 0
+    });
+    apiMocks.getCallRecordingAudioUrl.mockResolvedValue("/api/media/ticketed-recording");
+    apiMocks.logout.mockResolvedValue(undefined);
+    apiMocks.subscribeAgentEvents.mockReturnValue(() => undefined);
+    apiMocks.updateAgentAvailability.mockResolvedValue(
+      deskResponse({ availability: { status: "paused", wrapUpUntil: null } })
+    );
     apiMocks.useSoftphoneRegistration.mockReturnValue(softphoneRuntime);
+  });
+
+  it("hydrates the cookie session without a browser-stored bearer token", async () => {
+    window.localStorage.setItem("outbound_dialer_token", "legacy-token-that-must-be-ignored");
+    apiMocks.fetchAgentDesk.mockResolvedValue(deskResponse());
+
+    render(<App />);
+
+    expect(await screen.findByText("Agent desk")).toBeInTheDocument();
+    expect(apiMocks.fetchMe).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(apiMocks.subscribeAgentEvents).toHaveBeenCalledTimes(1));
+    expect(window.localStorage.getItem("outbound_dialer_token")).toBeNull();
+  });
+
+  it("refreshes desk state when the live event stream emits a refresh", async () => {
+    let emitRefresh: (() => void) | undefined;
+    apiMocks.subscribeAgentEvents.mockImplementation(({ onRefresh }: { onRefresh: () => void }) => {
+      emitRefresh = onRefresh;
+      return () => undefined;
+    });
+    apiMocks.fetchAgentDesk.mockResolvedValueOnce(deskResponse({ leads: [] })).mockResolvedValueOnce(
+      deskResponse({
+        leads: [
+          {
+            id: "22222222-2222-4222-8222-222222222222",
+            name: "Live Lead",
+            company: "Unmapped company",
+            phoneNumber: "+15551234567",
+            status: "ready",
+            fields: []
+          }
+        ]
+      })
+    );
+
+    render(<App />);
+    expect(await screen.findByText("No leads are queued for this campaign.")).toBeInTheDocument();
+    act(() => emitRefresh?.());
+
+    expect(await screen.findByText("Live Lead, +15551234567")).toBeInTheDocument();
+    expect(apiMocks.fetchAgentDesk).toHaveBeenCalledTimes(2);
+  });
+
+  it("clears the rendered session only after calling the logout endpoint", async () => {
+    apiMocks.fetchAgentDesk.mockResolvedValue(deskResponse());
+
+    render(<App />);
+    fireEvent.click(await screen.findByTitle("Log out"));
+
+    await waitFor(() => expect(apiMocks.logout).toHaveBeenCalledTimes(1));
+    expect(await screen.findByRole("button", { name: /Sign in/ })).toBeInTheDocument();
   });
 
   it("renders an explicit no-campaign state instead of demo data", async () => {
@@ -79,6 +149,47 @@ describe("App Agent Desk empty states", () => {
     expect(await screen.findByText("No leads are queued for this campaign.")).toBeInTheDocument();
     expect(screen.getByText("Callable leads")).toBeInTheDocument();
     expect(screen.queryByText(/Recommended next:/)).not.toBeInTheDocument();
+  });
+
+  it("lets an agent pause and resume calling from the status panel", async () => {
+    apiMocks.fetchAgentDesk.mockResolvedValue(deskResponse());
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Pause" }));
+
+    await waitFor(() => {
+      expect(apiMocks.updateAgentAvailability).toHaveBeenCalledWith({
+        status: "paused",
+        campaignId: "11111111-1111-4111-8111-111111111111"
+      });
+    });
+    expect(await screen.findByRole("button", { name: "Resume calling" })).toBeInTheDocument();
+    expect(screen.getAllByText("Paused").length).toBeGreaterThan(0);
+  });
+
+  it("shows wrap-up as finishing notes and keeps the next call disabled", async () => {
+    apiMocks.useSoftphoneRegistration.mockReturnValue({ ...softphoneRuntime, registered: true });
+    apiMocks.fetchAgentDesk.mockResolvedValue(
+      deskResponse({
+        availability: { status: "wrap_up", wrapUpUntil: "2099-07-13T10:00:00.000Z" },
+        leads: [
+          {
+            id: "22222222-2222-4222-8222-222222222222",
+            name: "Avery Johnson",
+            company: "",
+            phoneNumber: "+15551234567",
+            status: "ready",
+            fields: []
+          }
+        ]
+      })
+    );
+
+    render(<App />);
+
+    expect(await screen.findByText("Finishing notes")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Ready now" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Start next call/ })).toBeDisabled();
   });
 
   it("renders the simplified next lead recommendation", async () => {
@@ -220,14 +331,16 @@ describe("App Agent Desk empty states", () => {
       deskResponse({
         user: admin,
         activeCall: activeCallRow(),
-        leads: [{
-          id: "22222222-2222-4222-8222-222222222222",
-          name: "Avery Johnson",
-          company: "Unmapped company",
-          phoneNumber: "+15551234567",
-          status: "calling",
-          fields: []
-        }]
+        leads: [
+          {
+            id: "22222222-2222-4222-8222-222222222222",
+            name: "Avery Johnson",
+            company: "Unmapped company",
+            phoneNumber: "+15551234567",
+            status: "calling",
+            fields: []
+          }
+        ]
       })
     );
 
@@ -252,6 +365,10 @@ describe("App Agent Desk empty states", () => {
             status: "active",
             loaded: 10,
             callable: 8,
+            attempted: 2,
+            outcomeDistribution: [],
+            manualDialingEnabled: true,
+            callRecordingEnabled: true,
             earlyMediaAvmdEnabled: true
           }
         ]
@@ -282,13 +399,44 @@ describe("App Agent Desk empty states", () => {
 
   it("plays a call recording and keeps technical events collapsed until requested", async () => {
     const admin = userRow({ role: "admin" });
-    const call = callHistoryRow({ callRecordingPath: `/recordings/calls/${callHistoryRow().id}.wav` });
+    const call = callHistoryRow({ recordingAvailable: true });
     apiMocks.fetchMe.mockResolvedValue({ user: admin });
     apiMocks.fetchAgentDesk.mockResolvedValue(deskResponse({ user: admin }));
     apiMocks.fetchAdminOverview.mockResolvedValue(adminResponse({ callHistory: [call] }));
+    apiMocks.fetchCallHistory.mockResolvedValue({
+      items: [call],
+      page: 1,
+      pageSize: 25,
+      total: 1,
+      totalPages: 1
+    });
     apiMocks.fetchCallDetail.mockResolvedValue({
-      call: { ...call, startedAt: call.createdAt, answeredAt: call.createdAt, endedAt: call.createdAt, manualDial: false },
-      timeline: [{ at: call.createdAt, eventType: "CHANNEL_ANSWER", state: "bridged", label: "Customer connected" }]
+      call: {
+        ...call,
+        startedAt: call.createdAt,
+        answeredAt: call.createdAt,
+        endedAt: call.createdAt,
+        manualDial: false,
+        voicemailSignal: null,
+        voicemailConfidence: null,
+        recordingStatus: "available",
+        recordingDurationSeconds: 60,
+        recordingFileSizeBytes: 128_000,
+        recordingIntegrityCheckedAt: call.createdAt,
+        recordingFailureReason: null,
+        lastReasonCode: null,
+        hangupCause: null
+      },
+      timeline: [
+        {
+          at: call.createdAt,
+          eventType: "CHANNEL_ANSWER",
+          state: "bridged",
+          label: "Customer connected",
+          reasonCode: null,
+          freeSwitchEventName: "CHANNEL_ANSWER"
+        }
+      ]
     });
 
     render(<App />);
@@ -296,14 +444,17 @@ describe("App Agent Desk empty states", () => {
     fireEvent.click(await screen.findByRole("button", { name: /Avery Johnson/ }));
 
     const player = await screen.findByLabelText("Call recording for Avery Johnson");
-    expect(player).toHaveAttribute(
-      "src",
-      `/api/admin/calls/${call.id}/recording?token=test-token`
-    );
+    expect(screen.getByText("Recording length")).toBeInTheDocument();
+    expect(screen.getByText("Recording size")).toBeInTheDocument();
+    expect(screen.getByText("Integrity checked")).toBeInTheDocument();
+    expect(player).toHaveAttribute("src", "/api/media/ticketed-recording");
     expect(screen.queryByText("Customer connected")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Show technical details" }));
     expect(await screen.findByText("Customer connected")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Hide technical details" })).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("button", { name: "Hide technical details" })).toHaveAttribute(
+      "aria-expanded",
+      "true"
+    );
     expect(apiMocks.fetchCallDetail).toHaveBeenCalledWith(call.id);
   });
 });
@@ -314,6 +465,7 @@ function userRow(overrides: Partial<PublicUser> = {}): PublicUser {
     email: "agent@example.com",
     name: "Agent Example",
     role: "agent",
+    isActive: true,
     ...overrides
   };
 }
@@ -331,6 +483,10 @@ function deskResponse(overrides: Partial<AgentDeskResponse> = {}): AgentDeskResp
 
   return {
     user: userRow(),
+    availability: {
+      status: "available",
+      wrapUpUntil: null
+    },
     campaign,
     availableCampaigns: [
       {
@@ -350,6 +506,8 @@ function deskResponse(overrides: Partial<AgentDeskResponse> = {}): AgentDeskResp
       voicemailsDropped: 0,
       suppressed: 0
     },
+    recentCalls: [],
+    voicemailJobs: [],
     leads: [],
     recordings: [recordingRow()],
     activeCall: null,
@@ -381,6 +539,8 @@ function activeCallRow(
     voicemailSignal: "detected",
     recordingId: "44444444-4444-4444-8444-444444444444",
     recordingName: "Default voicemail",
+    callRecordingEnabled: true,
+    callRecordingStatus: "recording",
     actions: {
       dropVoicemail: { allowed: true, reason: null },
       sendDtmf: { allowed: true, reason: null }
@@ -393,7 +553,22 @@ function activeCallRow(
 function adminResponse(overrides: Partial<AdminOverviewResponse> = {}): AdminOverviewResponse {
   return {
     user: userRow({ role: "admin" }),
-    stats: { campaigns: 0, activeAgents: 0, callsToday: 0, suppressionEntries: 0, liveCalls: 0 },
+    stats: {
+      campaigns: 0,
+      activeAgents: 0,
+      callsToday: 0,
+      suppressionEntries: 0,
+      liveCalls: 0,
+      attemptedCallsToday: 0,
+      answeredCallsToday: 0,
+      contactRate: 0,
+      voicemailDropsToday: 0,
+      voicemailDropCompletionRate: 0,
+      failedCallsToday: 0,
+      callsPerHour: 0,
+      agentUtilization: 0,
+      outcomeDistribution: []
+    },
     campaigns: [],
     recordings: [],
     users: [],
@@ -412,11 +587,14 @@ function callHistoryRow(
     agentName: "Agent Example",
     phoneNumber: "+15551234567",
     campaignName: "Selected campaign",
+    campaignId: "11111111-1111-4111-8111-111111111111",
+    agentId: "99999999-9999-4999-8999-999999999999",
     state: "completed",
     outcome: "answered",
     createdAt: "2026-07-10T08:00:00.000Z",
     durationSeconds: 72,
-    callRecordingPath: null,
+    recordingAvailable: false,
+    voicemailSignal: null,
     ...overrides
   };
 }

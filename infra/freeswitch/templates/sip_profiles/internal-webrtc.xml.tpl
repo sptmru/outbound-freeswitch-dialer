@@ -6,7 +6,7 @@
     <param name="rfc2833-pt" value="101"/>
     <param name="sip-port" value="__FREESWITCH_INTERNAL_SIP_PORT__"/>
     <param name="dialplan" value="XML"/>
-    <param name="context" value="default"/>
+    <param name="context" value="agent-ingress"/>
     <param name="challenge-realm" value="__FREESWITCH_DOMAIN__"/>
     <param name="force-register-domain" value="__FREESWITCH_DOMAIN__"/>
     <param name="force-register-db-domain" value="__FREESWITCH_DOMAIN__"/>

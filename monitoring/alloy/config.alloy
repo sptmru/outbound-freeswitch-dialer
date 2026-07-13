@@ -1,5 +1,5 @@
 discovery.docker "containers" {
-	host             = "unix:///var/run/docker.sock"
+	host             = "tcp://docker-socket-proxy:2375"
 	refresh_interval = "5s"
 }
 
@@ -30,7 +30,7 @@ discovery.relabel "containers" {
 }
 
 loki.source.docker "containers" {
-	host       = "unix:///var/run/docker.sock"
+	host       = "tcp://docker-socket-proxy:2375"
 	targets    = discovery.relabel.containers.output
 	labels     = {environment = "production"}
 	forward_to = [loki.process.default.receiver]

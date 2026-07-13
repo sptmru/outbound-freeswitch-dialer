@@ -28,7 +28,10 @@ describe("softphone runtime helpers", () => {
 
   it("keeps registered identity details when a softphone call ends", () => {
     expect(
-      __testing.toCallIdleRuntime(runtime({ callState: "active", registered: true }), "agent_1000@dialer.local")
+      __testing.toCallIdleRuntime(
+        runtime({ callState: "active", registered: true }),
+        "agent_1000@dialer.local"
+      )
     ).toMatchObject({
       callState: "none",
       detail: "agent_1000@dialer.local",

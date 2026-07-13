@@ -4,30 +4,49 @@ import type {
   AgentDeskResponse,
   CallActionAvailability,
   CallDetailResponse,
+  CallHistoryItem,
+  CallHistoryResponse,
   CallOutcome,
+  CallRecordingStatus,
   CallState,
   LeadSummary,
   PublicUser
 } from "@outbound-dialer/shared";
-import { getAgentCampaign, getAgentCampaigns, getCampaigns } from "./campaigns.js";
+import { getAgentAvailability } from "../agent-availability.js";
+import { getUsers } from "./admin-libraries.js";
+import { getAgentCampaign, getAgentCampaigns, getCampaigns, type ContactRetryPolicy } from "./campaigns.js";
 import { getRecordings } from "./recordings.js";
 
 export async function buildAgentDeskResponse(
   pool: pg.Pool,
   user: PublicUser,
-  selectedCampaignId?: string
+  selectedCampaignId?: string,
+  retryPolicy?: ContactRetryPolicy
 ): Promise<AgentDeskResponse> {
-  const [campaign, availableCampaigns, activeCall, metrics, recordings] = await Promise.all([
-    getAgentCampaign(pool, selectedCampaignId, { userId: user.id }),
-    getAgentCampaigns(pool),
+  const [
+    campaign,
+    availableCampaigns,
+    availability,
+    activeCall,
+    metrics,
+    recordings,
+    recentCalls,
+    voicemailJobs
+  ] = await Promise.all([
+    getAgentCampaign(pool, selectedCampaignId, { userId: user.id, ...retryPolicy }),
+    getAgentCampaigns(pool, retryPolicy),
+    getAgentAvailability(pool, user.id),
     getActiveCall(pool, user.id),
     getAgentMetrics(pool, user.id),
-    getRecordings(pool)
+    getRecordings(pool),
+    getAgentRecentCalls(pool, user.id),
+    getAgentVoicemailJobs(pool, user.id)
   ]);
   const agentRecordings = recordings.map(({ id, name, status }) => ({ id, name, status }));
   if (!campaign) {
     return {
       user,
+      availability,
       campaign: null,
       availableCampaigns,
       softphone: {
@@ -36,16 +55,19 @@ export async function buildAgentDeskResponse(
         status: activeCall ? "in_call" : "offline"
       },
       metrics,
+      recentCalls,
+      voicemailJobs,
       leads: [],
       recordings: agentRecordings,
       activeCall
     };
   }
 
-  const leads = await getLeadQueue(pool, campaign.id);
+  const leads = await getLeadQueue(pool, campaign.id, retryPolicy);
 
   return {
     user,
+    availability,
     campaign: {
       id: campaign.id,
       name: campaign.name,
@@ -62,16 +84,22 @@ export async function buildAgentDeskResponse(
       status: activeCall ? "in_call" : "ready"
     },
     metrics,
+    recentCalls,
+    voicemailJobs,
     leads,
     recordings: agentRecordings,
     activeCall
   };
 }
 
-export async function buildAdminOverviewResponse(pool: pg.Pool, user: PublicUser): Promise<AdminOverviewResponse> {
+export async function buildAdminOverviewResponse(
+  pool: pg.Pool,
+  user: PublicUser,
+  retryPolicy?: ContactRetryPolicy
+): Promise<AdminOverviewResponse> {
   const [stats, campaigns, recordings, users, callHistory, suppression] = await Promise.all([
     getAdminStats(pool),
-    getCampaigns(pool),
+    getCampaigns(pool, retryPolicy),
     getRecordings(pool),
     getUsers(pool),
     getCallHistory(pool),
@@ -89,7 +117,11 @@ export async function buildAdminOverviewResponse(pool: pg.Pool, user: PublicUser
   };
 }
 
-async function getLeadQueue(pool: pg.Pool, campaignId: string): Promise<LeadSummary[]> {
+async function getLeadQueue(
+  pool: pg.Pool,
+  campaignId: string,
+  retryPolicy?: ContactRetryPolicy
+): Promise<LeadSummary[]> {
   const result = await pool.query<{
     id: string;
     display_name: string | null;
@@ -109,16 +141,30 @@ async function getLeadQueue(pool: pg.Pool, campaignId: string): Promise<LeadSumm
           when suppression_entries.id is not null then 'suppressed'
           when contacts.status = 'calling' then 'calling'
           when contacts.status in ('completed', 'suppressed') then contacts.status
+          when contacts.attempt_count >= $2 then 'exhausted'
+          when contacts.last_attempted_at > now() - make_interval(secs => $3) then 'retry_wait'
           else 'ready'
         end as status
       from contacts
       left join suppression_entries
         on suppression_entries.normalized_phone_number = contacts.normalized_phone_number
       where contacts.campaign_id = $1
-      order by contacts.created_at asc
+      order by
+        case
+          when contacts.status not in ('calling', 'completed', 'suppressed')
+            and suppression_entries.id is null
+            and contacts.attempt_count < $2
+            and (
+              contacts.last_attempted_at is null
+              or contacts.last_attempted_at <= now() - make_interval(secs => $3)
+            ) then 0
+          else 1
+        end,
+        contacts.last_attempted_at asc nulls first,
+        contacts.created_at asc
       limit 25
     `,
-    [campaignId]
+    [campaignId, retryPolicy?.maxAttempts ?? 2_147_483_647, retryPolicy?.retryDelaySeconds ?? 0]
   );
 
   return result.rows.map((row) => ({
@@ -145,6 +191,8 @@ async function getActiveCall(pool: pg.Pool, userId: string): Promise<AgentDeskRe
     recording_id: string | null;
     recording_name: string | null;
     customer_leg_uuid: string | null;
+    call_recording_enabled: boolean;
+    call_recording_status: CallRecordingStatus;
   }>(
     `
       select
@@ -156,6 +204,8 @@ async function getActiveCall(pool: pg.Pool, userId: string): Promise<AgentDeskRe
         calls.answered_at,
         calls.voicemail_signal_status,
         calls.recording_id,
+        calls.call_recording_enabled,
+        calls.call_recording_status,
         recordings.name as recording_name,
         customer_leg.freeswitch_uuid as customer_leg_uuid
       from calls
@@ -165,7 +215,7 @@ async function getActiveCall(pool: pg.Pool, userId: string): Promise<AgentDeskRe
       left join call_legs customer_leg on customer_leg.call_id = calls.id and customer_leg.type = 'customer'
       where agents.user_id = $1
         and calls.ended_at is null
-        and calls.state not in ('completed', 'failed', 'canceled')
+        and calls.state not in ('completed', 'failed', 'canceled', 'agent_released')
       order by calls.created_at desc
       limit 1
     `,
@@ -190,6 +240,8 @@ async function getActiveCall(pool: pg.Pool, userId: string): Promise<AgentDeskRe
     voicemailSignal: mapVoicemailSignal(row.voicemail_signal_status),
     recordingId: row.recording_id,
     recordingName: row.recording_name ?? "No default recording",
+    callRecordingEnabled: row.call_recording_enabled,
+    callRecordingStatus: row.call_recording_enabled ? (row.call_recording_status ?? "pending") : "disabled",
     actions: getActiveCallActions(row.state, row.customer_leg_uuid),
     timeline: await getCallTimeline(pool, row.id)
   };
@@ -206,7 +258,10 @@ export function getActiveCallActions(
   };
 }
 
-function getCustomerMediaActionAvailability(state: CallState, customerLegUuid: string | null): CallActionAvailability {
+function getCustomerMediaActionAvailability(
+  state: CallState,
+  customerLegUuid: string | null
+): CallActionAvailability {
   if (!customerLegUuid) {
     return { allowed: false, reason: "Waiting for the customer connection" };
   }
@@ -268,87 +323,306 @@ async function getAgentMetrics(pool: pg.Pool, userId: string): Promise<AgentDesk
   };
 }
 
-async function getAdminStats(pool: pg.Pool): Promise<AdminOverviewResponse["stats"]> {
+async function getAgentRecentCalls(pool: pg.Pool, userId: string): Promise<AgentDeskResponse["recentCalls"]> {
   const result = await pool.query<{
-    campaigns: string;
-    active_agents: string;
-    calls_today: string;
-    suppression_entries: string;
-    live_calls: string;
-  }>(`
+    id: string;
+    destination_number: string;
+    lead_name: string | null;
+    outcome: CallOutcome | null;
+    state: CallState;
+    created_at: Date;
+  }>(
+    `
+      select
+        calls.id,
+        calls.destination_number,
+        contacts.display_name as lead_name,
+        calls.outcome,
+        calls.state,
+        calls.created_at
+      from calls
+      join agents on agents.id = calls.agent_id
+      left join contacts on contacts.id = calls.contact_id
+      where agents.user_id = $1
+        and calls.state in ('completed', 'failed', 'canceled', 'agent_released')
+      order by calls.created_at desc
+      limit 5
+    `,
+    [userId]
+  );
+  return result.rows.map((row) => ({
+    id: row.id,
+    phoneNumber: row.destination_number,
+    leadName: row.lead_name ?? "Manual dial",
+    outcome: row.outcome,
+    state: row.state,
+    createdAt: row.created_at.toISOString()
+  }));
+}
+
+async function getAgentVoicemailJobs(
+  pool: pg.Pool,
+  userId: string
+): Promise<AgentDeskResponse["voicemailJobs"]> {
+  const result = await pool.query<{
+    call_id: string;
+    lead_name: string | null;
+    destination_number: string;
+    voicemail_drop_requested_at: Date;
+    voicemail_playback_started_at: Date | null;
+    voicemail_playback_completed_at: Date | null;
+    interrupted_at: Date | null;
+    failed_at: Date | null;
+  }>(
+    `
+      select
+        calls.id as call_id,
+        contacts.display_name as lead_name,
+        calls.destination_number,
+        calls.voicemail_drop_requested_at,
+        calls.voicemail_playback_started_at,
+        calls.voicemail_playback_completed_at,
+        interruption.created_at as interrupted_at,
+        failure.created_at as failed_at
+      from calls
+      join agents on agents.id = calls.agent_id
+      left join contacts on contacts.id = calls.contact_id
+      left join lateral (
+        select call_events.created_at
+        from call_events
+        where call_events.call_id = calls.id
+          and call_events.event_type = 'voicemail_playback_interrupted'
+        order by call_events.created_at desc
+        limit 1
+      ) interruption on true
+      left join lateral (
+        select call_events.created_at
+        from call_events
+        where call_events.call_id = calls.id
+          and call_events.event_type = 'voicemail_playback_failed'
+        order by call_events.created_at desc
+        limit 1
+      ) failure on true
+      where agents.user_id = $1
+        and calls.voicemail_drop_requested_at is not null
+        and calls.voicemail_drop_requested_at >= now() - interval '24 hours'
+      order by calls.voicemail_drop_requested_at desc
+      limit 5
+    `,
+    [userId]
+  );
+  return result.rows.map((row) => {
+    const status: AgentDeskResponse["voicemailJobs"][number]["status"] = row.voicemail_playback_completed_at
+      ? "completed"
+      : row.failed_at
+        ? "failed"
+        : row.interrupted_at
+          ? "interrupted"
+          : row.voicemail_playback_started_at
+            ? "playing"
+            : "requested";
+    const updatedAt =
+      row.voicemail_playback_completed_at ??
+      row.failed_at ??
+      row.interrupted_at ??
+      row.voicemail_playback_started_at ??
+      row.voicemail_drop_requested_at;
+    return {
+      callId: row.call_id,
+      leadName: row.lead_name ?? "Manual dial",
+      phoneNumber: row.destination_number,
+      status,
+      requestedAt: row.voicemail_drop_requested_at.toISOString(),
+      updatedAt: updatedAt.toISOString()
+    };
+  });
+}
+
+async function getAdminStats(pool: pg.Pool): Promise<AdminOverviewResponse["stats"]> {
+  const [result, outcomes] = await Promise.all([
+    pool.query<{
+      campaigns: string;
+      active_agents: string;
+      total_agents: string;
+      calls_today: string;
+      suppression_entries: string;
+      live_calls: string;
+      attempted_calls_today: string;
+      answered_calls_today: string;
+      voicemail_drops_today: string;
+      voicemail_drop_completed_today: string;
+      failed_calls_today: string;
+      elapsed_business_hours: string;
+    }>(`
     select
       (select count(*) from campaigns) as campaigns,
       (select count(*) from agents where status in ('ready', 'registered', 'in_call')) as active_agents,
+      (select count(*) from agents) as total_agents,
       (select count(*) from calls where created_at >= date_trunc('day', now())) as calls_today,
       (select count(*) from suppression_entries) as suppression_entries,
-      (select count(*) from calls where ended_at is null and state not in ('completed', 'failed', 'canceled')) as live_calls
-  `);
+      (select count(*) from calls where ended_at is null and state not in ('completed', 'failed', 'canceled', 'agent_released')) as live_calls,
+      (select count(*) from calls where created_at >= date_trunc('day', now())) as attempted_calls_today,
+      (select count(*) from calls where created_at >= date_trunc('day', now()) and answered_at is not null) as answered_calls_today,
+      (select count(*) from calls where created_at >= date_trunc('day', now()) and outcome = 'voicemail_dropped') as voicemail_drops_today,
+      (select count(*) from calls where created_at >= date_trunc('day', now()) and voicemail_playback_completed_at is not null) as voicemail_drop_completed_today,
+      (select count(*) from calls where created_at >= date_trunc('day', now()) and outcome = 'failed') as failed_calls_today,
+      greatest(extract(epoch from (now() - date_trunc('day', now()))) / 3600, 1) as elapsed_business_hours
+  `),
+    pool.query<{ outcome: string; count: string }>(`
+    select coalesce(outcome, state) as outcome, count(*) as count
+    from calls
+    where created_at >= date_trunc('day', now())
+    group by coalesce(outcome, state)
+    order by count(*) desc, coalesce(outcome, state)
+  `)
+  ]);
   const row = result.rows[0];
+
+  const attemptedCallsToday = Number(row?.attempted_calls_today ?? 0);
+  const answeredCallsToday = Number(row?.answered_calls_today ?? 0);
+  const voicemailDropsToday = Number(row?.voicemail_drops_today ?? 0);
+  const voicemailDropCompletedToday = Number(row?.voicemail_drop_completed_today ?? 0);
+  const activeAgents = Number(row?.active_agents ?? 0);
+  const totalAgents = Number(row?.total_agents ?? 0);
 
   return {
     campaigns: Number(row?.campaigns ?? 0),
-    activeAgents: Number(row?.active_agents ?? 0),
+    activeAgents,
     callsToday: Number(row?.calls_today ?? 0),
     suppressionEntries: Number(row?.suppression_entries ?? 0),
-    liveCalls: Number(row?.live_calls ?? 0)
+    liveCalls: Number(row?.live_calls ?? 0),
+    attemptedCallsToday,
+    answeredCallsToday,
+    contactRate: attemptedCallsToday ? Math.round((answeredCallsToday / attemptedCallsToday) * 1000) / 10 : 0,
+    voicemailDropsToday,
+    voicemailDropCompletionRate: voicemailDropsToday
+      ? Math.round((voicemailDropCompletedToday / voicemailDropsToday) * 1000) / 10
+      : 0,
+    failedCallsToday: Number(row?.failed_calls_today ?? 0),
+    callsPerHour: Math.round((attemptedCallsToday / Number(row?.elapsed_business_hours ?? 1)) * 10) / 10,
+    agentUtilization: totalAgents ? Math.round((activeAgents / totalAgents) * 1000) / 10 : 0,
+    outcomeDistribution: outcomes.rows.map((outcome) => ({
+      outcome: outcome.outcome,
+      count: Number(outcome.count)
+    }))
   };
 }
 
-async function getUsers(pool: pg.Pool): Promise<PublicUser[]> {
-  const result = await pool.query<PublicUser>(`
-    select id, email, name, role
-    from users
-    order by created_at desc
-    limit 24
-  `);
-  return result.rows;
+async function getCallHistory(pool: pg.Pool): Promise<AdminOverviewResponse["callHistory"]> {
+  return (await getCallHistoryPage(pool, { page: 1, pageSize: 20 })).items;
 }
 
-async function getCallHistory(pool: pg.Pool): Promise<AdminOverviewResponse["callHistory"]> {
+export type CallHistoryFilters = {
+  page: number;
+  pageSize: number;
+  q?: string;
+  campaignId?: string;
+  agentId?: string;
+  outcome?: CallOutcome;
+  from?: Date;
+  to?: Date;
+  voicemail?: "drop" | "signal";
+  recording?: "available" | "missing";
+};
+
+export async function getCallHistoryPage(
+  pool: pg.Pool,
+  filters: CallHistoryFilters
+): Promise<CallHistoryResponse> {
+  const offset = (filters.page - 1) * filters.pageSize;
   const result = await pool.query<{
     id: string;
     lead_name: string | null;
     agent_name: string | null;
     phone_number: string;
     campaign_name: string | null;
+    campaign_id: string | null;
+    agent_user_id: string | null;
     state: CallState;
     outcome: CallOutcome | null;
     created_at: Date;
     duration_seconds: number | null;
-    call_recording_path: string | null;
-  }>(`
+    recording_available: boolean;
+    voicemail_signal_status: string | null;
+    total_count: string;
+  }>(
+    `
     select
       calls.id,
       contacts.display_name as lead_name,
       users.name as agent_name,
       calls.destination_number as phone_number,
       campaigns.name as campaign_name,
+      campaigns.id as campaign_id,
+      users.id as agent_user_id,
       calls.state,
       calls.outcome,
       calls.created_at,
-      calls.call_recording_path,
+      calls.call_recording_status = 'available' and calls.call_recording_path is not null as recording_available,
+      calls.voicemail_signal_status,
+      count(*) over() as total_count,
       extract(epoch from (coalesce(calls.ended_at, now()) - coalesce(calls.answered_at, calls.started_at, calls.created_at)))::int as duration_seconds
     from calls
     left join contacts on contacts.id = calls.contact_id
     left join agents on agents.id = calls.agent_id
     left join users on users.id = agents.user_id
     left join campaigns on campaigns.id = calls.campaign_id
+    where ($1::text is null or concat_ws(' ', contacts.display_name, calls.destination_number, users.name, campaigns.name) ilike '%' || $1 || '%')
+      and ($2::uuid is null or calls.campaign_id = $2)
+      and ($3::uuid is null or users.id = $3)
+      and ($4::text is null or calls.outcome = $4)
+      and ($5::timestamptz is null or calls.created_at >= $5)
+      and ($6::timestamptz is null or calls.created_at <= $6)
+      and (
+        $7::text is null
+        or ($7 = 'drop' and calls.voicemail_drop_requested_at is not null)
+        or ($7 = 'signal' and calls.voicemail_signal_status is not null)
+      )
+      and (
+        $8::text is null
+        or ($8 = 'available' and calls.call_recording_status = 'available' and calls.call_recording_path is not null)
+        or ($8 = 'missing' and (calls.call_recording_status <> 'available' or calls.call_recording_path is null))
+      )
     order by calls.created_at desc
-    limit 20
-  `);
+    limit $9 offset $10
+  `,
+    [
+      filters.q?.trim() || null,
+      filters.campaignId ?? null,
+      filters.agentId ?? null,
+      filters.outcome ?? null,
+      filters.from ?? null,
+      filters.to ?? null,
+      filters.voicemail ?? null,
+      filters.recording ?? null,
+      filters.pageSize,
+      offset
+    ]
+  );
 
-  return result.rows.map((row) => ({
+  const items: CallHistoryItem[] = result.rows.map((row) => ({
     id: row.id,
     leadName: row.lead_name ?? "Manual dial",
     agentName: row.agent_name ?? "Unassigned",
     phoneNumber: row.phone_number,
     campaignName: row.campaign_name ?? "No campaign",
+    campaignId: row.campaign_id,
+    agentId: row.agent_user_id,
     state: row.state,
     outcome: row.outcome,
     createdAt: row.created_at.toISOString(),
     durationSeconds: row.duration_seconds ?? 0,
-    callRecordingPath: row.call_recording_path
+    recordingAvailable: row.recording_available,
+    voicemailSignal: row.voicemail_signal_status
   }));
+  const total = Number(result.rows[0]?.total_count ?? 0);
+  return {
+    items,
+    page: filters.page,
+    pageSize: filters.pageSize,
+    total,
+    totalPages: total ? Math.ceil(total / filters.pageSize) : 0
+  };
 }
 
 export async function getCallDetail(pool: pg.Pool, callId: string): Promise<CallDetailResponse | null> {
@@ -358,6 +632,8 @@ export async function getCallDetail(pool: pg.Pool, callId: string): Promise<Call
     agent_name: string | null;
     phone_number: string;
     campaign_name: string | null;
+    campaign_id: string | null;
+    agent_user_id: string | null;
     state: CallState;
     outcome: CallOutcome | null;
     created_at: Date;
@@ -367,6 +643,14 @@ export async function getCallDetail(pool: pg.Pool, callId: string): Promise<Call
     manual_dial: boolean;
     duration_seconds: number | null;
     call_recording_path: string | null;
+    call_recording_enabled: boolean;
+    call_recording_status: CallRecordingStatus;
+    call_recording_duration_seconds: number | null;
+    call_recording_file_size_bytes: string | number | null;
+    call_recording_integrity_checked_at: Date | null;
+    call_recording_failure_reason: string | null;
+    voicemail_signal_status: string | null;
+    voicemail_confidence: number | null;
   }>(
     `
       select
@@ -375,6 +659,8 @@ export async function getCallDetail(pool: pg.Pool, callId: string): Promise<Call
         users.name as agent_name,
         calls.destination_number as phone_number,
         campaigns.name as campaign_name,
+        campaigns.id as campaign_id,
+        users.id as agent_user_id,
         calls.state,
         calls.outcome,
         calls.created_at,
@@ -382,13 +668,28 @@ export async function getCallDetail(pool: pg.Pool, callId: string): Promise<Call
         calls.answered_at,
         calls.ended_at,
         calls.manual_dial,
+        calls.call_recording_enabled,
         calls.call_recording_path,
+        calls.call_recording_status,
+        calls.call_recording_duration_seconds,
+        calls.call_recording_file_size_bytes,
+        calls.call_recording_integrity_checked_at,
+        calls.call_recording_failure_reason,
+        calls.voicemail_signal_status,
+        voicemail.confidence as voicemail_confidence,
         extract(epoch from (coalesce(calls.ended_at, now()) - coalesce(calls.answered_at, calls.started_at, calls.created_at)))::int as duration_seconds
       from calls
       left join contacts on contacts.id = calls.contact_id
       left join agents on agents.id = calls.agent_id
       left join users on users.id = agents.user_id
       left join campaigns on campaigns.id = calls.campaign_id
+      left join lateral (
+        select voicemail_detection_events.confidence
+        from voicemail_detection_events
+        where voicemail_detection_events.call_id = calls.id
+        order by voicemail_detection_events.created_at desc
+        limit 1
+      ) voicemail on true
       where calls.id = $1
       limit 1
     `,
@@ -399,16 +700,64 @@ export async function getCallDetail(pool: pg.Pool, callId: string): Promise<Call
     return null;
   }
 
-  const events = await pool.query<{ event_type: string; state: string; created_at: Date }>(
-    `
-      select event_type, state, created_at
-      from call_events
-      where call_id = $1
-      order by created_at asc
-      limit 100
-    `,
-    [callId]
-  );
+  const [events, legs] = await Promise.all([
+    pool.query<CallDetailEventRow>(
+      `
+        select
+          event_type,
+          state,
+          reason_code,
+          freeswitch_event_name,
+          api_command_name,
+          agent_leg_uuid,
+          customer_leg_uuid,
+          raw_json,
+          created_at
+        from (
+          select
+            id,
+            event_type,
+            state,
+            reason_code,
+            freeswitch_event_name,
+            api_command_name,
+            agent_leg_uuid,
+            customer_leg_uuid,
+            raw_json,
+            created_at
+          from call_events
+          where call_id = $1
+          order by created_at desc, id desc
+          limit 100
+        ) recent_events
+        order by created_at asc, id asc
+      `,
+      [callId]
+    ),
+    pool.query<{
+      type: "agent" | "customer";
+      state: string;
+      freeswitch_uuid: string | null;
+      sip_uri: string | null;
+      started_at: Date | null;
+      answered_at: Date | null;
+      ended_at: Date | null;
+    }>(
+      `
+        select type, state, freeswitch_uuid, sip_uri, started_at, answered_at, ended_at
+        from call_legs
+        where call_id = $1
+        order by case type when 'agent' then 0 else 1 end
+      `,
+      [callId]
+    )
+  ]);
+
+  const lastReasonCode = [...events.rows].reverse().find((event) => event.reason_code)?.reason_code ?? null;
+  const hangupCause = findHangupCause(events.rows);
+  const recordingStatus: CallDetailResponse["call"]["recordingStatus"] = !row.call_recording_enabled
+    ? "disabled"
+    : (row.call_recording_status ?? "pending");
 
   return {
     call: {
@@ -417,6 +766,8 @@ export async function getCallDetail(pool: pg.Pool, callId: string): Promise<Call
       agentName: row.agent_name ?? "Unassigned",
       phoneNumber: row.phone_number,
       campaignName: row.campaign_name ?? "No campaign",
+      campaignId: row.campaign_id,
+      agentId: row.agent_user_id,
       state: row.state,
       outcome: row.outcome,
       createdAt: row.created_at.toISOString(),
@@ -424,16 +775,92 @@ export async function getCallDetail(pool: pg.Pool, callId: string): Promise<Call
       answeredAt: row.answered_at?.toISOString() ?? null,
       endedAt: row.ended_at?.toISOString() ?? null,
       manualDial: row.manual_dial,
+      voicemailSignal: row.voicemail_signal_status,
+      voicemailConfidence: row.voicemail_confidence === null ? null : Number(row.voicemail_confidence),
+      recordingStatus,
+      recordingDurationSeconds: row.call_recording_duration_seconds ?? null,
+      recordingFileSizeBytes:
+        row.call_recording_file_size_bytes === null || row.call_recording_file_size_bytes === undefined
+          ? null
+          : Number(row.call_recording_file_size_bytes),
+      recordingIntegrityCheckedAt: row.call_recording_integrity_checked_at?.toISOString() ?? null,
+      recordingFailureReason: row.call_recording_failure_reason ?? null,
+      lastReasonCode,
+      hangupCause,
       durationSeconds: row.duration_seconds ?? 0,
-      callRecordingPath: row.call_recording_path
+      recordingAvailable: recordingStatus === "available" && Boolean(row.call_recording_path)
     },
+    legs: legs.rows.map((leg) => {
+      const legEvents = events.rows.filter((event) => eventBelongsToLeg(event, leg.freeswitch_uuid));
+      return {
+        type: leg.type,
+        state: leg.state,
+        freeswitchUuid: leg.freeswitch_uuid,
+        sipUri: leg.sip_uri,
+        startedAt: leg.started_at?.toISOString() ?? null,
+        answeredAt: leg.answered_at?.toISOString() ?? null,
+        endedAt: leg.ended_at?.toISOString() ?? null,
+        hangupCause: findHangupCause(legEvents),
+        reasonCode: [...legEvents].reverse().find((event) => event.reason_code)?.reason_code ?? null
+      };
+    }),
     timeline: events.rows.map((event) => ({
       at: event.created_at.toISOString(),
       eventType: event.event_type,
-      state: event.state,
-      label: humanize(event.event_type)
+      state: event.state ?? "",
+      label: humanize(event.event_type),
+      reasonCode: event.reason_code,
+      freeSwitchEventName: event.freeswitch_event_name,
+      apiCommandName: event.api_command_name,
+      agentLegUuid: event.agent_leg_uuid,
+      customerLegUuid: event.customer_leg_uuid
     }))
   };
+}
+
+type CallDetailEventRow = {
+  event_type: string;
+  state: string | null;
+  reason_code: string | null;
+  freeswitch_event_name: string | null;
+  api_command_name: string | null;
+  agent_leg_uuid: string | null;
+  customer_leg_uuid: string | null;
+  raw_json: Record<string, unknown>;
+  created_at: Date;
+};
+
+function eventBelongsToLeg(event: CallDetailEventRow, legUuid: string | null): boolean {
+  if (!legUuid) return false;
+  if (event.agent_leg_uuid === legUuid || event.customer_leg_uuid === legUuid) return true;
+  const headers = event.raw_json?.headers;
+  if (!headers || typeof headers !== "object") return false;
+  return ["Unique-ID", "Channel-Call-UUID", "variable_uuid"].some(
+    (key) => (headers as Record<string, unknown>)[key] === legUuid
+  );
+}
+
+function findHangupCause(events: Array<{ raw_json: Record<string, unknown> }>): string | null {
+  for (const event of [...events].reverse()) {
+    const sources = [event.raw_json, event.raw_json?.headers].filter(
+      (value): value is Record<string, unknown> => Boolean(value && typeof value === "object")
+    );
+    for (const source of sources) {
+      for (const key of [
+        "hangup-cause",
+        "Hangup-Cause",
+        "variable_hangup_cause",
+        "variable_originate_disposition",
+        "hangupCause"
+      ]) {
+        const value = source[key];
+        if (typeof value === "string" && value.trim()) {
+          return value;
+        }
+      }
+    }
+  }
+  return null;
 }
 
 export async function getCallRecordingAudioFile(
@@ -445,6 +872,7 @@ export async function getCallRecordingAudioFile(
       select call_recording_path
       from calls
       where id = $1
+        and call_recording_status = 'available'
       limit 1
     `,
     [callId]
@@ -458,8 +886,9 @@ async function getSuppression(pool: pg.Pool): Promise<AdminOverviewResponse["sup
     id: string;
     phone_number: string;
     reason: string | null;
+    created_at: Date;
   }>(`
-    select id, phone_number, reason
+    select id, phone_number, reason, created_at
     from suppression_entries
     order by created_at desc
     limit 20
@@ -468,12 +897,18 @@ async function getSuppression(pool: pg.Pool): Promise<AdminOverviewResponse["sup
   return result.rows.map((row) => ({
     id: row.id,
     phoneNumber: row.phone_number,
-    reason: row.reason ?? "Suppressed"
+    reason: row.reason ?? "Suppressed",
+    createdAt: row.created_at.toISOString()
   }));
 }
 
 export function mapCallStatus(state: CallState): NonNullable<AgentDeskResponse["activeCall"]>["status"] {
-  if (state === "created" || state === "agent_ringing" || state === "agent_answered" || state === "customer_dialing") {
+  if (
+    state === "created" ||
+    state === "agent_ringing" ||
+    state === "agent_answered" ||
+    state === "customer_dialing"
+  ) {
     return "dialing";
   }
   if (state === "customer_ringing") {
@@ -488,7 +923,9 @@ export function mapCallStatus(state: CallState): NonNullable<AgentDeskResponse["
   return "bridged";
 }
 
-export function mapVoicemailSignal(status: string | null): NonNullable<AgentDeskResponse["activeCall"]>["voicemailSignal"] {
+export function mapVoicemailSignal(
+  status: string | null
+): NonNullable<AgentDeskResponse["activeCall"]>["voicemailSignal"] {
   if (status === "detected") {
     return "detected";
   }

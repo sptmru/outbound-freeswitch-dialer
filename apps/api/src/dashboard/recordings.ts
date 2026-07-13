@@ -1,27 +1,207 @@
 import { basename, extname } from "node:path";
+import { execFile } from "node:child_process";
+import { stat } from "node:fs/promises";
+import { promisify } from "node:util";
 import type pg from "pg";
-import type { AdminOverviewResponse } from "@outbound-dialer/shared";
+import type { AdminOverviewResponse, AdminRecordingListResponse } from "@outbound-dialer/shared";
 
 export type RecordingExtension = ".mp3" | ".wav";
 
+export type RecordingLibraryFilters = {
+  page: number;
+  pageSize: number;
+  q?: string;
+};
+
+const execFileAsync = promisify(execFile);
+const maximumRecordingDurationSeconds = 5 * 60;
+
+export class RecordingProcessingError extends Error {
+  constructor(
+    message: string,
+    readonly code: "processor_unavailable" | "invalid_audio" | "too_long"
+  ) {
+    super(message);
+    this.name = "RecordingProcessingError";
+  }
+}
+
+export async function transcodeRecordingToCanonicalWav(
+  inputPath: string,
+  outputPath: string,
+  options: { ffmpegPath?: string; ffprobePath?: string } = {}
+): Promise<{ durationSeconds: number; fileSizeBytes: number }> {
+  const ffprobePath = options.ffprobePath ?? process.env.FFPROBE_PATH ?? "ffprobe";
+  const ffmpegPath = options.ffmpegPath ?? process.env.FFMPEG_PATH ?? "ffmpeg";
+  const probe = await probeRecording(inputPath, ffprobePath);
+  if (probe.durationSeconds > maximumRecordingDurationSeconds) {
+    throw new RecordingProcessingError("Recording must be 5 minutes or shorter", "too_long");
+  }
+
+  try {
+    await execFileAsync(ffmpegPath, buildCanonicalTranscodeArgs(inputPath, outputPath), {
+      maxBuffer: 2_000_000
+    });
+  } catch (error) {
+    throw mapProcessorError(error, "Could not decode and transcode this audio file");
+  }
+
+  const canonicalProbe = await probeRecording(outputPath, ffprobePath);
+  const file = await stat(outputPath);
+  if (!file.isFile() || file.size === 0) {
+    throw new RecordingProcessingError("The transcoded audio file is empty", "invalid_audio");
+  }
+  return {
+    durationSeconds: Math.max(1, Math.round(canonicalProbe.durationSeconds)),
+    fileSizeBytes: file.size
+  };
+}
+
+export function buildCanonicalTranscodeArgs(inputPath: string, outputPath: string): string[] {
+  return [
+    "-v",
+    "error",
+    "-nostdin",
+    "-y",
+    "-i",
+    inputPath,
+    "-map",
+    "0:a:0",
+    "-vn",
+    "-ac",
+    "1",
+    "-ar",
+    "8000",
+    "-c:a",
+    "pcm_s16le",
+    "-af",
+    "loudnorm=I=-16:TP=-1.5:LRA=11",
+    outputPath
+  ];
+}
+
+export function parseProbeOutput(value: string): { durationSeconds: number; hasAudio: boolean } {
+  let parsed: { format?: { duration?: string | number }; streams?: Array<{ codec_type?: string }> };
+  try {
+    parsed = JSON.parse(value) as typeof parsed;
+  } catch {
+    throw new RecordingProcessingError("Audio metadata could not be read", "invalid_audio");
+  }
+  const durationSeconds = Number(parsed.format?.duration ?? 0);
+  const hasAudio = parsed.streams?.some((stream) => stream.codec_type === "audio") ?? false;
+  if (!hasAudio || !Number.isFinite(durationSeconds) || durationSeconds <= 0) {
+    throw new RecordingProcessingError("File does not contain a supported audio stream", "invalid_audio");
+  }
+  return { durationSeconds, hasAudio };
+}
+
+export function parseSingleByteRange(
+  value: string | undefined,
+  size: number
+): { start: number; end: number } | null {
+  if (!value) {
+    return null;
+  }
+  const match = /^bytes=(\d*)-(\d*)$/.exec(value.trim());
+  if (!match || (!match[1] && !match[2]) || size <= 0) {
+    return null;
+  }
+
+  let start: number;
+  let end: number;
+  if (!match[1]) {
+    const suffixLength = Number(match[2]);
+    if (!Number.isSafeInteger(suffixLength) || suffixLength <= 0) {
+      return null;
+    }
+    start = Math.max(0, size - suffixLength);
+    end = size - 1;
+  } else {
+    start = Number(match[1]);
+    end = match[2] ? Number(match[2]) : size - 1;
+  }
+  if (
+    !Number.isSafeInteger(start) ||
+    !Number.isSafeInteger(end) ||
+    start < 0 ||
+    start >= size ||
+    end < start
+  ) {
+    return null;
+  }
+  return { start, end: Math.min(end, size - 1) };
+}
+
+export async function probeRecording(
+  inputPath: string,
+  ffprobePath: string
+): Promise<{ durationSeconds: number; hasAudio: boolean }> {
+  try {
+    const result = await execFileAsync(
+      ffprobePath,
+      ["-v", "error", "-show_entries", "format=duration:stream=codec_type", "-of", "json", inputPath],
+      { maxBuffer: 1_000_000 }
+    );
+    return parseProbeOutput(result.stdout);
+  } catch (error) {
+    if (error instanceof RecordingProcessingError) {
+      throw error;
+    }
+    throw mapProcessorError(error, "Could not decode this audio file");
+  }
+}
+
+function mapProcessorError(error: unknown, fallback: string): RecordingProcessingError {
+  if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+    return new RecordingProcessingError("Audio processing service is unavailable", "processor_unavailable");
+  }
+  return new RecordingProcessingError(fallback, "invalid_audio");
+}
+
 export async function getRecordings(pool: pg.Pool): Promise<AdminOverviewResponse["recordings"]> {
-  const result = await pool.query<{
-    id: string;
-    name: string;
-    runtime_file_path: string;
-    duration_seconds: number;
-    file_size_bytes: number;
-    is_default: boolean;
-    is_active: boolean;
-  }>(`
+  return (await queryRecordingLibrary(pool, { limit: null, offset: 0 })).items;
+}
+
+export async function getRecordingsPage(
+  pool: pg.Pool,
+  filters: RecordingLibraryFilters
+): Promise<AdminRecordingListResponse> {
+  const result = await queryRecordingLibrary(pool, {
+    q: filters.q,
+    limit: filters.pageSize,
+    offset: (filters.page - 1) * filters.pageSize
+  });
+  return {
+    items: result.items,
+    page: filters.page,
+    pageSize: filters.pageSize,
+    total: result.total,
+    totalPages: result.total ? Math.ceil(result.total / filters.pageSize) : 0
+  };
+}
+
+async function queryRecordingLibrary(
+  pool: pg.Pool,
+  filters: { q?: string; limit: number | null; offset: number }
+): Promise<{ items: AdminOverviewResponse["recordings"]; total: number }> {
+  const q = filters.q?.trim() || null;
+  const result = await pool.query<RecordingRow & { total_count: string }>(
+    `
     select id, name, runtime_file_path, duration_seconds, file_size_bytes, is_default, is_active
+      , count(*) over() as total_count
     from recordings
     where is_active = true
+      and ($1::text is null or name ilike '%' || $1 || '%')
     order by is_default desc, created_at desc
-    limit 12
-  `);
+    limit $2 offset $3
+  `,
+    [q, filters.limit, filters.offset]
+  );
 
-  return result.rows.map(mapRecordingRow);
+  return {
+    items: result.rows.map(mapRecordingRow),
+    total: Number(result.rows[0]?.total_count ?? 0)
+  };
 }
 
 export async function createRecording(
@@ -38,8 +218,11 @@ export async function createRecording(
   const client = await pool.connect();
   try {
     await client.query("begin");
-    const countResult = await client.query<{ count: string }>("select count(*) from recordings");
-    const shouldMakeDefault = input.makeDefault || Number(countResult.rows[0]?.count ?? 0) === 0;
+    await lockDefaultRecordingSelection(client);
+    const currentDefault = await client.query(
+      "select 1 from recordings where is_active = true and is_default = true limit 1"
+    );
+    const shouldMakeDefault = input.makeDefault || !currentDefault.rowCount;
 
     if (shouldMakeDefault) {
       await client.query("update recordings set is_default = false, updated_at = now()");
@@ -51,7 +234,14 @@ export async function createRecording(
         values ($1, $2, $3, $4, true, $5, $6)
         returning id, name, runtime_file_path, duration_seconds, file_size_bytes, is_default, is_active
       `,
-      [input.name, input.filePath, input.runtimeFilePath, shouldMakeDefault, input.durationSeconds, input.fileSizeBytes]
+      [
+        input.name,
+        input.filePath,
+        input.runtimeFilePath,
+        shouldMakeDefault,
+        input.durationSeconds,
+        input.fileSizeBytes
+      ]
     );
     await client.query("commit");
     return mapRecordingRow(result.rows[0]);
@@ -70,6 +260,7 @@ export async function setDefaultRecording(
   const client = await pool.connect();
   try {
     await client.query("begin");
+    await lockDefaultRecordingSelection(client);
     const exists = await client.query<{ id: string }>(
       "select id from recordings where id = $1 and is_active = true",
       [recordingId]
@@ -99,10 +290,14 @@ export async function setDefaultRecording(
   }
 }
 
-export async function deleteRecording(pool: pg.Pool, recordingId: string): Promise<{ filePath: string } | null> {
+export type DeleteRecordingResult =
+  { status: "deleted"; filePath: string } | { status: "in_use" } | { status: "not_found" };
+
+export async function deleteRecording(pool: pg.Pool, recordingId: string): Promise<DeleteRecordingResult> {
   const client = await pool.connect();
   try {
     await client.query("begin");
+    await lockDefaultRecordingSelection(client);
     const existing = await client.query<{ id: string; file_path: string; is_default: boolean }>(
       "select id, file_path, is_default from recordings where id = $1 and is_active = true",
       [recordingId]
@@ -110,7 +305,23 @@ export async function deleteRecording(pool: pg.Pool, recordingId: string): Promi
     const row = existing.rows[0];
     if (!row) {
       await client.query("rollback");
-      return null;
+      return { status: "not_found" };
+    }
+
+    const activeReference = await client.query(
+      `
+        select 1
+        from calls
+        where recording_id = $1
+          and ended_at is null
+          and state not in ('completed', 'failed', 'canceled')
+        limit 1
+      `,
+      [recordingId]
+    );
+    if (activeReference.rowCount) {
+      await client.query("rollback");
+      return { status: "in_use" };
     }
 
     await client.query(
@@ -139,13 +350,59 @@ export async function deleteRecording(pool: pg.Pool, recordingId: string): Promi
     }
 
     await client.query("commit");
-    return { filePath: row.file_path };
+    return { status: "deleted", filePath: row.file_path };
   } catch (error) {
     await client.query("rollback");
     throw error;
   } finally {
     client.release();
   }
+}
+
+export async function restoreDeletedRecording(pool: pg.Pool, recordingId: string): Promise<void> {
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    await lockDefaultRecordingSelection(client);
+    const restored = await client.query(
+      `
+        update recordings
+        set is_active = true,
+            updated_at = now()
+        where id = $1
+          and is_active = false
+        returning id
+      `,
+      [recordingId]
+    );
+    if (restored.rowCount) {
+      await client.query(
+        `
+          update recordings
+          set is_default = true,
+              updated_at = now()
+          where id = $1
+            and not exists (
+              select 1
+              from recordings current_default
+              where current_default.is_active = true
+                and current_default.is_default = true
+            )
+        `,
+        [recordingId]
+      );
+    }
+    await client.query("commit");
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function lockDefaultRecordingSelection(client: pg.PoolClient): Promise<void> {
+  await client.query("select pg_advisory_xact_lock(hashtext('outbound-dialer-default-recording'))");
 }
 
 export async function getRecordingAudioFile(
@@ -187,7 +444,6 @@ function mapRecordingRow(row: RecordingRow): AdminOverviewResponse["recordings"]
     name: row.name,
     durationSeconds: row.duration_seconds,
     fileSizeBytes: row.file_size_bytes,
-    runtimeFilePath: row.runtime_file_path,
     status: row.is_default ? "default" : row.is_active ? "ready" : "inactive"
   };
 }
@@ -245,7 +501,11 @@ export function detectAudioDurationSeconds(buffer: Buffer, extension: RecordingE
 }
 
 function detectWavDurationSeconds(buffer: Buffer): number {
-  if (buffer.length < 44 || buffer.toString("ascii", 0, 4) !== "RIFF" || buffer.toString("ascii", 8, 12) !== "WAVE") {
+  if (
+    buffer.length < 44 ||
+    buffer.toString("ascii", 0, 4) !== "RIFF" ||
+    buffer.toString("ascii", 8, 12) !== "WAVE"
+  ) {
     return 0;
   }
 
@@ -300,10 +560,7 @@ function getMp3AudioStartOffset(buffer: Buffer): number {
     return 0;
   }
   const size =
-    ((buffer[6] & 0x7f) << 21) |
-    ((buffer[7] & 0x7f) << 14) |
-    ((buffer[8] & 0x7f) << 7) |
-    (buffer[9] & 0x7f);
+    ((buffer[6] & 0x7f) << 21) | ((buffer[7] & 0x7f) << 14) | ((buffer[8] & 0x7f) << 7) | (buffer[9] & 0x7f);
   return 10 + size;
 }
 
@@ -317,11 +574,18 @@ function parseMp3FrameHeader(
   const sampleRateIndex = (buffer[offset + 2] >> 2) & 0x03;
   const padding = (buffer[offset + 2] >> 1) & 0x01;
 
-  if (versionBits === 1 || layerBits === 0 || bitrateIndex === 0 || bitrateIndex === 15 || sampleRateIndex === 3) {
+  if (
+    versionBits === 1 ||
+    layerBits === 0 ||
+    bitrateIndex === 0 ||
+    bitrateIndex === 15 ||
+    sampleRateIndex === 3
+  ) {
     return null;
   }
 
-  const version: "mpeg1" | "mpeg2" | "mpeg25" = versionBits === 3 ? "mpeg1" : versionBits === 2 ? "mpeg2" : "mpeg25";
+  const version: "mpeg1" | "mpeg2" | "mpeg25" =
+    versionBits === 3 ? "mpeg1" : versionBits === 2 ? "mpeg2" : "mpeg25";
   const layer: 1 | 2 | 3 = layerBits === 3 ? 1 : layerBits === 2 ? 2 : 3;
   const sampleRate = getMp3SampleRate(version, sampleRateIndex);
   const bitrate = getMp3Bitrate(version, layer, bitrateIndex);

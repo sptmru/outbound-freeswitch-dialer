@@ -1,12 +1,14 @@
 import type pg from "pg";
 import type { CallOutcome, CallState } from "@outbound-dialer/shared";
 import type { AppConfig } from "../config.js";
+import { finishAgentCall } from "../agent-availability.js";
 import {
   canOriginateCustomerLeg,
   createFreeSwitchUuid,
   originateAgentBridgeCall,
   sendFreeSwitchApiCommand
 } from "../esl.js";
+import { lockDefaultRecordingSelection } from "./recordings.js";
 
 interface LockedCallableContact {
   id: string;
@@ -17,9 +19,12 @@ interface LockedCallableContact {
   earlyMediaAvmdEnabled: boolean;
 }
 
+const AGENT_RELEASED_CALL_STATE: CallState = "agent_released";
+
 async function getNextCallableContactForUpdate(
   client: pg.PoolClient,
-  campaignId: string
+  campaignId: string,
+  retryPolicy: { maxAttempts: number; retryDelaySeconds: number }
 ): Promise<LockedCallableContact | null> {
   const result = await client.query<{
     id: string;
@@ -44,12 +49,17 @@ async function getNextCallableContactForUpdate(
       where contacts.campaign_id = $1
         and campaigns.status = 'active'
         and contacts.status not in ('calling', 'completed', 'suppressed')
+        and contacts.attempt_count < $2
+        and (
+          contacts.last_attempted_at is null
+          or contacts.last_attempted_at <= now() - make_interval(secs => $3)
+        )
         and suppression_entries.id is null
-      order by contacts.created_at asc
+      order by contacts.last_attempted_at asc nulls first, contacts.created_at asc
       limit 1
       for update of contacts skip locked
     `,
-    [campaignId]
+    [campaignId, retryPolicy.maxAttempts, retryPolicy.retryDelaySeconds]
   );
 
   const row = result.rows[0];
@@ -69,7 +79,8 @@ async function getNextCallableContactForUpdate(
 
 async function getCallableContactForUpdate(
   client: pg.PoolClient,
-  contactId: string
+  contactId: string,
+  retryPolicy: { maxAttempts: number; retryDelaySeconds: number }
 ): Promise<LockedCallableContact | null> {
   const result = await client.query<{
     id: string;
@@ -94,11 +105,16 @@ async function getCallableContactForUpdate(
       where contacts.id = $1
         and campaigns.status = 'active'
         and contacts.status not in ('calling', 'completed', 'suppressed')
+        and contacts.attempt_count < $2
+        and (
+          contacts.last_attempted_at is null
+          or contacts.last_attempted_at <= now() - make_interval(secs => $3)
+        )
         and suppression_entries.id is null
       limit 1
       for update of contacts
     `,
-    [contactId]
+    [contactId, retryPolicy.maxAttempts, retryPolicy.retryDelaySeconds]
   );
 
   const row = result.rows[0];
@@ -129,11 +145,16 @@ async function getDefaultRecordingId(client: pg.Pool | pg.PoolClient): Promise<s
   return result.rows[0]?.id ?? null;
 }
 
-type CreateDialerCallFailureReason = "active_call" | "lead_not_callable" | "no_callable_contacts";
+type CreateDialerCallFailureReason =
+  | "active_call"
+  | "agent_paused"
+  | "agent_wrap_up"
+  | "agent_not_registered"
+  | "lead_not_callable"
+  | "no_callable_contacts";
 
 type CreateDialerCallResult =
-  | { ok: true; callId: string; campaignId: string }
-  | { ok: false; reason: CreateDialerCallFailureReason };
+  { ok: true; callId: string; campaignId: string } | { ok: false; reason: CreateDialerCallFailureReason };
 
 interface DialerCallContext {
   callRecordingEnabled: boolean;
@@ -167,14 +188,42 @@ export async function createDialerCall(
   try {
     await client.query("begin");
 
-    await client.query("select id from agents where id = $1 for update", [input.agentId]);
+    await client.query(
+      `
+        update agents
+        set availability_status = 'available',
+            wrap_up_until = null,
+            updated_at = now()
+        where id = $1
+          and availability_status = 'wrap_up'
+          and wrap_up_until <= now()
+      `,
+      [input.agentId]
+    );
+    const agent = await client.query<{
+      availability_status: "available" | "paused" | "wrap_up";
+      registered: boolean;
+    }>("select registered, availability_status from agents where id = $1 for update", [input.agentId]);
+    const agentState = agent.rows[0];
+    if (!agentState?.registered) {
+      await client.query("rollback");
+      return { ok: false, reason: "agent_not_registered" };
+    }
+    if (agentState.availability_status === "paused") {
+      await client.query("rollback");
+      return { ok: false, reason: "agent_paused" };
+    }
+    if (agentState.availability_status === "wrap_up") {
+      await client.query("rollback");
+      return { ok: false, reason: "agent_wrap_up" };
+    }
     const activeCall = await client.query<{ id: string }>(
       `
         select id
         from calls
         where agent_id = $1
           and ended_at is null
-          and state not in ('completed', 'failed', 'canceled')
+          and state not in ('completed', 'failed', 'canceled', 'agent_released')
         limit 1
         for update
       `,
@@ -189,7 +238,10 @@ export async function createDialerCall(
       if (!input.campaignId) {
         throw new Error("campaignId is required for next-contact calls");
       }
-      const contact = await getNextCallableContactForUpdate(client, input.campaignId);
+      const contact = await getNextCallableContactForUpdate(client, input.campaignId, {
+        maxAttempts: config.CONTACT_MAX_ATTEMPTS,
+        retryDelaySeconds: config.CONTACT_RETRY_DELAY_SECONDS
+      });
       if (!contact) {
         await client.query("rollback");
         return { ok: false, reason: "no_callable_contacts" };
@@ -203,7 +255,10 @@ export async function createDialerCall(
         normalizedDestinationNumber: contact.normalizedPhoneNumber
       };
     } else if (input.contactId) {
-      const contact = await getCallableContactForUpdate(client, input.contactId);
+      const contact = await getCallableContactForUpdate(client, input.contactId, {
+        maxAttempts: config.CONTACT_MAX_ATTEMPTS,
+        retryDelaySeconds: config.CONTACT_RETRY_DELAY_SECONDS
+      });
       if (!contact) {
         await client.query("rollback");
         return { ok: false, reason: "lead_not_callable" };
@@ -230,6 +285,7 @@ export async function createDialerCall(
       };
     }
 
+    await lockDefaultRecordingSelection(client);
     const recordingId = await getDefaultRecordingId(client);
     const call = await client.query<{ id: string }>(
       `
@@ -243,10 +299,11 @@ export async function createDialerCall(
           recording_id,
           manual_dial,
           call_recording_enabled,
+          call_recording_status,
           early_media_avmd_enabled,
           started_at
         )
-        values ($1, $2, $3, $4, $5, 'customer_dialing', $6, $7, $8, $9, now())
+        values ($1, $2, $3, $4, $5, 'customer_dialing', $6, $7, $8, case when $8 then 'pending' else 'disabled' end, $9, now())
         returning id
       `,
       [
@@ -287,11 +344,21 @@ export async function createDialerCall(
         })
       ]
     );
-    await client.query("update agents set status = 'in_call', updated_at = now() where id = $1", [input.agentId]);
+    await client.query("update agents set status = 'in_call', updated_at = now() where id = $1", [
+      input.agentId
+    ]);
     if (callContext.contactId) {
-      await client.query("update contacts set status = 'calling', updated_at = now() where id = $1", [
-        callContext.contactId
-      ]);
+      await client.query(
+        `
+          update contacts
+          set status = 'calling',
+              attempt_count = attempt_count + 1,
+              last_attempted_at = now(),
+              updated_at = now()
+          where id = $1
+        `,
+        [callContext.contactId]
+      );
     }
     await client.query("commit");
     committedContext = callContext;
@@ -323,6 +390,15 @@ export function createDialerCallFailureMessage(reason: CreateDialerCallFailureRe
   if (reason === "active_call") {
     return "An active call is already in progress";
   }
+  if (reason === "agent_not_registered") {
+    return "The browser phone must be connected before starting a call";
+  }
+  if (reason === "agent_paused") {
+    return "Resume calling before starting a call";
+  }
+  if (reason === "agent_wrap_up") {
+    return "Finish wrap-up or mark yourself ready before starting a call";
+  }
   if (reason === "no_callable_contacts") {
     return "No callable contacts are available";
   }
@@ -330,12 +406,7 @@ export function createDialerCallFailureMessage(reason: CreateDialerCallFailureRe
 }
 
 function mapCreateDialerCallUniqueViolation(error: unknown): CreateDialerCallFailureReason | null {
-  if (
-    typeof error !== "object" ||
-    error === null ||
-    !("code" in error) ||
-    error.code !== "23505"
-  ) {
+  if (typeof error !== "object" || error === null || !("code" in error) || error.code !== "23505") {
     return null;
   }
   const constraint = "constraint" in error && typeof error.constraint === "string" ? error.constraint : "";
@@ -354,7 +425,7 @@ export async function syncFreeSwitchOriginate(
   input: { agentId: string; callId: string; destinationNumber: string; sipUsername: string }
 ): Promise<void> {
   if (!canOriginateCustomerLeg(config)) {
-    await failDialerCallFromFreeSwitch(pool, input.agentId, input.callId, null, {
+    await failDialerCallFromFreeSwitch(pool, config, input.agentId, input.callId, null, {
       eventType: "freeswitch_originate_skipped",
       apiCommandName: "bgapi originate",
       raw: {
@@ -437,15 +508,7 @@ export async function syncFreeSwitchOriginate(
       `,
       [input.callId]
     );
-    await pool.query(
-      `
-        update agents
-        set status = case when registered then 'ready' else 'offline' end,
-            updated_at = now()
-        where id = $1
-      `,
-      [input.agentId]
-    );
+    await finishAgentCall(pool, input.agentId, config.AGENT_WRAP_UP_SECONDS);
     await pool.query(
       `
         update contacts
@@ -477,19 +540,39 @@ function scheduleOriginateWatchdog(
   pool: pg.Pool,
   config: AppConfig,
   input: { agentId: string; agentLegUuid: string; callId: string; customerLegUuid: string; jobUuid: string },
-  phase: "agent" | "customer" = "agent"
+  phase: "agent" | "customer" = "agent",
+  retryAttempt = 0,
+  retryDelay = false
 ): void {
-  const timer = setTimeout(() => {
-    void closeMissingOriginateLeg(pool, config, input, phase);
-  }, phase === "agent" ? 3000 : 35_000);
+  const timer = setTimeout(
+    () => {
+      void closeMissingOriginateLeg(pool, config, input, phase, retryAttempt);
+    },
+    originateWatchdogDelayMilliseconds(config, phase, retryDelay)
+  );
   timer.unref?.();
+}
+
+function originateWatchdogDelayMilliseconds(
+  config: AppConfig,
+  phase: "agent" | "customer",
+  retryDelay: boolean
+): number {
+  return (
+    (retryDelay
+      ? (config.ORIGINATE_WATCHDOG_RETRY_SECONDS ?? 5)
+      : phase === "agent"
+        ? (config.ORIGINATE_AGENT_WATCHDOG_SECONDS ?? 35)
+        : (config.ORIGINATE_CUSTOMER_WATCHDOG_SECONDS ?? 50)) * 1000
+  );
 }
 
 async function closeMissingOriginateLeg(
   pool: pg.Pool,
   config: AppConfig,
   input: { agentId: string; agentLegUuid: string; callId: string; customerLegUuid: string; jobUuid: string },
-  phase: "agent" | "customer"
+  phase: "agent" | "customer",
+  retryAttempt: number
 ): Promise<void> {
   try {
     const call = await pool.query<{ state: CallState; ended_at: Date | null }>(
@@ -507,7 +590,7 @@ async function closeMissingOriginateLeg(
         scheduleOriginateWatchdog(pool, config, input, "customer");
         return;
       }
-      await failDialerCallFromFreeSwitch(pool, input.agentId, input.callId, input.customerLegUuid, {
+      await failDialerCallFromFreeSwitch(pool, config, input.agentId, input.callId, input.customerLegUuid, {
         eventType: "freeswitch_originate_agent_leg_missing",
         apiCommandName: "uuid_exists",
         raw: {
@@ -524,7 +607,7 @@ async function closeMissingOriginateLeg(
     if (response.body.trim().toLowerCase().startsWith("true")) {
       return;
     }
-    await failDialerCallFromFreeSwitch(pool, input.agentId, input.callId, input.customerLegUuid, {
+    await failDialerCallFromFreeSwitch(pool, config, input.agentId, input.callId, input.customerLegUuid, {
       eventType: "freeswitch_originate_leg_missing",
       apiCommandName: "uuid_exists",
       raw: {
@@ -535,25 +618,36 @@ async function closeMissingOriginateLeg(
       }
     });
   } catch (error) {
-    await insertCallEvent(pool, {
-      agentId: input.agentId,
-      callId: input.callId,
-      eventType: "freeswitch_originate_watchdog_failed",
-      state: "customer_dialing",
-      apiCommandName: "uuid_exists",
-      customerLegUuid: input.customerLegUuid,
-      raw: {
+    const nextAttempt = retryAttempt + 1;
+    if (nextAttempt <= (config.ORIGINATE_WATCHDOG_MAX_RETRIES ?? 3)) {
+      scheduleOriginateWatchdog(pool, config, input, phase, nextAttempt, true);
+    }
+    try {
+      await insertCallEvent(pool, {
+        agentId: input.agentId,
+        callId: input.callId,
+        eventType: "freeswitch_originate_watchdog_failed",
+        state: "customer_dialing",
+        apiCommandName: "uuid_exists",
         customerLegUuid: input.customerLegUuid,
-        jobUuid: input.jobUuid,
-        phase,
-        message: error instanceof Error ? error.message : "FreeSWITCH originate watchdog failed"
-      }
-    });
+        raw: {
+          customerLegUuid: input.customerLegUuid,
+          jobUuid: input.jobUuid,
+          phase,
+          retryAttempt: nextAttempt,
+          retryScheduled: nextAttempt <= (config.ORIGINATE_WATCHDOG_MAX_RETRIES ?? 3),
+          message: error instanceof Error ? error.message : "FreeSWITCH originate watchdog failed"
+        }
+      });
+    } catch {
+      // The scheduled retry remains authoritative when PostgreSQL is also transiently unavailable.
+    }
   }
 }
 
 async function failDialerCallFromFreeSwitch(
   pool: pg.Pool,
+  config: AppConfig,
   agentId: string,
   callId: string,
   customerLegUuid: string | null,
@@ -586,15 +680,7 @@ async function failDialerCallFromFreeSwitch(
     `,
     [callId]
   );
-  await pool.query(
-    `
-      update agents
-      set status = case when registered then 'ready' else 'offline' end,
-          updated_at = now()
-      where id = $1
-    `,
-    [agentId]
-  );
+  await finishAgentCall(pool, agentId, config.AGENT_WRAP_UP_SECONDS);
   await pool.query(
     `
       update contacts
@@ -702,42 +788,18 @@ export async function dropVoicemailForCall(
   config: AppConfig,
   userId: string,
   callId: string,
-  recordingId?: string
+  recordingId?: string,
+  sendApiCommand: typeof sendFreeSwitchApiCommand = sendFreeSwitchApiCommand
 ): Promise<{ ok: true } | { ok: false; statusCode: 404 | 409 | 502; message: string }> {
-  const result = await pool.query<{
-    agent_id: string;
-    contact_id: string | null;
-    agent_leg_uuid: string | null;
-    customer_leg_uuid: string | null;
-    state: CallState;
-    selected_recording_id: string | null;
-    runtime_file_path: string | null;
-  }>(
-    `
-      select
-        calls.agent_id,
-        calls.state,
-        calls.contact_id,
-        agent_leg.freeswitch_uuid as agent_leg_uuid,
-        customer_leg.freeswitch_uuid as customer_leg_uuid,
-        selected_recording.id as selected_recording_id,
-        coalesce(selected_recording.runtime_file_path, recordings.runtime_file_path) as runtime_file_path
-      from calls
-      join agents on agents.id = calls.agent_id
-      left join call_legs agent_leg on agent_leg.call_id = calls.id and agent_leg.type = 'agent'
-      left join call_legs customer_leg on customer_leg.call_id = calls.id and customer_leg.type = 'customer'
-      left join recordings on recordings.id = calls.recording_id and recordings.is_active = true
-      left join recordings selected_recording on selected_recording.id = $3 and selected_recording.is_active = true
-      where calls.id = $1
-        and agents.user_id = $2
-        and calls.ended_at is null
-        and calls.state not in ('completed', 'failed', 'canceled')
-      limit 1
-    `,
-    [callId, userId, recordingId ?? null]
-  );
-  const row = result.rows[0];
+  const initial = await getVoicemailDropCall(pool, userId, callId, recordingId);
+  const row = initial.rows[0];
   if (!row) {
+    return { ok: false, statusCode: 404, message: "Active call not found" };
+  }
+  if (isVoicemailDropInProgressOrCompleted(row.state, row.outcome)) {
+    return { ok: true };
+  }
+  if (row.ended_at || ["completed", "failed", "canceled"].includes(row.state)) {
     return { ok: false, statusCode: 404, message: "Active call not found" };
   }
   if (recordingId && !row.selected_recording_id) {
@@ -753,95 +815,92 @@ export async function dropVoicemailForCall(
     return { ok: false, statusCode: 409, message: "No voicemail recording is assigned to this call" };
   }
 
-  try {
-    const customerLegUuid = assertFreeSwitchApiArgument(row.customer_leg_uuid, "customer leg UUID");
-    const voicemailPath = assertFreeSwitchApiArgument(row.runtime_file_path, "voicemail recording path");
-    await sendFreeSwitchApiCommand(config, `uuid_setvar ${customerLegUuid} voicemail_drop_file ${voicemailPath}`);
-    await sendFreeSwitchApiCommand(config, `uuid_transfer ${customerLegUuid} voicemail_drop XML default`);
-  } catch (error) {
-    await insertCallEvent(pool, {
-      agentId: row.agent_id,
-      callId,
-      eventType: "voicemail_drop_failed",
-      state: "bridged",
-      apiCommandName: "uuid_transfer",
-      agentLegUuid: row.agent_leg_uuid ?? undefined,
-      customerLegUuid: row.customer_leg_uuid,
-      raw: {
-        message: error instanceof Error ? error.message : "FreeSWITCH voicemail drop failed",
-        recordingPath: row.runtime_file_path
-      }
-    });
-    return { ok: false, statusCode: 502, message: "The calling service could not start voicemail playback" };
-  }
-
   const client = await pool.connect();
+  let claimed: VoicemailDropCallRow | null = null;
   try {
     await client.query("begin");
-    const updated = await client.query(
-      `
-        update calls
-        set state = 'completed',
-            outcome = 'voicemail_dropped',
-            recording_id = coalesce($2, recording_id),
-            ended_at = now(),
-            updated_at = now()
-        where id = $1
-          and ended_at is null
-          and state not in ('completed', 'failed', 'canceled')
-      `,
-      [callId, row.selected_recording_id]
-    );
-    if (!updated.rowCount) {
+    const locked = await getVoicemailDropCall(client, userId, callId, recordingId, true);
+    claimed = locked.rows[0] ?? null;
+    if (!claimed) {
       await client.query("rollback");
       return { ok: false, statusCode: 404, message: "Active call not found" };
     }
+    if (isVoicemailDropInProgressOrCompleted(claimed.state, claimed.outcome)) {
+      await client.query("rollback");
+      return { ok: true };
+    }
+    if (
+      claimed.ended_at ||
+      (claimed.state !== "bridged" && claimed.state !== "voicemail_signal_detected") ||
+      !claimed.customer_leg_uuid ||
+      !claimed.runtime_file_path ||
+      (recordingId && !claimed.selected_recording_id)
+    ) {
+      await client.query("rollback");
+      return { ok: false, statusCode: 409, message: "The call is no longer available for voicemail drop" };
+    }
+
+    if (!claimed.effective_recording_id) {
+      await client.query("rollback");
+      return { ok: false, statusCode: 409, message: "The voicemail recording is no longer available" };
+    }
+    const lockedRecording = await client.query<{ runtime_file_path: string }>(
+      `
+        select runtime_file_path
+        from recordings
+        where id = $1
+          and is_active = true
+        for key share
+      `,
+      [claimed.effective_recording_id]
+    );
+    if (!lockedRecording.rows[0]) {
+      await client.query("rollback");
+      return { ok: false, statusCode: 409, message: "The voicemail recording is no longer available" };
+    }
+    claimed.runtime_file_path = lockedRecording.rows[0].runtime_file_path;
+
+    const effectiveRecordingId = claimed.effective_recording_id;
+    const updated = await client.query(
+      `
+        update calls
+        set state = 'voicemail_drop_requested',
+            recording_id = coalesce($2, recording_id),
+            voicemail_drop_requested_at = coalesce(voicemail_drop_requested_at, now()),
+            updated_at = now()
+        where id = $1
+          and ended_at is null
+          and state in ('bridged', 'voicemail_signal_detected')
+      `,
+      [callId, effectiveRecordingId]
+    );
+    if (!updated.rowCount) {
+      await client.query("rollback");
+      return { ok: true };
+    }
     await client.query(
       `
-        insert into call_events (call_id, agent_id, event_type, state, api_command_name, agent_leg_uuid, customer_leg_uuid, raw_json)
-        values
-          ($1, $2, 'voicemail_drop_requested', 'voicemail_drop_requested', 'uuid_setvar', $3, $4, $5::jsonb),
-          ($1, $2, 'voicemail_playback_started', 'voicemail_playback_started', 'uuid_transfer', $3, $4, $5::jsonb),
-          ($1, $2, 'agent_released', 'agent_released', null, $3, $4, $5::jsonb)
+        insert into call_events (
+          call_id,
+          agent_id,
+          event_type,
+          state,
+          api_command_name,
+          agent_leg_uuid,
+          customer_leg_uuid,
+          raw_json
+        )
+        values ($1, $2, 'voicemail_drop_requested', 'voicemail_drop_requested', 'uuid_transfer', $3, $4, $5::jsonb)
+        on conflict do nothing
       `,
       [
         callId,
-        row.agent_id,
-        row.agent_leg_uuid,
-        row.customer_leg_uuid,
-        JSON.stringify({ recordingId: row.selected_recording_id, recordingPath: row.runtime_file_path })
+        claimed.agent_id,
+        claimed.agent_leg_uuid,
+        claimed.customer_leg_uuid,
+        JSON.stringify({ recordingId: effectiveRecordingId, recordingPath: claimed.runtime_file_path })
       ]
     );
-    await client.query(
-      `
-        update call_legs
-        set state = 'ended',
-            ended_at = coalesce(ended_at, now())
-        where call_id = $1
-      `,
-      [callId]
-    );
-    await client.query(
-      `
-        update agents
-        set status = case when registered then 'ready' else 'offline' end,
-            updated_at = now()
-        where id = $1
-      `,
-      [row.agent_id]
-    );
-    if (row.contact_id) {
-      await client.query(
-        `
-          update contacts
-          set status = 'completed',
-              updated_at = now()
-          where id = $1
-            and status = 'calling'
-        `,
-        [row.contact_id]
-      );
-    }
     await client.query("commit");
   } catch (error) {
     await client.query("rollback");
@@ -850,10 +909,110 @@ export async function dropVoicemailForCall(
     client.release();
   }
 
-  if (row.agent_leg_uuid) {
-    await killFreeSwitchLeg(pool, config, callId, row.agent_id, { type: "agent", uuid: row.agent_leg_uuid });
+  if (!claimed?.customer_leg_uuid || !claimed.runtime_file_path) {
+    throw new Error("Voicemail drop was claimed without a customer leg or recording path");
   }
+
+  try {
+    const customerLegUuid = assertFreeSwitchApiArgument(claimed.customer_leg_uuid, "customer leg UUID");
+    const voicemailPath = assertFreeSwitchApiArgument(claimed.runtime_file_path, "voicemail recording path");
+    const safeCallId = assertFreeSwitchApiArgument(callId, "call ID");
+    await sendApiCommand(config, `uuid_setvar ${customerLegUuid} voicemail_drop_call_id ${safeCallId}`);
+    await sendApiCommand(config, `uuid_setvar ${customerLegUuid} voicemail_drop_file ${voicemailPath}`);
+    await sendApiCommand(config, `uuid_transfer ${customerLegUuid} voicemail_drop XML default`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "FreeSWITCH voicemail drop failed";
+    const explicitCommandRejection = message.trimStart().startsWith("-ERR");
+    if (explicitCommandRejection) {
+      await pool.query(
+        `
+          update calls
+          set state = $2,
+              voicemail_drop_requested_at = null,
+              updated_at = now()
+          where id = $1
+            and ended_at is null
+            and state = 'voicemail_drop_requested'
+        `,
+        [callId, claimed.state]
+      );
+    }
+    await insertCallEvent(pool, {
+      agentId: claimed.agent_id,
+      callId,
+      eventType: "voicemail_drop_failed",
+      state: claimed.state,
+      apiCommandName: "uuid_transfer",
+      agentLegUuid: claimed.agent_leg_uuid ?? undefined,
+      customerLegUuid: claimed.customer_leg_uuid,
+      raw: {
+        ambiguous: !explicitCommandRejection,
+        message,
+        recordingPath: claimed.runtime_file_path
+      }
+    });
+    return { ok: false, statusCode: 502, message: "The calling service could not start voicemail playback" };
+  }
+
   return { ok: true };
+}
+
+interface VoicemailDropCallRow {
+  agent_id: string;
+  contact_id: string | null;
+  agent_leg_uuid: string | null;
+  customer_leg_uuid: string | null;
+  effective_recording_id: string | null;
+  ended_at: Date | null;
+  outcome: CallOutcome | null;
+  runtime_file_path: string | null;
+  selected_recording_id: string | null;
+  state: CallState;
+}
+
+function getVoicemailDropCall(
+  queryable: pg.Pool | pg.PoolClient,
+  userId: string,
+  callId: string,
+  recordingId?: string,
+  lock = false
+): Promise<pg.QueryResult<VoicemailDropCallRow>> {
+  return queryable.query<VoicemailDropCallRow>(
+    `
+      select
+        calls.agent_id,
+        calls.state,
+        calls.outcome,
+        calls.ended_at,
+        calls.contact_id,
+        agent_leg.freeswitch_uuid as agent_leg_uuid,
+        customer_leg.freeswitch_uuid as customer_leg_uuid,
+        selected_recording.id as selected_recording_id,
+        coalesce(selected_recording.id, recordings.id) as effective_recording_id,
+        coalesce(selected_recording.runtime_file_path, recordings.runtime_file_path) as runtime_file_path
+      from calls
+      join agents on agents.id = calls.agent_id
+      left join call_legs agent_leg on agent_leg.call_id = calls.id and agent_leg.type = 'agent'
+      left join call_legs customer_leg on customer_leg.call_id = calls.id and customer_leg.type = 'customer'
+      left join recordings on recordings.id = calls.recording_id and recordings.is_active = true
+      left join recordings selected_recording on selected_recording.id = $3 and selected_recording.is_active = true
+      where calls.id = $1
+        and agents.user_id = $2
+      limit 1
+      ${lock ? "for update of calls" : ""}
+    `,
+    [callId, userId, recordingId ?? null]
+  );
+}
+
+function isVoicemailDropInProgressOrCompleted(state: CallState, outcome: CallOutcome | null): boolean {
+  return (
+    outcome === "voicemail_dropped" ||
+    state === "voicemail_drop_requested" ||
+    state === "voicemail_playback_started" ||
+    state === AGENT_RELEASED_CALL_STATE ||
+    state === "voicemail_playback_completed"
+  );
 }
 
 export async function sendDtmfForCall(
@@ -970,7 +1129,7 @@ export async function endDialerCall(
         where calls.id = $1
           and agents.user_id = $2
           and calls.ended_at is null
-          and calls.state not in ('completed', 'failed', 'canceled')
+          and calls.state not in ('completed', 'failed', 'canceled', 'agent_released')
         for update of calls
       `,
       [callId, userId]
@@ -1016,25 +1175,13 @@ export async function endDialerCall(
       );
     }
 
-    await client.query(
-      `
-        update agents
-        set status = case when registered then 'ready' else 'offline' end,
-            updated_at = now()
-        where id = $1
-          and not exists (
-            select 1
-            from calls
-            where calls.agent_id = agents.id
-              and calls.ended_at is null
-              and calls.state not in ('completed', 'failed', 'canceled')
-          )
-      `,
-      [row.agent_id]
-    );
+    await finishAgentCall(client, row.agent_id, config.AGENT_WRAP_UP_SECONDS);
     await client.query("commit");
     await killFreeSwitchLeg(pool, config, callId, row.agent_id, { type: "agent", uuid: row.agent_leg_uuid });
-    await killFreeSwitchLeg(pool, config, callId, row.agent_id, { type: "customer", uuid: row.customer_leg_uuid });
+    await killFreeSwitchLeg(pool, config, callId, row.agent_id, {
+      type: "customer",
+      uuid: row.customer_leg_uuid
+    });
     return true;
   } catch (error) {
     await client.query("rollback");
@@ -1047,3 +1194,9 @@ export async function endDialerCall(
 export function inferAgentEndOutcome(state: CallState): CallOutcome {
   return state === "bridged" || state === "voicemail_signal_detected" ? "answered" : "agent_canceled";
 }
+
+export const __testing = {
+  getCallableContactForUpdate,
+  getNextCallableContactForUpdate,
+  originateWatchdogDelayMilliseconds
+};

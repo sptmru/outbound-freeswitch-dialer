@@ -1,9 +1,9 @@
 import type pg from "pg";
 import type { UserRole } from "@outbound-dialer/shared";
 import type { AppConfig } from "./config.js";
-import { decryptSecret, encryptSecret } from "./auth/crypto.js";
+import { decryptSecret, encryptSecret, secretNeedsReencryption } from "./auth/crypto.js";
 import { generateSecret, hashSecret } from "./auth/passwords.js";
-import { ensureAgentDirectory, provisionAgentDirectory } from "./freeswitch/provisioning.js";
+import { provisionAgentDirectory } from "./freeswitch/provisioning.js";
 
 export interface UserRecord {
   id: string;
@@ -11,6 +11,8 @@ export interface UserRecord {
   name: string;
   role: UserRole;
   password_hash: string;
+  auth_version: number;
+  is_active: boolean;
   created_at: Date;
   updated_at: Date;
 }
@@ -20,11 +22,7 @@ export interface PublicUser {
   email: string;
   name: string;
   role: UserRole;
-}
-
-export interface AgentCredentials {
-  sipUsername: string;
-  sipPassword: string;
+  isActive: boolean;
 }
 
 export interface AgentSoftphoneProvisioning {
@@ -48,7 +46,8 @@ export function toPublicUser(user: UserRecord): PublicUser {
     id: user.id,
     email: user.email,
     name: user.name,
-    role: user.role
+    role: user.role,
+    isActive: user.is_active !== false
   };
 }
 
@@ -65,11 +64,14 @@ export async function findUserById(pool: pg.Pool, id: string): Promise<UserRecor
 export async function createUserWithOptionalAgent(
   pool: pg.Pool,
   config: AppConfig,
-  input: CreateUserInput
-): Promise<{ user: PublicUser; agentCredentials?: AgentCredentials }> {
+  input: CreateUserInput,
+  options: { onProvisioningError?: (error: unknown) => void } = {}
+): Promise<{ user: PublicUser }> {
   const passwordHash = await hashSecret(input.password);
   const client = await pool.connect();
 
+  let directoryAgent: { sipUsername: string; sipPassword: string; displayName: string } | null = null;
+  let result: { user: PublicUser } | null = null;
   try {
     await client.query("begin");
     const userResult = await client.query<UserRecord>(
@@ -82,8 +84,6 @@ export async function createUserWithOptionalAgent(
     );
 
     const user = userResult.rows[0];
-    let agentCredentials: AgentCredentials | undefined;
-
     if (input.role === "agent") {
       const sipPassword = generateSecret(18);
       const sipUsername = await nextSipUsername(client, config.SIP_USERNAME_PREFIX);
@@ -94,18 +94,28 @@ export async function createUserWithOptionalAgent(
         `,
         [user.id, sipUsername, await hashSecret(sipPassword), encryptSecret(config, sipPassword), input.name]
       );
-      await provisionAgentDirectory(config, { sipUsername, sipPassword, displayName: input.name });
-      agentCredentials = { sipUsername, sipPassword };
+      directoryAgent = { sipUsername, sipPassword, displayName: input.name };
     }
 
     await client.query("commit");
-    return { user: toPublicUser(user), agentCredentials };
+    result = { user: toPublicUser(user) };
   } catch (error) {
     await client.query("rollback");
     throw error;
   } finally {
     client.release();
   }
+
+  if (directoryAgent) {
+    try {
+      await provisionAgentDirectory(config, directoryAgent);
+    } catch (error) {
+      if (!options.onProvisioningError) throw error;
+      options.onProvisioningError(error);
+    }
+  }
+  if (!result) throw new Error("User creation committed without a result");
+  return result;
 }
 
 export async function ensureAgentForUser(
@@ -130,7 +140,7 @@ export async function ensureAgentForUser(
   );
   const existingAgent = existing.rows[0];
   if (existingAgent) {
-    await ensureAgentDirectory(config, {
+    await provisionAgentDirectory(config, {
       sipUsername: existingAgent.sip_username,
       sipPassword: decryptSecret(config, existingAgent.sip_password_encrypted),
       displayName: existingAgent.display_name || user.name
@@ -198,7 +208,7 @@ export async function getSoftphoneProvisioningForUser(
   }
   const sipPassword = decryptSecret(config, agent.sip_password_encrypted);
   const displayName = agent.display_name || user.name;
-  await ensureAgentDirectory(config, {
+  await provisionAgentDirectory(config, {
     sipUsername: agent.sip_username,
     sipPassword,
     displayName
@@ -234,9 +244,47 @@ export async function bootstrapAdmin(pool: pg.Pool, config: AppConfig): Promise<
   return created.user;
 }
 
+export async function migrateAgentSipSecretEncryption(pool: pg.Pool, config: AppConfig): Promise<number> {
+  // Keep v2 writes opt-in so the first dual-read release can still roll back to
+  // the previous v1-only image. Enable v2 only on a later deployment.
+  if (!config.SIP_SECRET_ENCRYPTION_KEY || config.SIP_SECRET_WRITE_VERSION !== "v2") {
+    return 0;
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const agents = await client.query<{ id: string; sip_password_encrypted: string }>(
+      "select id, sip_password_encrypted from agents where sip_password_encrypted like 'v1.%' for update"
+    );
+    let migrated = 0;
+    for (const agent of agents.rows) {
+      if (!secretNeedsReencryption(config, agent.sip_password_encrypted)) {
+        continue;
+      }
+      const plaintext = decryptSecret(config, agent.sip_password_encrypted);
+      await client.query("update agents set sip_password_encrypted = $2, updated_at = now() where id = $1", [
+        agent.id,
+        encryptSecret(config, plaintext)
+      ]);
+      migrated += 1;
+    }
+    await client.query("commit");
+    return migrated;
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 async function nextSipUsername(client: pg.PoolClient, prefix: string): Promise<string> {
   for (let attempt = 0; attempt < 10; attempt += 1) {
-    const suffix = generateSecret(5).toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 8);
+    const suffix = generateSecret(5)
+      .toLowerCase()
+      .replace(/[^a-z0-9]/g, "")
+      .slice(0, 8);
     const username = `${prefix}_${suffix}`;
     const existing = await client.query("select 1 from agents where sip_username = $1", [username]);
     if (!existing.rowCount) {

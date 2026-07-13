@@ -24,8 +24,8 @@ const prometheus = prometheusTemplate
 
 await writeFile(resolve(outputDirectory, "prometheus.yml"), prometheus, { mode: 0o644 });
 const alertmanagerPath = resolve(outputDirectory, "alertmanager.yml");
-await writeFile(alertmanagerPath, renderAlertmanager(), { mode: 0o644 });
-await chmod(alertmanagerPath, 0o644);
+await writeFile(alertmanagerPath, renderAlertmanager(), { mode: 0o640 });
+await chmod(alertmanagerPath, 0o640);
 
 console.log(`Rendered monitoring configuration for ${appDomain} and ${grafanaDomain}`);
 
@@ -41,7 +41,9 @@ function renderAlertmanager() {
     if (!/^https?:$/.test(parsed.protocol)) {
       throw new Error("ALERTMANAGER_WEBHOOK_URL must use http or https");
     }
-    integrations.push(`    webhook_configs:\n      - url: ${yamlString(webhookUrl)}\n        send_resolved: true`);
+    integrations.push(
+      `    webhook_configs:\n      - url: ${yamlString(webhookUrl)}\n        send_resolved: true`
+    );
   }
 
   if (telegramToken || telegramChatId) {

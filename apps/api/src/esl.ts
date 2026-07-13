@@ -111,11 +111,17 @@ export function canOriginateCustomerLeg(config: AppConfig): boolean {
   return Boolean(config.SIP_TRUNK_PROXY && config.SIP_TRUNK_USERNAME);
 }
 
-export async function sendFreeSwitchApiCommand(config: AppConfig, command: string): Promise<EslCommandResponse> {
+export async function sendFreeSwitchApiCommand(
+  config: AppConfig,
+  command: string
+): Promise<EslCommandResponse> {
   return sendFreeSwitchCommand(config, `api ${command}`);
 }
 
-export async function sendFreeSwitchBgapiCommand(config: AppConfig, command: string): Promise<EslCommandResponse> {
+export async function sendFreeSwitchBgapiCommand(
+  config: AppConfig,
+  command: string
+): Promise<EslCommandResponse> {
   return sendFreeSwitchCommand(config, `api bgapi ${command}`);
 }
 
@@ -228,7 +234,8 @@ function parseEslResponse(raw: string): EslCommandResponse | null {
   if (contentLength > 0 && Buffer.byteLength(availableBody, "utf8") < contentLength) {
     return null;
   }
-  const body = contentLength > 0 ? availableBody.slice(0, contentLength) : headers["reply-text"] ?? availableBody;
+  const body =
+    contentLength > 0 ? availableBody.slice(0, contentLength) : (headers["reply-text"] ?? availableBody);
   return { body, headers, raw };
 }
 

@@ -4,6 +4,7 @@ import type { HealthResponse } from "@outbound-dialer/shared";
 import type { AppConfig } from "./config.js";
 import { checkPostgres } from "./db.js";
 import { checkFreeSwitchEsl } from "./esl.js";
+import { isFreeSwitchEventListenerSubscribed } from "./esl-listener-state.js";
 
 export function registerHealthRoutes(app: FastifyInstance, config: AppConfig, pool: pg.Pool): void {
   app.get("/health/live", async () => ({
@@ -14,11 +15,23 @@ export function registerHealthRoutes(app: FastifyInstance, config: AppConfig, po
 
   const readiness = async (): Promise<HealthResponse> => {
     const postgres = await check(() => checkPostgres(pool));
+    const freeswitchEventListener = config.FREESWITCH_ESL_ENABLED
+      ? isFreeSwitchEventListenerSubscribed()
+        ? { status: "ok" as const, message: "event listener subscribed" }
+        : { status: "error" as const, message: "event listener is not subscribed" }
+      : { status: "skipped" as const, message: "disabled by configuration" };
     const freeswitchEsl = config.FREESWITCH_ESL_ENABLED
-      ? await check(() => checkFreeSwitchEsl(config))
+      ? freeswitchEventListener.status === "ok"
+        ? await check(() => checkFreeSwitchEsl(config))
+        : { status: "skipped" as const, message: "event listener is not subscribed" }
       : { status: "skipped" as const, message: "disabled by configuration" };
 
-    const status = postgres.status === "ok" && freeswitchEsl.status !== "error" ? "ok" : "degraded";
+    const status =
+      postgres.status === "ok" &&
+      freeswitchEsl.status !== "error" &&
+      freeswitchEventListener.status !== "error"
+        ? "ok"
+        : "degraded";
 
     return {
       status,
@@ -26,7 +39,8 @@ export function registerHealthRoutes(app: FastifyInstance, config: AppConfig, po
       uptimeSeconds: Math.round(process.uptime()),
       checks: {
         postgres,
-        freeswitchEsl
+        freeswitchEsl,
+        freeswitchEventListener
       }
     };
   };

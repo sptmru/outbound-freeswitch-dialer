@@ -1,27 +1,59 @@
+import cookie from "@fastify/cookie";
 import cors from "@fastify/cors";
 import multipart from "@fastify/multipart";
 import Fastify from "fastify";
 import { ZodError } from "zod";
+import { registerAdminAudit } from "./admin-audit.js";
 import { startAgentRegistrationReconciler } from "./agent-registrations.js";
 import { registerAuthRoutes } from "./auth/routes.js";
+import { startCallRecordingFinalizer } from "./call-recording-finalizer.js";
 import { loadConfig } from "./config.js";
 import { registerDashboardRoutes } from "./dashboard/routes.js";
+import { startRetentionScheduler } from "./dashboard/retention-scheduler.js";
 import { createPool, runMigrations } from "./db.js";
 import { startFreeSwitchEventListener } from "./esl-events.js";
-import { provisionAllAgentDirectories } from "./freeswitch/provisioning.js";
+import { provisionAllAgentDirectories, startAgentDirectoryReconciler } from "./freeswitch/provisioning.js";
 import { registerHealthRoutes } from "./health.js";
 import { registerMetrics } from "./metrics.js";
-import { bootstrapAdmin } from "./users.js";
+import {
+  createLiveEventHub,
+  registerLiveEventRoutes,
+  startDatabaseLiveEventListener
+} from "./live-events.js";
+import {
+  isTrustedProxyAddress,
+  registerCookieCsrfProtection,
+  registerLoginRateLimit,
+  sanitizeRequestUrl
+} from "./security.js";
+import { bootstrapAdmin, migrateAgentSipSecretEncryption } from "./users.js";
 
 const config = loadConfig();
 const app = Fastify({
   logger: {
-    level: config.LOG_LEVEL
-  }
+    level: config.LOG_LEVEL,
+    serializers: {
+      req(request) {
+        return {
+          host: request.headers.host,
+          method: request.method,
+          remoteAddress: request.ip,
+          remotePort: request.socket.remotePort,
+          url: sanitizeRequestUrl(request.url)
+        };
+      }
+    }
+  },
+  trustProxy: isTrustedProxyAddress
 });
 const pool = createPool(config);
+const liveEventHub = createLiveEventHub();
 let stopFreeSwitchEventListener: (() => void) | null = null;
 let stopAgentRegistrationReconciler: (() => void) | null = null;
+let stopDatabaseLiveEventListener: (() => void) | null = null;
+let stopRetentionScheduler: (() => void) | null = null;
+let stopAgentDirectoryReconciler: (() => void) | null = null;
+let stopCallRecordingFinalizer: (() => void) | null = null;
 
 app.setErrorHandler((error, _request, reply) => {
   if (error instanceof ZodError) {
@@ -66,20 +98,26 @@ function isHttpError(error: unknown): error is { message: string; statusCode: nu
   );
 }
 
+await app.register(cookie);
 await app.register(cors, {
+  credentials: true,
   origin: config.corsOrigins
 });
 await app.register(multipart, {
   limits: {
-    fileSize: 2_000_000,
+    fileSize: config.VOICEMAIL_UPLOAD_MAX_BYTES,
     files: 1
   }
 });
+registerLoginRateLimit(app, config);
+registerCookieCsrfProtection(app, config);
+registerAdminAudit(app, config, pool);
 
 registerHealthRoutes(app, config, pool);
 registerMetrics(app, config, pool);
 registerAuthRoutes(app, config, pool);
 registerDashboardRoutes(app, config, pool);
+registerLiveEventRoutes(app, config, pool, liveEventHub);
 
 app.get("/", async () => ({
   service: "outbound-dialer-api",
@@ -88,6 +126,10 @@ app.get("/", async () => ({
 
 async function start() {
   await runMigrations(pool);
+  const migratedSipSecrets = await migrateAgentSipSecretEncryption(pool, config);
+  if (migratedSipSecrets) {
+    app.log.info({ migratedSipSecrets }, "SIP credentials migrated to the dedicated encryption key");
+  }
   const provisionedAgents = await provisionAllAgentDirectories(pool, config);
   app.log.info({ provisionedAgents }, "FreeSWITCH agent directory synchronized");
   const admin = await bootstrapAdmin(pool, config);
@@ -98,14 +140,22 @@ async function start() {
     host: config.API_HOST,
     port: config.API_PORT
   });
+  stopDatabaseLiveEventListener = startDatabaseLiveEventListener(pool, liveEventHub, app.log);
+  stopRetentionScheduler = startRetentionScheduler(pool, config, app.log).stop;
+  stopCallRecordingFinalizer = startCallRecordingFinalizer(pool, config.FFPROBE_PATH, app.log).stop;
   stopFreeSwitchEventListener = startFreeSwitchEventListener(config, pool, app.log);
   stopAgentRegistrationReconciler = startAgentRegistrationReconciler(config, pool, app.log);
+  stopAgentDirectoryReconciler = startAgentDirectoryReconciler(pool, config, app.log);
 }
 
 const shutdown = async () => {
   app.log.info("shutting down");
   stopAgentRegistrationReconciler?.();
+  stopAgentDirectoryReconciler?.();
   stopFreeSwitchEventListener?.();
+  stopCallRecordingFinalizer?.();
+  stopRetentionScheduler?.();
+  stopDatabaseLiveEventListener?.();
   await app.close();
   await pool.end();
 };

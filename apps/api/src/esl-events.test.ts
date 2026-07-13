@@ -2,13 +2,58 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type pg from "pg";
 import type { AppConfig } from "./config.js";
-import { __testing } from "./esl-events.js";
+import { __testing, reconcileActiveCalls } from "./esl-events.js";
 
 const config = {
-  FREESWITCH_DOMAIN: "dialer.local"
+  AGENT_WRAP_UP_SECONDS: 30,
+  FREESWITCH_DOMAIN: "dialer.local",
+  CALL_RECORDINGS_STORAGE_DIR: "/tmp"
 } as AppConfig;
 
 describe("FreeSWITCH event helpers", () => {
+  it("recognizes retryable PostgreSQL and connection failures", () => {
+    assert.equal(
+      __testing.isTransientPersistenceError(Object.assign(new Error("connection lost"), { code: "08006" })),
+      true
+    );
+    assert.equal(__testing.isTransientPersistenceError(new Error("database unavailable")), true);
+    assert.equal(
+      __testing.isTransientPersistenceError(
+        Object.assign(new Error("constraint violation"), { code: "23505" })
+      ),
+      false
+    );
+  });
+
+  it("does not let replayed channel setup events regress an active voicemail drop", async () => {
+    for (const eventName of ["CHANNEL_CREATE", "CHANNEL_ANSWER", "CHANNEL_BRIDGE"]) {
+      const queries: Array<{ params: readonly unknown[]; sql: string }> = [];
+      const pool = createQueryPool((sql, params) => {
+        queries.push({ sql, params });
+        return rows([]);
+      });
+
+      await __testing.persistFreeSwitchEvent(config, pool, {
+        body: "",
+        headers: {
+          "event-name": eventName,
+          "unique-id": "22222222-2222-4222-8222-222222222222",
+          variable_outbound_dialer_call_id: "11111111-1111-4111-8111-111111111111",
+          variable_outbound_dialer_leg_type: "customer"
+        }
+      });
+
+      const callStateUpdate = queries.find(
+        (query) => query.sql.includes("update calls") && query.sql.includes("set state =")
+      );
+      assert.ok(callStateUpdate, `${eventName} should attempt a guarded call-state update`);
+      assert.match(callStateUpdate.sql, /'voicemail_drop_requested'/);
+      assert.match(callStateUpdate.sql, /'voicemail_playback_started'/);
+      assert.match(callStateUpdate.sql, /'agent_released'/);
+      assert.match(callStateUpdate.sql, /'voicemail_playback_completed'/);
+    }
+  });
+
   it("builds a stable WAV path for a call recording", () => {
     assert.equal(
       __testing.buildCallRecordingPath(
@@ -137,12 +182,10 @@ describe("FreeSWITCH event helpers", () => {
       }
     );
 
-    assert.deepEqual(commands, [
-      "module_exists mod_avmd",
-      "avmd 22222222-2222-4222-8222-222222222222 start"
-    ]);
+    assert.deepEqual(commands, ["module_exists mod_avmd", "avmd 22222222-2222-4222-8222-222222222222 start"]);
     const started = queries.find(
-      (query) => query.sql.includes("insert into call_events") && query.sql.includes("'voicemail_detection_started'")
+      (query) =>
+        query.sql.includes("insert into call_events") && query.sql.includes("'voicemail_detection_started'")
     );
     assert.equal(started?.params[1], "customer_dialing");
     assert.match(String(started?.params[3]), /"phase":"early_media"/);
@@ -255,7 +298,10 @@ describe("FreeSWITCH event helpers", () => {
     assert.equal(__testing.mapEventToCallState("CHANNEL_HANGUP", "NORMAL_CLEARING"), "completed");
     assert.equal(__testing.mapEventToCallState("CHANNEL_HANGUP_COMPLETE", "USER_BUSY"), "completed");
     assert.equal(__testing.mapEventToCallState("CHANNEL_DESTROY"), "failed");
-    assert.equal(__testing.mapEventToCallState("CHANNEL_HANGUP", "NORMAL_CLEARING", "agent"), "agent_released");
+    assert.equal(
+      __testing.mapEventToCallState("CHANNEL_HANGUP", "NORMAL_CLEARING", "agent"),
+      "agent_released"
+    );
     assert.equal(__testing.mapEventToLegState("CHANNEL_DESTROY"), "ended");
   });
 
@@ -266,19 +312,35 @@ describe("FreeSWITCH event helpers", () => {
 
   it("resolves customer hangups using answer and voicemail context", () => {
     assert.equal(
-      __testing.resolveCustomerHangupOutcome({ answered: false, hangupCause: "USER_BUSY", voicemailDetected: false }),
+      __testing.resolveCustomerHangupOutcome({
+        answered: false,
+        hangupCause: "USER_BUSY",
+        voicemailDetected: false
+      }),
       "busy"
     );
     assert.equal(
-      __testing.resolveCustomerHangupOutcome({ answered: false, hangupCause: "NO_ANSWER", voicemailDetected: false }),
+      __testing.resolveCustomerHangupOutcome({
+        answered: false,
+        hangupCause: "NO_ANSWER",
+        voicemailDetected: false
+      }),
       "not_answered"
     );
     assert.equal(
-      __testing.resolveCustomerHangupOutcome({ answered: true, hangupCause: "NORMAL_CLEARING", voicemailDetected: false }),
+      __testing.resolveCustomerHangupOutcome({
+        answered: true,
+        hangupCause: "NORMAL_CLEARING",
+        voicemailDetected: false
+      }),
       "customer_hung_up"
     );
     assert.equal(
-      __testing.resolveCustomerHangupOutcome({ answered: true, hangupCause: "NORMAL_CLEARING", voicemailDetected: true }),
+      __testing.resolveCustomerHangupOutcome({
+        answered: true,
+        hangupCause: "NORMAL_CLEARING",
+        voicemailDetected: true
+      }),
       "voicemail_detected"
     );
   });
@@ -311,8 +373,16 @@ describe("FreeSWITCH event helpers", () => {
     const queries: Array<{ params: readonly unknown[]; sql: string }> = [];
     const pool = createQueryPool((sql, params) => {
       queries.push({ sql, params });
-      if (sql.includes("select answered_at, voicemail_signal_status")) {
-        return rows([{ answered_at: new Date(), voicemail_signal_status: null }]);
+      if (sql.includes("select agent_id, answered_at, contact_id, state, voicemail_signal_status")) {
+        return rows([
+          {
+            agent_id: "agent-1",
+            answered_at: new Date(),
+            contact_id: "contact-1",
+            state: "bridged",
+            voicemail_signal_status: null
+          }
+        ]);
       }
       if (sql.includes("update calls") && sql.includes("returning agent_id")) {
         return rows([{ agent_id: "agent-1" }]);
@@ -331,8 +401,14 @@ describe("FreeSWITCH event helpers", () => {
       }
     });
 
-    const update = queries.find((query) => query.sql.includes("update calls") && query.sql.includes("returning agent_id"));
-    assert.deepEqual(update?.params, ["11111111-1111-4111-8111-111111111111", "completed", "customer_hung_up"]);
+    const update = queries.find(
+      (query) => query.sql.includes("update calls") && query.sql.includes("returning agent_id")
+    );
+    assert.deepEqual(update?.params, [
+      "11111111-1111-4111-8111-111111111111",
+      "completed",
+      "customer_hung_up"
+    ]);
     assert.ok(queries.some((query) => /update\s+agents/.test(query.sql)));
   });
 
@@ -467,12 +543,292 @@ describe("FreeSWITCH event helpers", () => {
     assert.match(queries[0]?.sql ?? "", /then 'offline'/);
     assert.deepEqual(queries[0]?.params, ["agent1000", false]);
   });
+
+  it("maps dedicated voicemail playback custom events without treating them as AMD", () => {
+    const frame = {
+      body: "",
+      headers: {
+        "event-name": "CUSTOM",
+        "event-subclass": "outbound_dialer::voicemail_playback_completed",
+        "outbound-dialer-call-id": "11111111-1111-4111-8111-111111111111"
+      }
+    };
+
+    assert.equal(__testing.isVoicemailPlaybackEvent(frame), true);
+    assert.equal(__testing.mapVoicemailPlaybackEventKind(frame), "completed");
+    assert.equal(__testing.getVoicemailPlaybackCallId(frame), "11111111-1111-4111-8111-111111111111");
+  });
+
+  it("releases only the agent leg after confirmed voicemail playback start", async () => {
+    const queries: Array<{ params: readonly unknown[]; sql: string }> = [];
+    const commands: string[] = [];
+    const pool = createQueryPool((sql, params) => {
+      queries.push({ sql, params });
+      return rows([]);
+    });
+
+    await __testing.releaseAgentAfterVoicemailPlaybackStarts(
+      config,
+      pool,
+      {
+        agentId: "agent-1",
+        agentLegUuid: "22222222-2222-4222-8222-222222222222",
+        callId: "11111111-1111-4111-8111-111111111111",
+        customerLegUuid: "33333333-3333-4333-8333-333333333333"
+      },
+      async (_config, command) => {
+        commands.push(command);
+        return { body: "+OK", headers: {}, raw: "" };
+      }
+    );
+
+    assert.deepEqual(commands, ["uuid_kill 22222222-2222-4222-8222-222222222222"]);
+    assert.ok(queries.some((query) => query.sql.includes("'agent_released'")));
+    assert.ok(queries.some((query) => query.sql.includes("agent_released_at")));
+    const legUpdate = queries.find((query) => query.sql.includes("update call_legs"));
+    assert.match(legUpdate?.sql ?? "", /type = 'agent'/);
+    assert.ok(!queries.some((query) => query.sql.includes("type = 'customer'")));
+    const callUpdate = queries.find((query) => query.sql.includes("update calls"));
+    assert.doesNotMatch(callUpdate?.sql ?? "", /ended_at\s*=/);
+    const availabilityUpdate = queries.find((query) => query.sql.includes("availability_status = case"));
+    assert.deepEqual(availabilityUpdate?.params, ["agent-1", true, 30]);
+  });
+
+  it("finalizes a voicemail drop only after the completion event", async () => {
+    const queries: Array<{ params: readonly unknown[]; sql: string }> = [];
+    const pool = createTransactionalQueryPool((sql, params) => {
+      queries.push({ sql, params });
+      if (sql.includes("update calls")) {
+        return rows([{ agent_id: "agent-1", contact_id: "contact-1" }]);
+      }
+      return rows([]);
+    });
+
+    await __testing.finalizeCompletedVoicemailPlayback(
+      config,
+      pool,
+      "11111111-1111-4111-8111-111111111111",
+      "33333333-3333-4333-8333-333333333333",
+      { playbackMilliseconds: 4200 }
+    );
+
+    const callUpdate = queries.find((query) => query.sql.includes("update calls"));
+    assert.match(callUpdate?.sql ?? "", /outcome = 'voicemail_dropped'/);
+    assert.match(callUpdate?.sql ?? "", /voicemail_playback_completed_at/);
+    assert.match(callUpdate?.sql ?? "", /ended_at = coalesce/);
+    assert.ok(queries.some((query) => query.sql.includes("'voicemail_playback_completed'")));
+    assert.ok(
+      queries.some((query) => query.sql.includes("update contacts") && query.sql.includes("'completed'"))
+    );
+    assert.ok(queries.some((query) => query.sql.includes("update call_legs")));
+    assert.ok(
+      queries.some((query) => query.sql.includes("update agents") && query.sql.includes("not exists"))
+    );
+  });
+
+  it("does not clear newer pause or wrap-up state when a released voicemail job finishes", async () => {
+    const queries: Array<{ params: readonly unknown[]; sql: string }> = [];
+    const pool = createTransactionalQueryPool((sql, params) => {
+      queries.push({ sql, params });
+      if (sql.includes("update calls")) {
+        return rows([
+          {
+            agent_id: "agent-1",
+            agent_released_at: new Date("2026-07-13T08:00:00.000Z"),
+            contact_id: "contact-1"
+          }
+        ]);
+      }
+      return rows([]);
+    });
+
+    await __testing.finalizeCompletedVoicemailPlayback(
+      config,
+      pool,
+      "11111111-1111-4111-8111-111111111111",
+      "33333333-3333-4333-8333-333333333333",
+      {}
+    );
+
+    assert.ok(!queries.some((query) => query.sql.includes("update agents")));
+  });
+
+  it("requeues an interrupted voicemail playback instead of reporting a completed drop", async () => {
+    const queries: Array<{ params: readonly unknown[]; sql: string }> = [];
+    const pool = createTransactionalQueryPool((sql, params) => {
+      queries.push({ sql, params });
+      if (sql.includes("update calls")) {
+        return rows([{}]);
+      }
+      return rows([]);
+    });
+
+    await __testing.finalizeIncompleteVoicemailPlayback(config, pool, {
+      agentId: "agent-1",
+      agentReleased: false,
+      callId: "11111111-1111-4111-8111-111111111111",
+      contactId: "contact-1",
+      customerLegUuid: "33333333-3333-4333-8333-333333333333",
+      hangupCause: "NORMAL_CLEARING",
+      raw: {},
+      source: "test"
+    });
+
+    const update = queries.find((query) => query.sql.includes("update calls"));
+    assert.deepEqual(update?.params, [
+      "11111111-1111-4111-8111-111111111111",
+      "completed",
+      "customer_hung_up"
+    ]);
+    assert.ok(queries.some((query) => query.params.includes("voicemail_playback_interrupted")));
+    assert.ok(
+      queries.some((query) => query.sql.includes("update contacts") && query.sql.includes("status = 'new'"))
+    );
+  });
+
+  it("does not clear newer agent availability when released voicemail playback is interrupted", async () => {
+    const queries: Array<{ params: readonly unknown[]; sql: string }> = [];
+    const pool = createTransactionalQueryPool((sql, params) => {
+      queries.push({ sql, params });
+      return sql.includes("update calls") ? rows([{}]) : rows([]);
+    });
+
+    await __testing.finalizeIncompleteVoicemailPlayback(config, pool, {
+      agentId: "agent-1",
+      agentReleased: true,
+      callId: "11111111-1111-4111-8111-111111111111",
+      contactId: "contact-1",
+      customerLegUuid: "33333333-3333-4333-8333-333333333333",
+      forceFailed: true,
+      raw: {},
+      source: "test"
+    });
+
+    assert.ok(!queries.some((query) => query.sql.includes("update agents")));
+  });
+
+  it("uses a conservative outcome policy for contact retry eligibility", () => {
+    assert.equal(__testing.contactStatusForOutcome("customer_hung_up"), "completed");
+    assert.equal(__testing.contactStatusForOutcome("voicemail_detected"), "completed");
+    assert.equal(__testing.contactStatusForOutcome("voicemail_dropped"), "completed");
+    assert.equal(__testing.contactStatusForOutcome("busy"), "new");
+    assert.equal(__testing.contactStatusForOutcome("not_answered"), "new");
+    assert.equal(__testing.contactStatusForOutcome("failed"), "new");
+  });
+
+  it("reconciles an old missing answered call without requeueing its contact", async () => {
+    const queries: Array<{ params: readonly unknown[]; sql: string }> = [];
+    const pool = createQueryPool((sql, params) => {
+      queries.push({ sql, params });
+      if (sql.includes("calls.id as call_id")) {
+        return rows([
+          {
+            agent_id: "agent-1",
+            agent_leg_uuid: null,
+            answered_at: new Date("2026-07-13T08:00:00.000Z"),
+            call_id: "11111111-1111-4111-8111-111111111111",
+            contact_id: "contact-1",
+            created_at: new Date("2000-01-01T00:00:00.000Z"),
+            customer_leg_uuid: "33333333-3333-4333-8333-333333333333",
+            state: "bridged"
+          }
+        ]);
+      }
+      if (sql.includes("update calls")) {
+        return rows([{ agent_id: "agent-1", contact_id: "contact-1" }]);
+      }
+      return rows([]);
+    });
+    const logger = {
+      error: () => undefined,
+      info: () => undefined,
+      warn: () => undefined
+    };
+
+    await reconcileActiveCalls(config, pool, logger, async () => ({ body: "false", headers: {}, raw: "" }));
+
+    const callUpdate = queries.find((query) => query.sql.includes("update calls"));
+    assert.deepEqual(callUpdate?.params, [
+      "11111111-1111-4111-8111-111111111111",
+      "completed",
+      "customer_hung_up"
+    ]);
+    const contactUpdate = queries.find((query) => query.sql.includes("update contacts"));
+    assert.deepEqual(contactUpdate?.params, ["contact-1", "completed"]);
+    assert.ok(queries.some((query) => query.sql.includes("freeswitch_reconciliation_closed_missing_call")));
+  });
+
+  it("fails and terminates a voicemail drop whose playback start event never arrives", async () => {
+    const queries: Array<{ params: readonly unknown[]; sql: string }> = [];
+    const commands: string[] = [];
+    const pool = createTransactionalQueryPool((sql, params) => {
+      queries.push({ sql, params });
+      if (sql.includes("calls.id as call_id")) {
+        return rows([
+          {
+            agent_id: "agent-1",
+            agent_leg_uuid: "22222222-2222-4222-8222-222222222222",
+            answered_at: new Date("2026-07-13T08:00:00.000Z"),
+            call_id: "11111111-1111-4111-8111-111111111111",
+            contact_id: "contact-1",
+            created_at: new Date("2026-07-13T08:00:00.000Z"),
+            customer_leg_uuid: "33333333-3333-4333-8333-333333333333",
+            state: "voicemail_drop_requested",
+            voicemail_drop_requested_at: new Date("2000-01-01T00:00:00.000Z")
+          }
+        ]);
+      }
+      if (sql.includes("update calls") && sql.includes("set state = $2")) {
+        return rows([{}]);
+      }
+      return rows([]);
+    });
+    const logger = { error: () => undefined, info: () => undefined, warn: () => undefined };
+
+    await reconcileActiveCalls(
+      { ...config, VOICEMAIL_DROP_START_TIMEOUT_SECONDS: 120 } as AppConfig,
+      pool,
+      logger,
+      async (_config, command) => {
+        commands.push(command);
+        return { body: command.startsWith("uuid_exists") ? "true" : "+OK", headers: {}, raw: "" };
+      }
+    );
+
+    assert.deepEqual(commands, [
+      "uuid_exists 33333333-3333-4333-8333-333333333333",
+      "uuid_kill 33333333-3333-4333-8333-333333333333",
+      "uuid_kill 22222222-2222-4222-8222-222222222222"
+    ]);
+    assert.ok(
+      queries.some(
+        (query) =>
+          query.sql.includes("update calls") && query.params[1] === "failed" && query.params[2] === "failed"
+      )
+    );
+    assert.ok(
+      queries.some((query) => String(query.params.at(-1)).includes("reconciliation_voicemail_start_timeout"))
+    );
+  });
 });
 
 function createQueryPool(
   handler: (sql: string, params: readonly unknown[]) => { rows: unknown[]; rowCount: number }
 ): pg.Pool {
   return {
+    query: (sql: string, params: readonly unknown[] = []) => Promise.resolve(handler(sql, params))
+  } as unknown as pg.Pool;
+}
+
+function createTransactionalQueryPool(
+  handler: (sql: string, params: readonly unknown[]) => { rows: unknown[]; rowCount: number }
+): pg.Pool {
+  const client = {
+    query: (sql: string, params: readonly unknown[] = []) => Promise.resolve(handler(sql, params)),
+    release: () => undefined
+  } as unknown as pg.PoolClient;
+  return {
+    connect: () => Promise.resolve(client),
     query: (sql: string, params: readonly unknown[] = []) => Promise.resolve(handler(sql, params))
   } as unknown as pg.Pool;
 }

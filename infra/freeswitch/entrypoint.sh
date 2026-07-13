@@ -16,29 +16,67 @@ required() {
   fi
 }
 
+escape_xml_for_sed() {
+  value="$1"
+  carriage_return="$(printf '\r')"
+  case "$value" in
+    *"
+"*|*"$carriage_return"*)
+      echo "FreeSWITCH configuration values must be single-line strings" >&2
+      return 1
+      ;;
+  esac
+  printf '%s' "$value" \
+    | sed \
+      -e 's/&/\&amp;/g' \
+      -e 's/</\&lt;/g' \
+      -e 's/>/\&gt;/g' \
+      -e 's/"/\&quot;/g' \
+      -e "s/'/\&apos;/g" \
+    | sed -e 's/[\\&|]/\\&/g'
+}
+
 render() {
   src="$1"
   dst="$2"
   mkdir -p "$(dirname "$dst")"
+  esl_password="$(escape_xml_for_sed "$FREESWITCH_ESL_PASSWORD")"
+  esl_acl="$(escape_xml_for_sed "$FREESWITCH_ESL_ACL")"
+  domain="$(escape_xml_for_sed "$FREESWITCH_DOMAIN")"
+  rtp_start="$(escape_xml_for_sed "$FREESWITCH_RTP_START_PORT")"
+  rtp_end="$(escape_xml_for_sed "$FREESWITCH_RTP_END_PORT")"
+  external_sip_ip="$(escape_xml_for_sed "$FREESWITCH_EXTERNAL_SIP_IP")"
+  external_rtp_ip="$(escape_xml_for_sed "$FREESWITCH_EXTERNAL_RTP_IP")"
+  internal_sip_port="$(escape_xml_for_sed "$FREESWITCH_INTERNAL_SIP_PORT")"
+  external_sip_port="$(escape_xml_for_sed "$FREESWITCH_EXTERNAL_PROFILE_SIP_PORT")"
+  external_tls_port="$(escape_xml_for_sed "$FREESWITCH_EXTERNAL_PROFILE_TLS_PORT")"
+  webrtc_wss_port="$(escape_xml_for_sed "$FREESWITCH_WEBRTC_WSS_PORT")"
+  trunk_mode="$(escape_xml_for_sed "$SIP_TRUNK_MODE")"
+  trunk_proxy="$(escape_xml_for_sed "$SIP_TRUNK_PROXY")"
+  trunk_realm="$(escape_xml_for_sed "$SIP_TRUNK_REALM")"
+  trunk_outbound_proxy="$(escape_xml_for_sed "$SIP_TRUNK_OUTBOUND_PROXY")"
+  trunk_username="$(escape_xml_for_sed "$SIP_TRUNK_USERNAME")"
+  trunk_password="$(escape_xml_for_sed "$SIP_TRUNK_PASSWORD")"
+  trunk_caller_id="$(escape_xml_for_sed "$SIP_TRUNK_CALLER_ID")"
   sed \
-    -e "s|__FREESWITCH_ESL_PASSWORD__|${FREESWITCH_ESL_PASSWORD}|g" \
-    -e "s|__FREESWITCH_ESL_ACL__|${FREESWITCH_ESL_ACL}|g" \
-    -e "s|__FREESWITCH_DOMAIN__|${FREESWITCH_DOMAIN}|g" \
-    -e "s|__FREESWITCH_RTP_START_PORT__|${FREESWITCH_RTP_START_PORT}|g" \
-    -e "s|__FREESWITCH_RTP_END_PORT__|${FREESWITCH_RTP_END_PORT}|g" \
-    -e "s|__FREESWITCH_EXTERNAL_SIP_IP__|${FREESWITCH_EXTERNAL_SIP_IP}|g" \
-    -e "s|__FREESWITCH_EXTERNAL_RTP_IP__|${FREESWITCH_EXTERNAL_RTP_IP}|g" \
-    -e "s|__FREESWITCH_INTERNAL_SIP_PORT__|${FREESWITCH_INTERNAL_SIP_PORT}|g" \
-    -e "s|__FREESWITCH_EXTERNAL_PROFILE_SIP_PORT__|${FREESWITCH_EXTERNAL_PROFILE_SIP_PORT}|g" \
-    -e "s|__FREESWITCH_EXTERNAL_PROFILE_TLS_PORT__|${FREESWITCH_EXTERNAL_PROFILE_TLS_PORT}|g" \
-    -e "s|__FREESWITCH_WEBRTC_WSS_PORT__|${FREESWITCH_WEBRTC_WSS_PORT}|g" \
-    -e "s|__SIP_TRUNK_MODE__|${SIP_TRUNK_MODE}|g" \
-    -e "s|__SIP_TRUNK_PROXY__|${SIP_TRUNK_PROXY}|g" \
-    -e "s|__SIP_TRUNK_REALM__|${SIP_TRUNK_REALM}|g" \
-    -e "s|__SIP_TRUNK_OUTBOUND_PROXY__|${SIP_TRUNK_OUTBOUND_PROXY}|g" \
-    -e "s|__SIP_TRUNK_USERNAME__|${SIP_TRUNK_USERNAME}|g" \
-    -e "s|__SIP_TRUNK_PASSWORD__|${SIP_TRUNK_PASSWORD}|g" \
-    -e "s|__SIP_TRUNK_CALLER_ID__|${SIP_TRUNK_CALLER_ID}|g" \
+    -e "s|__FREESWITCH_ESL_PASSWORD__|${esl_password}|g" \
+    -e "s|__FREESWITCH_ESL_ACL__|${esl_acl}|g" \
+    -e "s|__FREESWITCH_DOMAIN__|${domain}|g" \
+    -e "s|__FREESWITCH_RTP_START_PORT__|${rtp_start}|g" \
+    -e "s|__FREESWITCH_RTP_END_PORT__|${rtp_end}|g" \
+    -e "s|__FREESWITCH_EXTERNAL_SIP_IP__|${external_sip_ip}|g" \
+    -e "s|__FREESWITCH_EXTERNAL_RTP_IP__|${external_rtp_ip}|g" \
+    -e "s|__FREESWITCH_INTERNAL_SIP_PORT__|${internal_sip_port}|g" \
+    -e "s|__FREESWITCH_EXTERNAL_PROFILE_SIP_PORT__|${external_sip_port}|g" \
+    -e "s|__FREESWITCH_EXTERNAL_PROFILE_TLS_PORT__|${external_tls_port}|g" \
+    -e "s|__FREESWITCH_WEBRTC_WSS_PORT__|${webrtc_wss_port}|g" \
+    -e "s|__SIP_TRUNK_MODE__|${trunk_mode}|g" \
+    -e "s|__SIP_TRUNK_PROXY__|${trunk_proxy}|g" \
+    -e "s|__SIP_TRUNK_REALM__|${trunk_realm}|g" \
+    -e "s|__SIP_TRUNK_OUTBOUND_PROXY__|${trunk_outbound_proxy}|g" \
+    -e "s|__SIP_TRUNK_USERNAME__|${trunk_username}|g" \
+    -e "s|__SIP_TRUNK_PASSWORD__|${trunk_password}|g" \
+    -e "s|__SIP_TRUNK_CALLER_ID__|${trunk_caller_id}|g" \
     "$src" > "$dst"
 }
 
@@ -104,7 +142,6 @@ mkdir -p "$LOG_DIR"
 touch "$LOG_DIR/freeswitch.log"
 mkdir -p "$DB_DIR"
 mkdir -p "$CONFIG_DIR/autoload_configs"
-mkdir -p "$CONFIG_DIR/dialplan/default"
 mkdir -p "$CONFIG_DIR/sip_profiles/external"
 
 # The base image ships vanilla internal profiles that bind 5060. This stack
@@ -112,6 +149,12 @@ mkdir -p "$CONFIG_DIR/sip_profiles/external"
 # vanilla internal profiles to avoid host-mode port conflicts.
 rm -f "$CONFIG_DIR/sip_profiles/internal.xml"
 rm -f "$CONFIG_DIR/sip_profiles/internal-ipv6.xml"
+
+# This is an outbound-only control plane. Remove the base image's callable
+# default/public extensions so authenticated browser agents and inbound trunk
+# traffic cannot reach PSTN/features outside backend-owned ESL originate.
+rm -rf "$CONFIG_DIR/dialplan/default" "$CONFIG_DIR/dialplan/agent-ingress" "$CONFIG_DIR/dialplan/public"
+mkdir -p "$CONFIG_DIR/dialplan/default" "$CONFIG_DIR/dialplan/agent-ingress" "$CONFIG_DIR/dialplan/public"
 
 rm -rf "$CONFIG_DIR/directory/default"
 mkdir -p "$CONFIG_DIR/directory"
@@ -121,14 +164,14 @@ render "$TEMPLATE_DIR/autoload_configs/event_socket.conf.xml.tpl" "$CONFIG_DIR/a
 render "$TEMPLATE_DIR/autoload_configs/avmd.conf.xml.tpl" "$CONFIG_DIR/autoload_configs/avmd.conf.xml"
 render "$TEMPLATE_DIR/vars.xml.tpl" "$CONFIG_DIR/vars.xml"
 render "$TEMPLATE_DIR/sip_profiles/internal-webrtc.xml.tpl" "$CONFIG_DIR/sip_profiles/internal-webrtc.xml"
-render "$TEMPLATE_DIR/dialplan/default/outbound-sip-trunk.xml.tpl" "$CONFIG_DIR/dialplan/default/outbound-sip-trunk.xml"
 render "$TEMPLATE_DIR/dialplan/default/voicemail-drop.xml.tpl" "$CONFIG_DIR/dialplan/default/voicemail-drop.xml"
+render "$TEMPLATE_DIR/dialplan/agent-ingress/reject.xml.tpl" "$CONFIG_DIR/dialplan/agent-ingress/reject.xml"
+render "$TEMPLATE_DIR/dialplan/public/reject.xml.tpl" "$CONFIG_DIR/dialplan/public/reject.xml"
 ensure_module_load "mod_avmd"
 ensure_module_load "mod_amd"
 disable_module_load "mod_signalwire"
 
 legacy_name="ma${EMPTY:-}xo"
-rm -f "$CONFIG_DIR/dialplan/default/outbound-${legacy_name}.xml"
 
 if [ "${SIP_TRUNK_MODE:-registration}" = "registration" ] && [ -n "${SIP_TRUNK_PROXY:-}" ] && [ -n "${SIP_TRUNK_USERNAME:-}" ]; then
   render "$TEMPLATE_DIR/sip_profiles/external/sip-trunk-gateway.xml.tpl" "$CONFIG_DIR/sip_profiles/external/sip-trunk-gateway.xml"

@@ -1,10 +1,95 @@
 import type pg from "pg";
-import type { ImportCsvResponse } from "@outbound-dialer/shared";
+import type { ImportCsvResponse, SuppressionImportResponse } from "@outbound-dialer/shared";
 import { normalizePhoneNumber } from "./phone.js";
 
 export interface ParsedCsv {
   headers: string[];
   rows: string[][];
+}
+
+export async function importSuppressionFromCsv(
+  pool: pg.Pool,
+  input: {
+    actorUserId: string;
+    filename: string;
+    parsed: ParsedCsv;
+    defaultCountryCode?: string;
+  }
+): Promise<SuppressionImportResponse> {
+  const phoneIndex = findColumn(input.parsed.headers, ["phone", "phone_number", "number", "mobile", "cell"]);
+  if (phoneIndex === -1) {
+    throw new CsvImportError("Suppression CSV must include a phone column");
+  }
+  const reasonIndex = findColumn(input.parsed.headers, ["reason", "note", "notes"]);
+  const client = await pool.connect();
+  let importedRows = 0;
+  let updatedRows = 0;
+  const failures: SuppressionImportResponse["failures"] = [];
+
+  try {
+    await client.query("begin");
+    for (const [rowIndex, row] of input.parsed.rows.entries()) {
+      const rowNumber = rowIndex + 2;
+      const phoneNumber = (row[phoneIndex] ?? "").trim();
+      const reason = (reasonIndex >= 0 ? row[reasonIndex] : "")?.trim() || "Suppression CSV import";
+      const normalized = normalizePhoneNumber(phoneNumber, input.defaultCountryCode);
+      if (!normalized.ok) {
+        failures.push({ rowNumber, reason: normalized.reason });
+        continue;
+      }
+
+      const result = await client.query<{ id: string; inserted: boolean }>(
+        `
+          insert into suppression_entries (phone_number, normalized_phone_number, reason, created_by_user_id)
+          values ($1, $2, $3, $4)
+          on conflict (normalized_phone_number)
+          do update set phone_number = excluded.phone_number,
+                        reason = excluded.reason,
+                        created_by_user_id = excluded.created_by_user_id
+          returning id, (xmax = 0) as inserted
+        `,
+        [phoneNumber, normalized.number, reason, input.actorUserId]
+      );
+      const item = result.rows[0];
+      if (item.inserted) {
+        importedRows += 1;
+      } else {
+        updatedRows += 1;
+      }
+      await client.query(
+        `
+          insert into suppression_events (
+            suppression_entry_id, actor_user_id, event_type, phone_number,
+            normalized_phone_number, reason, metadata_json
+          )
+          values ($1, $2, 'imported', $3, $4, $5, $6::jsonb)
+        `,
+        [
+          item.id,
+          input.actorUserId,
+          phoneNumber,
+          normalized.number,
+          reason,
+          JSON.stringify({ filename: input.filename, rowNumber })
+        ]
+      );
+    }
+    await client.query("commit");
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
+  } finally {
+    client.release();
+  }
+
+  return {
+    filename: input.filename,
+    totalRows: input.parsed.rows.length,
+    importedRows,
+    updatedRows,
+    failedRows: failures.length,
+    failures: failures.slice(0, 50)
+  };
 }
 
 export class CsvImportError extends Error {}
@@ -102,7 +187,13 @@ export async function importContactsFromCsv(
       if (insertResult.rowCount) {
         importedRows += 1;
       } else {
-        await insertCsvImportFailure(client, importId, rowNumber, "Duplicate phone number in this campaign", mappedFields);
+        await insertCsvImportFailure(
+          client,
+          importId,
+          rowNumber,
+          "Duplicate phone number in this campaign",
+          mappedFields
+        );
         duplicateRows += 1;
         failedRows += 1;
       }
@@ -226,7 +317,11 @@ function findColumn(headers: string[], candidates: string[]): number {
 }
 
 function normalizeHeader(value: string): string {
-  return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
 }
 
 export function isCsvFilename(filename: string): boolean {

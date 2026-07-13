@@ -3,6 +3,7 @@ import { Counter, Gauge, Histogram, Registry, collectDefaultMetrics } from "prom
 import type pg from "pg";
 import type { AppConfig } from "./config.js";
 import { canOriginateCustomerLeg, sendFreeSwitchApiCommand } from "./esl.js";
+import { setFreeSwitchEventListenerSubscribed } from "./esl-listener-state.js";
 
 const registry = new Registry();
 const requestStartedAt = new WeakMap<FastifyRequest, bigint>();
@@ -34,20 +35,58 @@ const databaseSnapshotUp = new Gauge({
 });
 
 const activeCalls = gauge("outbound_dialer_active_calls", "Current non-terminal calls.");
-const stuckCalls = gauge("outbound_dialer_stuck_calls", "Current non-terminal calls older than the configured threshold.");
-const registeredAgents = gauge("outbound_dialer_registered_agents", "Agents currently registered with FreeSWITCH.");
+const stuckCalls = gauge(
+  "outbound_dialer_stuck_calls",
+  "Current non-terminal calls older than the configured threshold."
+);
+const registeredAgents = gauge(
+  "outbound_dialer_registered_agents",
+  "Agents currently registered with FreeSWITCH."
+);
 const totalAgents = gauge("outbound_dialer_agents", "Agents currently stored in PostgreSQL.");
-const callsAttemptedWindow = gauge("outbound_dialer_calls_attempted_window", "Calls created during the monitoring window.");
-const callsAnsweredWindow = gauge("outbound_dialer_calls_answered_window", "Calls answered during the monitoring window.");
-const callsFailedWindow = gauge("outbound_dialer_calls_failed_window", "Calls failed during the monitoring window.");
+const callsAttemptedWindow = gauge(
+  "outbound_dialer_calls_attempted_window",
+  "Calls created during the monitoring window."
+);
+const callsAnsweredWindow = gauge(
+  "outbound_dialer_calls_answered_window",
+  "Calls answered during the monitoring window."
+);
+const callsFailedWindow = gauge(
+  "outbound_dialer_calls_failed_window",
+  "Calls failed during the monitoring window."
+);
 const recordingFailuresWindow = gauge(
   "outbound_dialer_recording_failures_window",
   "Call recording failures during the monitoring window."
 );
 const voicemailDropsWindow = gauge(
   "outbound_dialer_voicemail_drops_window",
-  "Completed voicemail drops during the monitoring window."
+  "Voicemail drops with confirmed playback completion during the monitoring window."
 );
+const retentionEnabled = gauge(
+  "outbound_dialer_retention_enabled",
+  "Whether automatic call and recording retention is enabled."
+);
+const retentionLastSuccess = gauge(
+  "outbound_dialer_retention_last_success_timestamp_seconds",
+  "Unix timestamp of the most recent successful retention run."
+);
+const retentionFailures = new Counter({
+  name: "outbound_dialer_retention_failures_total",
+  help: "Automatic retention runs that failed.",
+  registers: [registry]
+});
+const retentionDeletedCalls = new Counter({
+  name: "outbound_dialer_retention_deleted_calls_total",
+  help: "Call rows deleted by automatic retention.",
+  registers: [registry]
+});
+const retentionDeletedRecordings = new Counter({
+  name: "outbound_dialer_retention_deleted_recordings_total",
+  help: "Call recording files deleted or confirmed absent by automatic retention.",
+  registers: [registry]
+});
 
 const eslListenerConnected = gauge(
   "outbound_dialer_esl_listener_connected",
@@ -73,6 +112,24 @@ const eslEventErrors = new Counter({
   help: "FreeSWITCH ESL events that failed during persistence.",
   registers: [registry]
 });
+const eslPersistenceQueueDepth = gauge(
+  "outbound_dialer_esl_persistence_queue_depth",
+  "FreeSWITCH ESL events currently waiting for ordered persistence, including the event being processed."
+);
+const eslPersistenceQueueCapacity = gauge(
+  "outbound_dialer_esl_persistence_queue_capacity",
+  "Configured maximum number of FreeSWITCH ESL events retained for ordered persistence."
+);
+const eslPersistenceRetries = new Counter({
+  name: "outbound_dialer_esl_persistence_retries_total",
+  help: "FreeSWITCH ESL persistence retries after transient failures.",
+  registers: [registry]
+});
+const eslPersistenceOverflows = new Counter({
+  name: "outbound_dialer_esl_persistence_overflows_total",
+  help: "FreeSWITCH ESL listener disconnects caused by a full persistence queue.",
+  registers: [registry]
+});
 
 const sipTrunkConfigured = new Gauge({
   name: "outbound_dialer_sip_trunk_configured",
@@ -91,6 +148,7 @@ eslListenerConnected.set(0);
 
 export function registerMetrics(app: FastifyInstance, config: AppConfig, pool: pg.Pool): void {
   eslListenerEnabled.set(config.FREESWITCH_ESL_ENABLED ? 1 : 0);
+  retentionEnabled.set(config.RETENTION_ENABLED ? 1 : 0);
   app.addHook("onRequest", async (request) => {
     requestStartedAt.set(request, process.hrtime.bigint());
   });
@@ -108,13 +166,34 @@ export function registerMetrics(app: FastifyInstance, config: AppConfig, pool: p
   });
 
   app.get("/metrics", async (_request, reply) => {
-    await Promise.all([refreshDatabaseMetrics(pool, config.MONITORING_STUCK_CALL_SECONDS), refreshSipTrunkMetrics(config)]);
+    await Promise.all([
+      refreshDatabaseMetrics(pool, config.MONITORING_STUCK_CALL_SECONDS),
+      refreshSipTrunkMetrics(config)
+    ]);
     return reply.header("Content-Type", registry.contentType).send(await registry.metrics());
   });
 }
 
 export function setFreeSwitchEventListenerConnected(connected: boolean): void {
+  setFreeSwitchEventListenerSubscribed(connected);
   eslListenerConnected.set(connected ? 1 : 0);
+}
+
+export function configureFreeSwitchEventQueueMetrics(capacity: number): void {
+  eslPersistenceQueueCapacity.set(capacity);
+  eslPersistenceQueueDepth.set(0);
+}
+
+export function setFreeSwitchEventQueueDepth(depth: number): void {
+  eslPersistenceQueueDepth.set(depth);
+}
+
+export function recordFreeSwitchPersistenceRetry(): void {
+  eslPersistenceRetries.inc();
+}
+
+export function recordFreeSwitchPersistenceOverflow(): void {
+  eslPersistenceOverflows.inc();
 }
 
 export function recordFreeSwitchEslReconnect(): void {
@@ -127,6 +206,16 @@ export function recordFreeSwitchEventProcessed(eventName: string | undefined): v
 
 export function recordFreeSwitchEventError(): void {
   eslEventErrors.inc();
+}
+
+export function recordRetentionSuccess(result: { calls: number; recordingFiles: number }): void {
+  retentionLastSuccess.set(Date.now() / 1000);
+  retentionDeletedCalls.inc(result.calls);
+  retentionDeletedRecordings.inc(result.recordingFiles);
+}
+
+export function recordRetentionFailure(): void {
+  retentionFailures.inc();
 }
 
 async function refreshDatabaseMetrics(pool: pg.Pool, stuckCallSeconds: number): Promise<void> {
@@ -158,8 +247,8 @@ async function refreshDatabaseMetrics(pool: pg.Pool, stuckCallSeconds: number): 
           (select count(*) from calls where created_at >= now() - interval '15 minutes') as attempted,
           (select count(*) from calls where answered_at >= now() - interval '15 minutes') as answered,
           (select count(*) from calls where ended_at >= now() - interval '15 minutes' and (state = 'failed' or outcome = 'failed')) as failed,
-          (select count(*) from call_events where created_at >= now() - interval '24 hours' and event_type = 'call_recording_failed') as recording_failures,
-          (select count(*) from call_events where created_at >= now() - interval '24 hours' and event_type = 'voicemail_playback_completed') as voicemail_drops
+          (select count(*) from call_events where created_at >= now() - interval '24 hours' and event_type in ('call_recording_failed', 'call_recording_integrity_failed')) as recording_failures,
+          (select count(*) from calls where voicemail_playback_completed_at >= now() - interval '24 hours' and outcome = 'voicemail_dropped') as voicemail_drops
       `)
     ]);
 
@@ -210,7 +299,10 @@ function gauge(name: string, help: string): Gauge {
 }
 
 function normalizeEventName(value: string | undefined): string {
-  const normalized = value?.trim().toUpperCase().replace(/[^A-Z0-9_]/g, "_");
+  const normalized = value
+    ?.trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9_]/g, "_");
   return normalized || "UNKNOWN";
 }
 
@@ -220,6 +312,8 @@ function toNumber(value: string | undefined): number {
 }
 
 export const __testing = {
+  metrics: () => registry.metrics(),
   normalizeEventName,
+  refreshDatabaseMetrics,
   toNumber
 };

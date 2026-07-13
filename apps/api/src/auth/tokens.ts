@@ -6,6 +6,7 @@ export interface AuthTokenPayload {
   sub: string;
   email: string;
   role: UserRole;
+  ver: number;
   exp: number;
 }
 
@@ -32,8 +33,17 @@ export function verifyAuthToken(config: AppConfig, token: string): AuthTokenPayl
     return null;
   }
 
-  const payload = JSON.parse(Buffer.from(body, "base64url").toString("utf8")) as AuthTokenPayload;
-  if (!payload.sub || !payload.email || !payload.role || payload.exp < Math.floor(Date.now() / 1000)) {
+  const decoded = JSON.parse(Buffer.from(body, "base64url").toString("utf8")) as Partial<AuthTokenPayload>;
+  const payload = { ...decoded, ver: decoded.ver ?? 1 } as AuthTokenPayload;
+  if (
+    !payload.sub ||
+    !payload.email ||
+    !payload.role ||
+    !Number.isInteger(payload.ver) ||
+    payload.ver < 1 ||
+    !Number.isInteger(payload.exp) ||
+    payload.exp < Math.floor(Date.now() / 1000)
+  ) {
     return null;
   }
 

@@ -1,488 +1,146 @@
-# Outbound Dialer Implementation Plan
-
-## Goal
-
-Build a production-ready outbound dialer where agents use a browser softphone for calls, while all outbound telephony actions remain backend-controlled. The system must support:
-
-- Click-to-call from an agent dashboard.
-- Manual "Drop Voicemail" action during an active call.
-- Agent release from the call once voicemail playback starts.
-- Prerecorded voicemail audio played into the active customer leg.
-- Campaigns with CSV lead import for the current `name` and `phone` contract.
-- DNCR/suppression checks before dialing.
-- Optional manual number entry controlled by admin settings.
-- Optional call recording controlled by configuration/admin settings.
-- VM/beep detection signals visible to agents when available, while manual voicemail drop remains the MVP control path.
-- Call state tracking, call-control/event logging, and outcome tracking.
-- SIP trunk integration through a provider-neutral SIP trunk or compatible telephony setup.
-- Secure call control owned by the backend, not by browser extensions or frontend-originated PSTN calls.
-
-## Delivery Principles
-
-- Build vertical slices that can be demonstrated end to end.
-- Keep FreeSWITCH call-control behavior observable through ESL events and explicit call-state records.
-- Treat the browser softphone as an authenticated agent endpoint, not as an authority to dial PSTN destinations.
-- Store every call-control action and telephony event needed to debug a call later.
-- Document operational setup while building it, not after the fact.
-- Keep implementation choices reversible until validated with a real SIP trunk.
-- Keep provider-specific trunk details out of the Web UI for the first version; configure them through deployment/runtime configuration.
-
-## Phase 0 - Discovery And Scope Lock
-
-### Tasks
-
-- Confirm SIP trunk details:
-  - Registration mode or IP-auth mode from the provider, while implementation supports both.
-  - SIP proxy, realm, outbound proxy, codec requirements, caller ID policy, allowed IPs.
-  - No SIP trunk TLS/SRTP requirement is assumed, but WebRTC WSS remains required for browser media.
-- Confirm production host constraints:
-  - Ubuntu 24, current Docker, public IP/firewall/NAT shape, TLS certificate strategy, DNS, deploy access.
-  - Required ports for SIP, RTP, ESL, API, WebSocket, and WebRTC WSS.
-- Confirm product boundaries:
-  - Manual voicemail drop is MVP behavior; VM/beep detection is displayed as a signal for future automation evaluation.
-  - Global recordings with one default recording.
-  - Local username/password auth with `agent` and `admin` roles.
-  - DNCR/suppression-list checks are in MVP; broader compliance ownership is out of scope.
-- Confirm data inputs:
-  - Contacts/leads come from CSV import.
-  - Campaigns are in scope.
-  - Flexible CSV field mapping is deferred until client source formats require it.
-  - Required automatically determined call outcomes.
-
-### Deliverables
-
-- Updated [open questions](open-questions.md).
-- Updated [requirements](requirements.md).
-- SIP trunk checklist.
-- Confirmed MVP acceptance criteria.
-
-### Acceptance Criteria
-
-- No unknowns block the first end-to-end demo.
-- Any deferred items are explicitly marked as post-MVP or blocked by external input.
-
-## Phase 1 - Repository And Local Environment Foundation
-
-### Tasks
-
-- Create the monorepo structure:
-  - `apps/api` for Node.js TypeScript backend.
-  - `apps/web` for Web UI.
-  - `packages/shared` for shared types and schemas.
-  - `infra/freeswitch` for FreeSWITCH configuration.
-  - `infra/docker` for Docker Compose and runtime scripts.
-- Add baseline tooling:
-  - TypeScript strict mode.
-  - ESLint and formatter.
-  - Unit test runner.
-  - Docker Compose for API, web, FreeSWITCH, and PostgreSQL.
-  - `.env.example` with required runtime variables.
-- Create initial database migrations:
-  - Users.
-  - Agents.
-  - Calls.
-  - Call legs.
-  - Call events.
-  - Campaigns.
-  - Contacts/leads.
-  - CSV import jobs.
-  - Validation for recognized `name` and `phone` columns.
-  - Recordings.
-  - Call recording settings and metadata.
-  - Suppression entries.
-  - System settings.
-  - VM/beep detection events.
-- Add local auth:
-  - Password hashing.
-  - Session/JWT handling.
-  - `agent` and `admin` roles.
-  - Automatic SIP credential generation for agents.
-
-### Deliverables
-
-- Local Docker environment boots deterministically.
-- API health check can reach PostgreSQL and FreeSWITCH ESL.
-- Web app can reach API health endpoint.
-
-### Acceptance Criteria
-
-- A new developer can run one documented command and see all local services healthy.
-- FreeSWITCH ESL connectivity is tested by the backend at startup and exposed in health output.
-
-## Phase 2 - FreeSWITCH And WebRTC Softphone Baseline
-
-### Tasks
-
-- Configure FreeSWITCH SIP profiles:
-  - Internal WebRTC profile for browser SIP over WSS.
-  - External gateway/profile for SIP trunk.
-  - Support both registration-based and IP-authenticated SIP trunk configuration.
-  - RTP port range and NAT configuration.
-  - TLS certificate mount for WSS where needed.
-- Configure codec strategy:
-  - Prefer Opus for WebRTC browser media where practical.
-  - Support PSTN-compatible fallback/transcoding for the SIP trunk provider, likely PCMU/PCMA depending on provider behavior.
-- Select and integrate browser SIP client:
-  - Recommended first option: SIP.js with FreeSWITCH SIP over WebSocket.
-  - Keep the browser limited to agent registration and answering backend-originated internal calls.
-- Implement agent endpoint lifecycle:
-  - Agent logs in to Web UI.
-  - Agent softphone registers with FreeSWITCH using short-lived backend-issued credentials or provisioned credentials.
-  - UI shows registration state, microphone permission state, and active call state.
-- Add backend tracking of agent availability:
-  - Online/offline.
-  - SIP registered/unregistered.
-  - Idle/ringing/in-call/wrapping.
-
-### Deliverables
-
-- Browser softphone can register to FreeSWITCH locally.
-- Backend can detect or infer agent registration state.
-- Agent can receive an internal test call.
-
-### Acceptance Criteria
-
-- The browser cannot directly dial arbitrary PSTN numbers.
-- Internal test calls show useful state transitions in the UI and backend logs.
-
-## Phase 3 - Backend-Owned Click-To-Call
-
-### Tasks
-
-- Implement authenticated backend API:
-  - `POST /calls` to request click-to-call.
-  - `GET /calls/:id` for current call state.
-  - WebSocket or Server-Sent Events for live call updates.
-- Implement campaign/contact APIs:
-  - CSV upload.
-  - Field mapping preview.
-  - Campaign contact list.
-  - Campaign activation/pausing.
-- Implement ESL call orchestration:
-  - Originate an agent leg to the authenticated agent's registered WebRTC endpoint.
-  - After the agent answers, originate the customer leg through the SIP trunk.
-  - Bridge the two legs.
-  - Persist call, leg, bridge, answer, hangup, and failure events.
-- Add authorization rules:
-  - Agent can start calls only for allowed contacts/campaigns.
-  - Agent can type arbitrary numbers only when admin settings allow manual dialing.
-  - Agent can only control calls assigned to them.
-  - Admin can inspect all calls.
-- Add suppression rules:
-  - Normalize destination numbers before dialing.
-  - Check suppression list before originating the customer leg.
-  - Log suppressed attempts without sending them to FreeSWITCH or the SIP trunk.
-- Add failure handling:
-  - Agent unavailable.
-  - Agent rejects or misses the internal call.
-  - SIP trunk failure.
-  - Customer busy/no-answer.
-  - ESL disconnect/reconnect.
-
-### Deliverables
-
-- Agent dashboard click-to-call works locally with a test SIP target.
-- Call-state events stream to the UI in real time.
-- All state transitions are written to PostgreSQL.
-
-### Acceptance Criteria
-
-- No PSTN destination is sent from the frontend directly to FreeSWITCH.
-- Backend logs include enough correlation IDs to trace every call leg.
-- Hangup from either side produces a final call outcome.
-
-## Phase 4 - Manual Voicemail Drop And Agent Release
-
-### Tasks
-
-- Add recording management foundation:
-  - Store metadata in PostgreSQL.
-  - Mount audio files into FreeSWITCH.
-  - Accept WAV/MP3 uploads from admins.
-  - Transcode uploads to the runtime format required by FreeSWITCH.
-  - Validate file format, codec, duration, and safe filename.
-  - Support a global default recording.
-- Implement API:
-  - `POST /calls/:id/drop-voicemail`.
-  - Request includes selected recording ID.
-  - Backend validates agent ownership and current call state.
-- Implement FreeSWITCH behavior:
-  - Identify the customer leg and agent leg for the active bridge.
-  - Transfer or park the customer leg into a voicemail-drop dialplan/app.
-  - Play the prerecorded audio into the customer leg.
-  - Release the agent leg immediately after playback starts.
-  - Hang up the customer leg automatically after playback completes.
-- Add VM/beep signal handling:
-  - Capture detection events or inferred signals where FreeSWITCH/provider behavior allows it.
-  - Show VM/beep status to the agent without automatically triggering voicemail drop in MVP.
-  - Persist detection events for later reliability analysis.
-- Persist call outcome:
-  - `voicemail_drop_requested`.
-  - `voicemail_playback_started`.
-  - `agent_released`.
-  - `voicemail_playback_completed`.
-  - Final automatically determined call outcome.
-- Add defensive handling:
-  - Button disabled until a bridged customer leg exists.
-  - Idempotent drop request.
-  - Race between customer hangup and drop request.
-  - Race between agent hangup and drop request.
-
-### Deliverables
-
-- Manual "Drop Voicemail" button works end to end.
-- Agent leg disconnects once voicemail playback starts.
-- Customer leg continues long enough to play the selected audio.
-
-### Acceptance Criteria
-
-- A live demo call proves the full voicemail-drop-and-release flow.
-- Event log clearly shows agent release and customer playback as separate events.
-- Repeated button presses do not start duplicate playback.
-
-## Phase 5 - Call Logging, Outcomes, And Admin Controls
-
-### Tasks
-
-- Implement call history views:
-  - Agent call log.
-  - Admin call log.
-  - Per-call timeline with ESL/API events.
-- Implement automatic outcomes:
-  - Answered.
-  - Not answered.
-  - Busy.
-  - Failed.
-  - Voicemail detected.
-  - Voicemail dropped.
-  - Agent canceled.
-  - Customer hung up.
-  - Suppressed.
-- Implement admin recording controls:
-  - Upload/update/delete recordings.
-  - Activate/deactivate recordings.
-  - Set global default recording.
-  - Preview playback.
-- Implement user controls:
-  - Local username/password users.
-  - Automatic agent SIP credential generation.
-  - Agent permissions.
-  - Admin permissions.
-- Implement campaign and CSV controls:
-  - Campaign create/edit/pause/archive.
-  - CSV upload.
-  - Field mapping.
-  - Import validation.
-  - Lead list and import error review.
-- Implement suppression/DNCR:
-  - Import list.
-  - Manual add/remove.
-  - Enforce check before `POST /calls` originates any call.
-  - Log suppression hits.
-- Implement call recording controls:
-  - Global or campaign-level toggle, pending final setting choice.
-  - Store recording metadata with calls.
-  - Show recording state where relevant.
-- Implement retention:
-  - Default one-week retention for call logs unless configured otherwise.
-  - Clarify whether retention applies to all metadata or detailed event payloads only.
-
-### Deliverables
-
-- Admin can manage recordings and users.
-- Admin can manage campaigns, CSV imports, and suppression list.
-- Agents and admins can inspect call outcomes.
-- Suppression handling prevents outbound calls before origination.
-
-### Acceptance Criteria
-
-- Every call has a final outcome.
-- Every voicemail drop has an associated recording ID and event timeline.
-- Call recording status is visible in call detail.
-
-## Phase 6 - UI Design And Product Polish
-
-### Tasks
-
-- Produce Figma designs for:
-  - Agent dashboard.
-  - Embedded softphone states.
-  - Active call controls.
-  - Drop voicemail confirmation/selection.
-  - Lead detail panel with all available imported fields.
-  - VM/beep detection signal display.
-  - Campaign list and campaign workspace.
-  - CSV upload and `name`/`phone` validation.
-  - Call history.
-  - Admin recordings.
-  - Admin users.
-  - Admin suppression list.
-  - Admin system settings for manual dialing and call recording.
-  - Empty, loading, error, and permission states.
-- Implement the UI from design:
-  - React TypeScript app.
-  - Shared design tokens.
-  - Responsive desktop-first agent workflow.
-  - Accessible controls for call actions.
-- Add real-time state handling:
-  - Registration status.
-  - Call progress.
-  - Active bridge state.
-  - VM/beep detection signal state.
-  - Voicemail playback state.
-  - Failure messages that map to backend reasons.
-
-### Deliverables
-
-- Figma file linked from docs once created.
-- Implemented UI matches approved design.
-- Dashboard is usable for the live demo without hidden developer tools.
-
-### Acceptance Criteria
-
-- Primary call workflow can be completed by an agent without instructions.
-- Dangerous actions are confirmed or safely constrained.
-- UI never shows a call action that the backend would reject for the current state.
-
-## Phase 7 - Reliability, Race-Condition, And Load Testing
-
-### Tasks
-
-- Add automated tests:
-  - Unit tests for call-state reducer/state machine.
-  - API integration tests for authorization and idempotency.
-  - ESL adapter tests with mocked events.
-  - UI component tests for call controls.
-- Add scenario tests:
-  - Agent misses internal call.
-  - Customer no-answer.
-  - Customer hangs up during voicemail drop.
-  - Agent clicks drop voicemail twice.
-  - Suppressed number blocks before customer leg origination.
-  - CSV import with alternate field names.
-  - Manual dialing disabled blocks arbitrary number entry.
-  - VM/beep detection event appears in call timeline.
-  - ESL reconnect during active call.
-  - SIP trunk returns failure.
-- Add load and soak tests:
-  - Concurrent agents.
-  - Concurrent outbound calls.
-  - Event storm handling.
-  - Database write pressure.
-- Add observability:
-  - Structured logs.
-  - Correlation IDs.
-  - Metrics for calls, failures, ESL reconnects, voicemail playback.
-  - Health checks and readiness checks.
-
-### Deliverables
-
-- Repeatable test commands.
-- Documented known limits.
-- Load-test report before production rollout.
-
-### Acceptance Criteria
-
-- Critical race conditions are covered by tests.
-- Backend recovers from ESL reconnect without corrupting terminal call states.
-- Load test reaches agreed target concurrency.
-
-## Phase 8 - Production Deployment
-
-### Tasks
-
-- Prepare Linux server:
-  - Docker runtime.
-  - Firewall rules.
-  - DNS.
-  - Automated Let's Encrypt TLS certificates.
-  - Persistent volumes for PostgreSQL, FreeSWITCH config, recordings, and logs.
-- Prepare AWS/NAT deployment details:
-  - Public signaling endpoints.
-  - RTP port exposure.
-  - SIP advertised host/IP settings.
-  - WebRTC WSS domain configuration.
-- Deploy services:
-  - API.
-  - Web app.
-  - PostgreSQL.
-  - FreeSWITCH.
-  - Reverse proxy for HTTPS/WSS.
-- Configure SIP trunk:
-  - SIP gateway in registration or IP-auth mode.
-  - Caller ID.
-  - Codecs.
-  - NAT/RTP.
-  - Allowed IPs.
-- Run production validation:
-  - Browser registration.
-  - Click-to-call.
-  - Manual voicemail drop.
-  - Agent release.
-  - Call logs.
-  - Admin recording controls.
-
-### Deliverables
-
-- Production deployment running on the target server.
-- Deployment docs with exact commands and environment variables.
-- Troubleshooting docs for SIP, WebRTC, RTP, ESL, and SIP trunk failures.
-- PCAP capture procedure for failed-call investigation.
-
-### Acceptance Criteria
-
-- A live production-like call completes the full flow.
-- Server reboot/redeploy behavior is documented and validated.
-- Rollback path is documented.
-
-## Phase 9 - Handover
-
-### Tasks
-
-- Create handover docs:
-  - Agent dashboard usage.
-  - Admin recording management.
-  - User management.
-  - Voicemail-drop workflow.
-  - Common troubleshooting.
-  - Deployment and rollback.
-- Run training session:
-  - Agent workflow.
-  - Admin workflow.
-  - Basic operations.
-  - What logs to inspect for failed calls.
-- Finalize delivery package:
-  - Source code.
-  - Environment templates.
-  - Architecture docs.
-  - Test evidence.
-  - Known limitations.
-
-### Deliverables
-
-- Full setup, deployment, and troubleshooting documentation.
-- Handover training completed.
-- Final acceptance demo completed.
-
-### Acceptance Criteria
-
-- Team can run the app, place calls, drop voicemail, and inspect failures without developer intervention.
-- Remaining follow-ups are documented with owners and priority.
-
-## Suggested MVP Slice Order
-
-1. Local Docker foundation with FreeSWITCH, API, web, and PostgreSQL.
-2. Browser softphone registration to FreeSWITCH.
-3. Backend-originated internal test call to agent softphone.
-4. Backend click-to-call with a test SIP endpoint.
-5. SIP trunk integration.
-6. Full bridge: agent leg plus customer leg.
-7. Manual voicemail drop with agent release.
-8. Call logging and timeline.
-9. Campaign CSV import and suppression enforcement.
-10. Admin recording management with default voicemail recording.
-11. Optional call recording controls.
-12. VM/beep signal display.
-13. Production deployment and handover.
-
-This sequence gives us a demoable system early and keeps the highest-risk telephony behavior visible from the start.
+# Outbound Dialer Implementation Status And Completion Plan
+
+This document reconciles the original delivery plan with the current repository. “Implemented” means source and automated coverage exist; it does not mean the target SIP provider, production host, or client has accepted the behavior.
+
+## Outcome
+
+The planned single-tenant operational MVP is implemented in the repository. The remaining path to “complete” is evidence and external decision work: provider configuration, real call/voicemail validation, policy approval, load/recovery/restore drills, accessibility review, training, and sign-off.
+
+## Phase Status
+
+| Phase                      | Repository status                       | Remaining acceptance                                               |
+| -------------------------- | --------------------------------------- | ------------------------------------------------------------------ |
+| 0. Scope and discovery     | Product scope locked                    | Provider values, topology, legal/operational owners                |
+| 1. Foundation              | Implemented                             | Clean-environment onboarding evidence                              |
+| 2. FreeSWITCH/WebRTC       | Implemented                             | Target WSS/provider/NAT call validation                            |
+| 3. Backend call control    | Implemented                             | Live call matrix and agreed concurrency                            |
+| 4. Voicemail and recording | Implemented                             | Far-end mailbox proof and consent approval                         |
+| 5. Agent experience        | Implemented                             | Accessibility/usability acceptance                                 |
+| 6. Admin/reporting         | Implemented                             | Client workflow/report sign-off                                    |
+| 7. Reliability/testing     | Mechanisms and tests implemented        | Full CI evidence, load/soak, restart/recovery drills               |
+| 8. Production operations   | Scripts/monitoring/runbooks implemented | Target-host deploy, off-host alert/backup, restore/rollback drills |
+| 9. Handover                | Guides/checklist present                | Training, owner assignment, formal acceptance                      |
+
+Firewall and host-published-port changes were excluded by instruction. They are not counted as completed and require a separate deployment-owner review.
+
+## Completed Repository Work
+
+### 1. Foundation And Data Integrity
+
+- npm workspaces for API, web, and shared contracts; strict TypeScript, ESLint, Prettier, tests, builds, and CI workflow.
+- PostgreSQL migrations for users, agents, campaigns, contacts, calls, legs, events, recordings, suppression, media tickets, live notifications, administrative audit, and lifecycle hardening.
+- Transactional migration runner with advisory serialization/checksums and startup provisioning.
+- Database constraints and uniqueness for core lifecycle values, one agent per user, active-call/contact claims, and FreeSWITCH UUIDs.
+- Liveness/readiness endpoints that distinguish process health from PostgreSQL/ESL readiness.
+
+### 2. Authentication, Sessions, And Secrets
+
+- Local password authentication with `agent` and `admin` roles.
+- Browser sessions in an HttpOnly, production-secure, `SameSite=Strict` cookie.
+- Origin allowlist CSRF protection for cookie-authenticated mutations; Bearer compatibility retained for explicit API clients.
+- Per-IP login rate limiting, safe proxy trust, active-user/auth-version checks, logout, and session revocation on password reset/deactivation.
+- Generated agent SIP credentials and FreeSWITCH directory provisioning.
+- Dual-read SIP secret format with opt-in writes: rollback-compatible `v1`, independent-key `v2`, and transactional startup migration.
+
+### 3. FreeSWITCH, WSS, And Call Control
+
+- Repo-owned FreeSWITCH templates and runtime rendering for ESL, internal WebRTC, provider-neutral registration/IP-auth trunking, codecs, WSS, dialplan, and recordings.
+- SIP.js browser provisioning and registration only on Agent Desk, with remote audio cleanup and registration reconciliation.
+- Backend-owned agent-first originate/bridge, suppression and campaign authorization before originate, DTMF, hangup, and active-call eligibility.
+- Transactional next-contact claim using `FOR UPDATE SKIP LOCKED` and uniqueness guards against duplicate interactive calls.
+- Explicit call/leg/event persistence, originate watchdog, automatic outcome mapping, and contact lifecycle updates.
+- ESL frame unwrapping, custom-event subscription, agent registration updates, recording/AVMD startup, and reconnect retry.
+- Bounded ordered ESL persistence queue, exponential retry for transient database failures, explicit overflow disconnect/reconnect, queue metrics/alerts, and subscription-aware readiness.
+- Coalesced reconciliation after ESL subscription/reconnect and every configured interval: check active UUIDs, finalize missing calls, release orphaned agent legs where possible, and recover/finalize voicemail jobs.
+
+### 4. Voicemail Lifecycle And Audio
+
+- Transactional/idempotent voicemail-drop claim.
+- Distinct lifecycle timestamps and events for request, playback start, agent release, completion, failure, and interruption.
+- FreeSWITCH custom events emitted from the voicemail dialplan; completion is no longer inferred immediately from transfer.
+- Agent release occurs after playback-start evidence and only advances database state after confirmed release/already-missing channel.
+- Customer leg stays tracked as a background job until a terminal event; the agent may start another interactive call after release.
+- Reconciliation handles lost/restarted listeners without claiming a missing customer channel completed successfully.
+- WAV/MP3 upload is decoded and converted by ffmpeg/ffprobe to mono 8 kHz PCM WAV with loudness normalization and a five-minute limit.
+- Global recording list/default/preview/deactivation and call recording on the customer leg.
+- Scoped, short-lived, hashed media tickets and byte-range streaming for voicemail/call recording playback.
+
+### 5. Agent Experience And Live Updates
+
+- Agent Desk with campaign selection, next lead, manual number validation, click-to-call, DTMF, hangup, call timer/state, action eligibility, and automatic outcomes.
+- Manual voicemail selection/drop with background job tray and failure/interruption visibility.
+- VM/beep/AVMD signals shown as advisory evidence, never as an automatic drop trigger.
+- Admin access to Agent Desk without starting SIP/microphone outside the desk view.
+- Credentialed SSE refresh hints from PostgreSQL changes, EventSource reconnect, heartbeat, debounced refresh, and periodic HTTP fallback.
+- Minimal `name` + `phone` CSV workflow and product-facing copy that hides telephony plumbing.
+
+### 6. Administration, History, And Audit
+
+- Campaign create/edit/status/archive plus manual-dial, recording, and early-media AVMD flags.
+- Campaign contacts, import history/detail, row feedback, search, filters, and manual contact actions.
+- User create/edit/deactivate/reactivate/role/password lifecycle with preserved attribution and FreeSWITCH cleanup.
+- Suppression add/update/search/pagination/import/removal and durable change/blocked-dial events.
+- Paginated/filterable call history, detailed event timeline, bounded CSV export, and media playback.
+- Successful mutating admin requests recorded with actor/request/route/status/source metadata and bounded route parameters; paginated audit endpoint with actor/method/date filters.
+
+### 7. Retention, Monitoring, And Operations
+
+- Automatic retention at startup and a configurable interval, protected by a PostgreSQL advisory lock and in-process overlap guard.
+- Seven-day call-log and 30-day call-recording defaults.
+- Recording-aware deletion: call rows are retained while recording data is younger; metadata is cleared only after successful unlink or confirmed absence; failures preserve the row for retry.
+- Admin dry-run/immediate retention endpoint plus success/failure/deletion metrics.
+- Prometheus, Grafana, Alertmanager, Loki, Alloy, host/container/PostgreSQL/exporter checks, public HTTPS blackbox probe, and provisioned alerts/dashboard.
+- Runtime-native validation of all monitoring configs before deploy/restore, plus a dedicated read-only `outbound_dialer_exporter` PostgreSQL role instead of reusing the application-owner connection.
+- Production preflight for secret strength, env permissions, pinned FreeSWITCH image, alert destination, off-host backup or explicit exception, and Compose validation.
+- Quality-gated SHA-tagged deployment, active-call guard, pre-deploy backup, one migration run, health wait, certificate/cron setup, smoke test, and deployment-state record.
+- Previous-image rollback with explicit confirmation and forward-only database compatibility.
+- `ODBACKUP2` authenticated AES-256-GCM backups, optional S3 upload, verification, freshness metrics, guarded transactional restore, recordings snapshot, and smoke test.
+- Agent/admin guides, deployment/backup/incident/PCAP runbooks, limitations, and acceptance checklist.
+
+## Remaining Work Before Production Acceptance
+
+### P0 — External Decisions And Live Telephony
+
+- Obtain and record provider mode, proxy/realm/outbound proxy, credentials, caller ID rules, allowlisted IPs, codecs, response/hangup behavior, and throughput constraints.
+- Confirm target DNS, certificate names, public/NAT topology, advertised SIP/RTP addresses, and provider reachability.
+- Run a production-like call matrix: WSS registration, ringback/early media, human answer, busy, reject, no-answer, agent/customer hangup, DTMF, provider error, and recording.
+- Verify several representative far-end mailboxes record the complete voicemail after the agent is released. Local playback events are diagnostic evidence only.
+- Approve calling windows/timezone, retry/outcome policy, recording consent, DNCR evidence, retention/legal hold, and audit duration.
+
+### P0 — Recovery And Operational Proof
+
+- Run deploy and rollback drills with zero active calls and retain timestamps/logs/SHA evidence.
+- Deliver an authenticated backup off-host, verify it, and perform a clean-host database/recordings restore within approved RPO/RTO.
+- Exercise API restart, ESL disconnect/reconnect, FreeSWITCH restart, missing customer leg, interrupted voicemail playback, and provider rejection.
+- Configure a named Alertmanager receiver and an independent off-host uptime check; prove test alerts reach operators.
+- Assign owners/escalation contacts and exercise the incident and capture runbooks.
+
+### P1 — Quality And Handover Evidence
+
+- Run the complete CI/quality suite on the final SHA, including browser E2E and Compose validation.
+- Execute agreed multi-agent load/soak and race scenarios; record latency/error thresholds, duplicate-call checks, stuck-state checks, and database/resource growth.
+- Perform keyboard/screen-reader/focus/contrast review of Agent Desk and destructive admin flows.
+- Train agents/admins, review limitations, capture feedback, and sign the production checklist.
+
+## Improvements Beyond The Original MVP
+
+These additions should follow acceptance of the current behavior, not block it unless the client explicitly promotes them:
+
+- Outcome-specific scheduled callbacks, reason-coded pauses, and supervisor requeue controls beyond the implemented ready/pause/wrap-up flow.
+- KPI definitions and dashboards for answer/contact rate, calls/hour, AHT, retry efficiency, voicemail completion, AVMD precision, and false positives.
+- Object storage for recordings with lifecycle, immutable/legal-hold support, checksum verification, and managed key rotation.
+- Generated OpenAPI/runtime schemas so API and web share validation, not TypeScript types alone.
+- Split large call-control/UI modules behind one explicit transition service/state machine.
+- Accessibility shortcuts for call, hangup, DTMF, and voicemail with collision-safe confirmations.
+- Automatic voicemail drop only after measured AVMD performance, representative cohort review, and legal approval.
+- High availability or multi-tenancy only if the product moves beyond its current single-host/single-tenant operating model.
+
+## Definition Of Done
+
+The project is fully complete against this plan only when:
+
+1. the repository implementation remains green on the accepted SHA;
+2. all P0 external decisions have named owners and recorded answers;
+3. target-environment call, voicemail, restart, load, deploy/rollback, alert, backup, and restore evidence is attached;
+4. firewall/host-port review is handled separately by the deployment owner;
+5. client training and the [production acceptance checklist](acceptance-checklist.md) are signed off.

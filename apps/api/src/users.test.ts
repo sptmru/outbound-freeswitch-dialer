@@ -34,7 +34,8 @@ describe("user provisioning helpers", () => {
         id: "11111111-1111-4111-8111-111111111111",
         email: "agent@example.com",
         name: "Fallback Name",
-        role: "agent"
+        role: "agent",
+        isActive: true
       });
 
       assert.equal(provisioning.sipUsername, "agent_existing");

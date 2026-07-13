@@ -1,12 +1,19 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { mkdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
+import { createReadStream, createWriteStream } from "node:fs";
+import { mkdir, stat, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
+import { pipeline } from "node:stream/promises";
 import type pg from "pg";
 import type {
+  AdminCampaignListResponse,
   AdminOverviewResponse,
+  AdminAuditResponse,
+  AdminRecordingListResponse,
+  AdminUserListResponse,
   AgentDeskResponse,
   CallDetailResponse,
+  CallHistoryResponse,
   CampaignContactListItem,
   CampaignContactsResponse,
   CreateCampaignRequest,
@@ -27,17 +34,22 @@ import type {
   LeadSummary,
   ManualDialValidationResponse,
   MutationResponse,
+  MediaTicketResponse,
   PublicUser,
+  RetentionRunResponse,
   SendDtmfRequest,
   SoftphoneProvisioningResponse,
+  SuppressionImportResponse,
+  SuppressionListResponse,
   StartNextCallRequest,
   StartManualCallRequest,
   SuppressContactRequest,
+  UpdateAgentAvailabilityRequest,
   UpdateCampaignRequest
 } from "@outbound-dialer/shared";
 import { z } from "zod";
 import { requireUser } from "../auth/routes.js";
-import { verifyAuthToken } from "../auth/tokens.js";
+import { setAgentAvailability } from "../agent-availability.js";
 import type { AppConfig } from "../config.js";
 import {
   canOriginateCustomerLeg,
@@ -46,15 +58,15 @@ import {
   sendFreeSwitchApiCommand,
   sendFreeSwitchBgapiCommand
 } from "../esl.js";
-import { ensureAgentForUser, findUserById, getSoftphoneProvisioningForUser, toPublicUser } from "../users.js";
+import { ensureAgentForUser, getSoftphoneProvisioningForUser, toPublicUser } from "../users.js";
+import { getCsvImportsPage, getUsersPage } from "./admin-libraries.js";
 import {
   campaignExists,
   deleteCampaign,
   getAgentCampaign,
   getAgentCampaignForDialerAction,
-  getAgentCampaigns,
   getCampaignOverviewItem,
-  getCampaigns
+  getCampaignsPage
 } from "./campaigns.js";
 import {
   createDialerCall,
@@ -65,20 +77,30 @@ import {
   sendDtmfForCall,
   syncFreeSwitchOriginate
 } from "./calls.js";
-import { CsvImportError, importContactsFromCsv, isCsvFilename, parseCsv } from "./csv.js";
+import {
+  CsvImportError,
+  importContactsFromCsv,
+  importSuppressionFromCsv,
+  isCsvFilename,
+  parseCsv
+} from "./csv.js";
+import { createMediaTicket, verifyMediaTicket, type MediaResourceType } from "./media-tickets.js";
 import { validateDialableNumber } from "./manual-dial.js";
 import { normalizePhoneNumber } from "./phone.js";
 import {
   createRecording,
   deleteRecording,
-  detectAudioDurationSeconds,
   getMultipartFieldValue,
+  getRecordingsPage,
   getRecordingAudioFile,
   getRecordingContentType,
-  getRecordings,
   getSupportedRecordingExtension,
   normalizeRecordingName,
+  parseSingleByteRange,
   parseBooleanField,
+  RecordingProcessingError,
+  restoreDeletedRecording,
+  transcodeRecordingToCanonicalWav,
   setDefaultRecording
 } from "./recordings.js";
 import {
@@ -87,11 +109,15 @@ import {
   formatElapsed,
   getActiveCallActions,
   getCallDetail,
+  getCallHistoryPage,
   getCallRecordingAudioFile,
   mapCallStatus,
   mapVoicemailSignal
 } from "./responders.js";
 import { findSuppression } from "./suppression.js";
+import { runRetention } from "./retention.js";
+import { runRetentionWithAdvisoryLock } from "./retention-scheduler.js";
+import { recordRetentionFailure, recordRetentionSuccess } from "../metrics.js";
 
 const manualDialValidationSchema = z.object({
   phoneNumber: z.string().min(3),
@@ -118,7 +144,7 @@ const sendDtmfSchema = z.object({
 
 const createCampaignSchema = z.object({
   name: z.string().min(1).max(160),
-  status: z.enum(["active", "paused", "draft"]),
+  status: z.enum(["active", "paused", "draft", "archived"]),
   manualDialingEnabled: z.boolean(),
   callRecordingEnabled: z.boolean(),
   earlyMediaAvmdEnabled: z.boolean()
@@ -126,7 +152,9 @@ const createCampaignSchema = z.object({
 
 const updateCampaignSchema = z.object({
   name: z.string().min(1).max(160),
-  status: z.enum(["active", "paused", "draft"]),
+  status: z.enum(["active", "paused", "draft", "archived"]),
+  manualDialingEnabled: z.boolean(),
+  callRecordingEnabled: z.boolean(),
   earlyMediaAvmdEnabled: z.boolean()
 }) satisfies z.ZodType<UpdateCampaignRequest>;
 
@@ -135,7 +163,10 @@ const createContactSchema = z.object({
   name: z.string().min(1).max(160),
   phoneNumber: z.string().min(3).max(64),
   company: z.string().max(160).optional(),
-  fields: z.array(z.object({ label: z.string().min(1).max(80), value: z.string().max(400) })).max(20).optional()
+  fields: z
+    .array(z.object({ label: z.string().min(1).max(80), value: z.string().max(400) }))
+    .max(20)
+    .optional()
 }) satisfies z.ZodType<CreateContactRequest>;
 
 const createSuppressionSchema = z.object({
@@ -170,14 +201,77 @@ const recordingParamsSchema = z.object({
 });
 
 const recordingAudioQuerySchema = z.object({
-  token: z.string().optional()
+  ticket: z.string().min(32).max(200).optional()
+});
+
+const callHistoryQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce.number().int().min(1).max(100).default(25),
+  q: z.string().max(160).optional(),
+  campaignId: z.string().uuid().optional(),
+  agentId: z.string().uuid().optional(),
+  outcome: z
+    .enum([
+      "answered",
+      "not_answered",
+      "busy",
+      "failed",
+      "voicemail_detected",
+      "voicemail_dropped",
+      "agent_canceled",
+      "customer_hung_up",
+      "suppressed"
+    ])
+    .optional(),
+  from: z.coerce.date().optional(),
+  to: z.coerce.date().optional(),
+  voicemail: z.enum(["drop", "signal"]).optional(),
+  recording: z.enum(["available", "missing"]).optional()
+});
+
+const suppressionQuerySchema = z.object({
+  q: z.string().max(160).default(""),
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce.number().int().min(1).max(100).default(25)
+});
+
+const adminLibraryQuerySchema = z.object({
+  q: z.string().max(160).default(""),
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce.number().int().min(1).max(100).default(25)
+});
+
+const csvImportLibraryQuerySchema = adminLibraryQuerySchema.extend({
+  pageSize: z.coerce.number().int().min(1).max(100).default(20)
+});
+
+const retentionRunSchema = z.object({
+  dryRun: z.boolean().default(true)
+});
+
+const adminAuditQuerySchema = z.object({
+  page: z.coerce.number().int().positive().default(1),
+  pageSize: z.coerce.number().int().min(1).max(100).default(25),
+  actorId: z.string().uuid().optional(),
+  method: z.enum(["DELETE", "PATCH", "POST", "PUT"]).optional(),
+  dateFrom: z.string().datetime().optional(),
+  dateTo: z.string().datetime().optional()
 });
 
 const agentDeskQuerySchema = z.object({
   campaignId: z.string().uuid().optional()
 });
 
+const updateAgentAvailabilitySchema = z.object({
+  status: z.enum(["available", "paused"]),
+  campaignId: z.string().uuid().optional()
+}) satisfies z.ZodType<UpdateAgentAvailabilityRequest>;
+
 export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig, pool: pg.Pool): void {
+  const contactRetryPolicy = {
+    maxAttempts: config.CONTACT_MAX_ATTEMPTS,
+    retryDelaySeconds: config.CONTACT_RETRY_DELAY_SECONDS
+  };
   app.get("/agent/desk", async (request, reply): Promise<AgentDeskResponse | void> => {
     const user = await requireUser(request, config, pool);
     if (!user) {
@@ -185,17 +279,36 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
     }
 
     const query = agentDeskQuerySchema.parse(request.query);
-    return buildAgentDeskResponse(pool, toPublicUser(user), query.campaignId);
+    return buildAgentDeskResponse(pool, toPublicUser(user), query.campaignId, contactRetryPolicy);
   });
 
-  app.get("/agent/softphone/provisioning", async (request, reply): Promise<SoftphoneProvisioningResponse | void> => {
+  app.patch("/agent/availability", async (request, reply): Promise<AgentDeskResponse | void> => {
     const user = await requireUser(request, config, pool);
     if (!user) {
       return reply.code(401).send({ message: "Unauthorized" });
     }
 
-    return getSoftphoneProvisioningForUser(pool, config, toPublicUser(user));
+    const input = updateAgentAvailabilitySchema.parse(request.body);
+    const publicUser = toPublicUser(user);
+    const agent = await ensureAgentForUser(pool, config, publicUser);
+    const availability = await setAgentAvailability(pool, agent.id, input.status);
+    if (!availability) {
+      return reply.code(409).send({ message: "Finish the active call before changing availability" });
+    }
+    return buildAgentDeskResponse(pool, publicUser, input.campaignId, contactRetryPolicy);
   });
+
+  app.get(
+    "/agent/softphone/provisioning",
+    async (request, reply): Promise<SoftphoneProvisioningResponse | void> => {
+      const user = await requireUser(request, config, pool);
+      if (!user) {
+        return reply.code(401).send({ message: "Unauthorized" });
+      }
+
+      return getSoftphoneProvisioningForUser(pool, config, toPublicUser(user));
+    }
+  );
 
   app.get("/admin/overview", async (request, reply): Promise<AdminOverviewResponse | void> => {
     const user = await requireUser(request, config, pool);
@@ -206,7 +319,97 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
       return reply.code(403).send({ message: "Admin role required" });
     }
 
-    return buildAdminOverviewResponse(pool, toPublicUser(user));
+    return buildAdminOverviewResponse(pool, toPublicUser(user), contactRetryPolicy);
+  });
+
+  app.get("/admin/campaigns", async (request, reply): Promise<AdminCampaignListResponse | void> => {
+    const user = await requireAdmin(request, reply, config, pool);
+    if (!user) {
+      return;
+    }
+    const query = adminLibraryQuerySchema.parse(request.query);
+    return getCampaignsPage(pool, query, contactRetryPolicy);
+  });
+
+  app.get("/admin/recordings", async (request, reply): Promise<AdminRecordingListResponse | void> => {
+    const user = await requireAdmin(request, reply, config, pool);
+    if (!user) {
+      return;
+    }
+    const query = adminLibraryQuerySchema.parse(request.query);
+    return getRecordingsPage(pool, query);
+  });
+
+  app.get("/admin/users", async (request, reply): Promise<AdminUserListResponse | void> => {
+    const user = await requireAdmin(request, reply, config, pool);
+    if (!user) {
+      return;
+    }
+    const query = adminLibraryQuerySchema.parse(request.query);
+    return getUsersPage(pool, query);
+  });
+
+  app.get("/admin/calls", async (request, reply): Promise<CallHistoryResponse | void> => {
+    const user = await requireAdmin(request, reply, config, pool);
+    if (!user) {
+      return;
+    }
+    const query = callHistoryQuerySchema.parse(request.query);
+    return getCallHistoryPage(pool, query);
+  });
+
+  app.get("/admin/calls/export.csv", async (request, reply): Promise<void> => {
+    const user = await requireAdmin(request, reply, config, pool);
+    if (!user) {
+      return;
+    }
+    const query = callHistoryQuerySchema.omit({ page: true, pageSize: true }).parse(request.query);
+    const first = await getCallHistoryPage(pool, { ...query, page: 1, pageSize: 100 });
+    if (first.total > config.CALL_HISTORY_EXPORT_MAX_ROWS) {
+      reply.code(413).send({
+        message: `Export contains ${first.total} rows; narrow the filters below the configured ${config.CALL_HISTORY_EXPORT_MAX_ROWS}-row limit`
+      });
+      return;
+    }
+    const items = [...first.items];
+    for (let page = 2; page <= first.totalPages; page += 1) {
+      items.push(...(await getCallHistoryPage(pool, { ...query, page, pageSize: 100 })).items);
+    }
+    const csv = [
+      [
+        "created_at",
+        "lead",
+        "phone",
+        "campaign",
+        "agent",
+        "state",
+        "outcome",
+        "duration_seconds",
+        "voicemail_signal",
+        "recording_available"
+      ],
+      ...items.map((item) => [
+        item.createdAt,
+        item.leadName,
+        item.phoneNumber,
+        item.campaignName,
+        item.agentName,
+        item.state,
+        item.outcome ?? "",
+        String(item.durationSeconds),
+        item.voicemailSignal ?? "",
+        String(item.recordingAvailable)
+      ])
+    ]
+      .map((row) => row.map(csvCell).join(","))
+      .join("\n");
+    reply
+      .header("Content-Type", "text/csv; charset=utf-8")
+      .header(
+        "Content-Disposition",
+        `attachment; filename="call-history-${new Date().toISOString().slice(0, 10)}.csv"`
+      )
+      .send(csv);
   });
 
   app.get("/admin/calls/:callId", async (request, reply): Promise<CallDetailResponse | void> => {
@@ -224,12 +427,19 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
   });
 
   app.get("/admin/calls/:callId/recording", async (request, reply): Promise<void> => {
-    const user = await requireAdminWithOptionalQueryToken(request, reply, config, pool);
+    const params = z.object({ callId: z.string().uuid() }).parse(request.params);
+    const user = await requireAdminOrMediaTicket(
+      request,
+      reply,
+      config,
+      pool,
+      "call_recording",
+      params.callId
+    );
     if (!user) {
       return;
     }
 
-    const params = z.object({ callId: z.string().uuid() }).parse(request.params);
     const recording = await getCallRecordingAudioFile(pool, params.callId);
     if (!recording) {
       return reply.code(404).send({ message: "Call recording not found" });
@@ -243,12 +453,30 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
       return reply.code(409).send({ message: "Call recording file is empty" });
     }
 
-    reply
-      .header("Content-Type", getRecordingContentType(recording.filePath))
-      .header("Content-Length", fileStat.size)
-      .header("Content-Disposition", `inline; filename="${params.callId}.wav"`)
-      .send(await readFile(recording.filePath));
+    return sendAudioFile(request, reply, recording.filePath, `${params.callId}.wav`, fileStat.size);
   });
+
+  app.post(
+    "/admin/calls/:callId/recording-ticket",
+    async (request, reply): Promise<MediaTicketResponse | void> => {
+      const user = await requireAdmin(request, reply, config, pool);
+      if (!user) {
+        return;
+      }
+      const params = z.object({ callId: z.string().uuid() }).parse(request.params);
+      if (!(await getCallRecordingAudioFile(pool, params.callId))) {
+        return reply.code(404).send({ message: "Call recording not found" });
+      }
+      return issueMediaTicket(
+        pool,
+        user.id,
+        "call_recording",
+        params.callId,
+        `/admin/calls/${params.callId}/recording`,
+        config.MEDIA_TICKET_TTL_SECONDS
+      );
+    }
+  );
 
   app.get(
     "/admin/freeswitch/diagnostics",
@@ -262,13 +490,113 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
     }
   );
 
-  app.post("/admin/freeswitch/safe-test", async (request, reply): Promise<FreeSwitchSafeTestResponse | void> => {
+  app.post(
+    "/admin/freeswitch/safe-test",
+    async (request, reply): Promise<FreeSwitchSafeTestResponse | void> => {
+      const user = await requireAdmin(request, reply, config, pool);
+      if (!user) {
+        return;
+      }
+
+      return runFreeSwitchSafeTest(pool, config);
+    }
+  );
+
+  app.post("/admin/retention/run", async (request, reply): Promise<RetentionRunResponse | void> => {
     const user = await requireAdmin(request, reply, config, pool);
     if (!user) {
       return;
     }
+    const input = retentionRunSchema.parse(request.body ?? {});
+    if (input.dryRun) {
+      return runRetention(pool, {
+        dryRun: true,
+        callRetentionDays: config.CALL_LOG_RETENTION_DAYS,
+        recordingRetentionDays: config.CALL_RECORDING_RETENTION_DAYS
+      });
+    }
 
-    return runFreeSwitchSafeTest(pool, config);
+    try {
+      const result = await runRetentionWithAdvisoryLock(pool, {
+        callRetentionDays: config.CALL_LOG_RETENTION_DAYS,
+        recordingRetentionDays: config.CALL_RECORDING_RETENTION_DAYS
+      });
+      if (result.status === "locked") {
+        return reply.code(409).send({ message: "A retention run is already in progress" });
+      }
+      recordRetentionSuccess(result.result);
+      return result.result;
+    } catch (error) {
+      recordRetentionFailure();
+      throw error;
+    }
+  });
+
+  app.get("/admin/audit-events", async (request, reply): Promise<AdminAuditResponse | void> => {
+    const user = await requireAdmin(request, reply, config, pool);
+    if (!user) {
+      return;
+    }
+    const query = adminAuditQuerySchema.parse(request.query);
+    const offset = (query.page - 1) * query.pageSize;
+    const result = await pool.query<{
+      id: string;
+      actor_name: string | null;
+      actor_email: string | null;
+      method: string;
+      route: string;
+      status_code: number;
+      source_ip: string | null;
+      metadata_json: Record<string, unknown>;
+      created_at: Date;
+      total_count: string;
+    }>(
+      `
+        select
+          admin_audit_events.id,
+          users.name as actor_name,
+          users.email as actor_email,
+          admin_audit_events.method,
+          admin_audit_events.route,
+          admin_audit_events.status_code,
+          admin_audit_events.source_ip,
+          admin_audit_events.metadata_json,
+          admin_audit_events.created_at,
+          count(*) over() as total_count
+        from admin_audit_events
+        left join users on users.id = admin_audit_events.actor_user_id
+        where ($1::uuid is null or admin_audit_events.actor_user_id = $1)
+          and ($2::text is null or admin_audit_events.method = $2)
+          and ($3::timestamptz is null or admin_audit_events.created_at >= $3)
+          and ($4::timestamptz is null or admin_audit_events.created_at <= $4)
+        order by admin_audit_events.created_at desc
+        limit $5 offset $6
+      `,
+      [
+        query.actorId ?? null,
+        query.method ?? null,
+        query.dateFrom ?? null,
+        query.dateTo ?? null,
+        query.pageSize,
+        offset
+      ]
+    );
+    return {
+      page: query.page,
+      pageSize: query.pageSize,
+      total: Number(result.rows[0]?.total_count ?? 0),
+      items: result.rows.map((row) => ({
+        id: row.id,
+        actorName: row.actor_name ?? "Deleted user",
+        actorEmail: row.actor_email ?? "",
+        method: row.method,
+        route: row.route,
+        statusCode: row.status_code,
+        sourceIp: row.source_ip,
+        metadata: row.metadata_json ?? {},
+        createdAt: row.created_at.toISOString()
+      }))
+    };
   });
 
   app.get("/admin/csv-imports", async (request, reply): Promise<CsvImportHistoryResponse | void> => {
@@ -277,9 +605,8 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
       return;
     }
 
-    return {
-      imports: await getCsvImports(pool)
-    };
+    const query = csvImportLibraryQuerySchema.parse(request.query);
+    return getCsvImportsPage(pool, query);
   });
 
   app.get("/admin/csv-imports/:importId", async (request, reply): Promise<CsvImportDetailResponse | void> => {
@@ -310,15 +637,18 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
     }
   );
 
-  app.post("/agent/manual-dial/validate", async (request, reply): Promise<ManualDialValidationResponse | void> => {
-    const user = await requireUser(request, config, pool);
-    if (!user) {
-      return reply.code(401).send({ message: "Unauthorized" });
-    }
+  app.post(
+    "/agent/manual-dial/validate",
+    async (request, reply): Promise<ManualDialValidationResponse | void> => {
+      const user = await requireUser(request, config, pool);
+      if (!user) {
+        return reply.code(401).send({ message: "Unauthorized" });
+      }
 
-    const input = manualDialValidationSchema.parse(request.body);
-    return validateDialableNumber(pool, config, input.phoneNumber, input.campaignId);
-  });
+      const input = manualDialValidationSchema.parse(request.body);
+      return validateDialableNumber(pool, config, input.phoneNumber, input.campaignId);
+    }
+  );
 
   app.post("/agent/manual-dial/start", async (request, reply): Promise<AgentDeskResponse | void> => {
     const user = await requireUser(request, config, pool);
@@ -330,10 +660,19 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
     const input = manualDialValidationSchema.parse(request.body);
     const validation = await validateDialableNumber(pool, config, input.phoneNumber, input.campaignId);
     if (!validation.allowed) {
+      if (validation.reason.toLowerCase().includes("suppression")) {
+        await auditBlockedManualDial(
+          pool,
+          user.id,
+          input.phoneNumber,
+          validation.normalizedNumber,
+          validation.reason
+        );
+      }
       return reply.code(400).send({ message: validation.reason });
     }
 
-    const campaign = await getAgentCampaignForDialerAction(pool, input.campaignId);
+    const campaign = await getAgentCampaignForDialerAction(pool, input.campaignId, contactRetryPolicy);
     if (!campaign) {
       return reply.code(409).send({ message: "No campaign is available" });
     }
@@ -358,7 +697,7 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
       return reply.code(409).send({ message: createDialerCallFailureMessage(created.reason) });
     }
 
-    return buildAgentDeskResponse(pool, publicUser, campaign.id);
+    return buildAgentDeskResponse(pool, publicUser, campaign.id, contactRetryPolicy);
   });
 
   app.post("/agent/call-next", async (request, reply): Promise<AgentDeskResponse | void> => {
@@ -369,7 +708,7 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
 
     const input = startNextCallSchema.parse(request.body ?? {});
     const publicUser = toPublicUser(user);
-    const campaign = await getAgentCampaignForDialerAction(pool, input.campaignId);
+    const campaign = await getAgentCampaignForDialerAction(pool, input.campaignId, contactRetryPolicy);
     if (!campaign) {
       return reply.code(409).send({ message: "No campaign is available" });
     }
@@ -389,7 +728,7 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
       return reply.code(409).send({ message: createDialerCallFailureMessage(created.reason) });
     }
 
-    return buildAgentDeskResponse(pool, publicUser, campaign.id);
+    return buildAgentDeskResponse(pool, publicUser, campaign.id, contactRetryPolicy);
   });
 
   app.post("/agent/leads/:contactId/call", async (request, reply): Promise<AgentDeskResponse | void> => {
@@ -415,7 +754,7 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
       return reply.code(409).send({ message: createDialerCallFailureMessage(created.reason) });
     }
 
-    return buildAgentDeskResponse(pool, publicUser, created.campaignId);
+    return buildAgentDeskResponse(pool, publicUser, created.campaignId, contactRetryPolicy);
   });
 
   app.post("/agent/calls/:callId/end", async (request, reply): Promise<AgentDeskResponse | void> => {
@@ -432,25 +771,34 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
       return reply.code(404).send({ message: "Active call not found" });
     }
 
-    return buildAgentDeskResponse(pool, publicUser, input.campaignId);
+    return buildAgentDeskResponse(pool, publicUser, input.campaignId, contactRetryPolicy);
   });
 
-  app.post("/agent/calls/:callId/drop-voicemail", async (request, reply): Promise<AgentDeskResponse | void> => {
-    const user = await requireUser(request, config, pool);
-    if (!user) {
-      return reply.code(401).send({ message: "Unauthorized" });
-    }
+  app.post(
+    "/agent/calls/:callId/drop-voicemail",
+    async (request, reply): Promise<AgentDeskResponse | void> => {
+      const user = await requireUser(request, config, pool);
+      if (!user) {
+        return reply.code(401).send({ message: "Unauthorized" });
+      }
 
-    const publicUser = toPublicUser(user);
-    const params = z.object({ callId: z.string().uuid() }).parse(request.params);
-    const input = dropVoicemailSchema.parse(request.body ?? {});
-    const dropped = await dropVoicemailForCall(pool, config, publicUser.id, params.callId, input.recordingId);
-    if (!dropped.ok) {
-      return reply.code(dropped.statusCode).send({ message: dropped.message });
-    }
+      const publicUser = toPublicUser(user);
+      const params = z.object({ callId: z.string().uuid() }).parse(request.params);
+      const input = dropVoicemailSchema.parse(request.body ?? {});
+      const dropped = await dropVoicemailForCall(
+        pool,
+        config,
+        publicUser.id,
+        params.callId,
+        input.recordingId
+      );
+      if (!dropped.ok) {
+        return reply.code(dropped.statusCode).send({ message: dropped.message });
+      }
 
-    return buildAgentDeskResponse(pool, publicUser, input.campaignId);
-  });
+      return buildAgentDeskResponse(pool, publicUser, input.campaignId, contactRetryPolicy);
+    }
+  );
 
   app.post("/agent/calls/:callId/dtmf", async (request, reply): Promise<AgentDeskResponse | void> => {
     const user = await requireUser(request, config, pool);
@@ -466,7 +814,7 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
       return reply.code(sent.statusCode).send({ message: sent.message });
     }
 
-    return buildAgentDeskResponse(pool, publicUser, input.campaignId);
+    return buildAgentDeskResponse(pool, publicUser, input.campaignId, contactRetryPolicy);
   });
 
   app.post(
@@ -511,6 +859,8 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
           status: row.status,
           loaded: 0,
           callable: 0,
+          manualDialingEnabled: input.manualDialingEnabled,
+          callRecordingEnabled: input.callRecordingEnabled,
           earlyMediaAvmdEnabled: input.earlyMediaAvmdEnabled
         }
       });
@@ -532,18 +882,27 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
           update campaigns
           set name = $2,
               status = $3,
-              early_media_avmd_enabled = $4,
+              manual_dialing_enabled = $4,
+              call_recording_enabled = $5,
+              early_media_avmd_enabled = $6,
               updated_at = now()
           where id = $1
         `,
-        [params.campaignId, input.name, input.status, input.earlyMediaAvmdEnabled]
+        [
+          params.campaignId,
+          input.name,
+          input.status,
+          input.manualDialingEnabled,
+          input.callRecordingEnabled,
+          input.earlyMediaAvmdEnabled
+        ]
       );
 
       if (!result.rowCount) {
         return reply.code(404).send({ message: "Campaign not found" });
       }
 
-      const item = await getCampaignOverviewItem(pool, params.campaignId);
+      const item = await getCampaignOverviewItem(pool, params.campaignId, contactRetryPolicy);
       if (!item) {
         return reply.code(404).send({ message: "Campaign not found" });
       }
@@ -568,53 +927,62 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
     return { ok: true };
   });
 
-  app.post(
-    "/admin/recordings",
-    async (request, reply): Promise<CreateRecordingResponse | void> => {
-      const user = await requireAdmin(request, reply, config, pool);
-      if (!user) {
-        return;
-      }
+  app.post("/admin/recordings", async (request, reply): Promise<CreateRecordingResponse | void> => {
+    const user = await requireAdmin(request, reply, config, pool);
+    if (!user) {
+      return;
+    }
 
-      const file = await request.file();
-      if (!file) {
-        return reply.code(400).send({ message: "Recording file is required" });
-      }
+    const file = await request.file({
+      limits: { fileSize: config.VOICEMAIL_UPLOAD_MAX_BYTES, files: 1 }
+    });
+    if (!file) {
+      return reply.code(400).send({ message: "Recording file is required" });
+    }
 
-      const extension = getSupportedRecordingExtension(file.filename);
-      if (!extension) {
-        return reply.code(400).send({ message: "Recording must be a WAV or MP3 file" });
-      }
+    const extension = getSupportedRecordingExtension(file.filename);
+    if (!extension) {
+      return reply.code(400).send({ message: "Recording must be a WAV or MP3 file" });
+    }
 
-      const name = normalizeRecordingName(getMultipartFieldValue(file.fields.name), file.filename);
-      const makeDefault = parseBooleanField(getMultipartFieldValue(file.fields.makeDefault));
-      const storedFilename = `${randomUUID()}${extension}`;
-      const storagePath = join(config.VOICEMAIL_RECORDINGS_STORAGE_DIR, storedFilename);
-      const audioBuffer = await file.toBuffer();
-      if (audioBuffer.length === 0) {
+    const name = normalizeRecordingName(getMultipartFieldValue(file.fields.name), file.filename);
+    const makeDefault = parseBooleanField(getMultipartFieldValue(file.fields.makeDefault));
+    const fileId = randomUUID();
+    const storedFilename = `${fileId}.wav`;
+    const storagePath = join(config.VOICEMAIL_RECORDINGS_STORAGE_DIR, storedFilename);
+    const sourcePath = join(config.VOICEMAIL_RECORDINGS_STORAGE_DIR, `${fileId}.upload${extension}`);
+    await mkdir(config.VOICEMAIL_RECORDINGS_STORAGE_DIR, { recursive: true });
+
+    try {
+      await pipeline(file.file, createWriteStream(sourcePath, { flags: "wx", mode: 0o600 }));
+      const uploaded = await stat(sourcePath);
+      if (!uploaded.isFile() || uploaded.size === 0) {
         return reply.code(400).send({ message: "Recording file is empty" });
       }
-      const durationSeconds = detectAudioDurationSeconds(audioBuffer, extension);
-
-      await mkdir(config.VOICEMAIL_RECORDINGS_STORAGE_DIR, { recursive: true });
-      await writeFile(storagePath, audioBuffer, { flag: "wx" });
-
-      try {
-        const item = await createRecording(pool, {
-          name,
-          filePath: storagePath,
-          runtimeFilePath: storagePath,
-          durationSeconds,
-          fileSizeBytes: audioBuffer.length,
-          makeDefault
-        });
-        return reply.code(201).send({ item });
-      } catch (error) {
-        await unlink(storagePath).catch(() => undefined);
-        throw error;
+      const processed = await transcodeRecordingToCanonicalWav(sourcePath, storagePath, {
+        ffmpegPath: config.FFMPEG_PATH,
+        ffprobePath: config.FFPROBE_PATH
+      });
+      const item = await createRecording(pool, {
+        name,
+        filePath: storagePath,
+        runtimeFilePath: storagePath,
+        durationSeconds: processed.durationSeconds,
+        fileSizeBytes: processed.fileSizeBytes,
+        makeDefault
+      });
+      return reply.code(201).send({ item });
+    } catch (error) {
+      await unlink(storagePath).catch(() => undefined);
+      if (error instanceof RecordingProcessingError) {
+        const status = error.code === "processor_unavailable" ? 503 : 400;
+        return reply.code(status).send({ message: error.message });
       }
+      throw error;
+    } finally {
+      await unlink(sourcePath).catch(() => undefined);
     }
-  );
+  });
 
   app.patch(
     "/admin/recordings/:recordingId/default",
@@ -634,12 +1002,19 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
   );
 
   app.get("/admin/recordings/:recordingId/audio", async (request, reply): Promise<void> => {
-    const user = await requireAdminWithOptionalQueryToken(request, reply, config, pool);
+    const params = recordingParamsSchema.parse(request.params);
+    const user = await requireAdminOrMediaTicket(
+      request,
+      reply,
+      config,
+      pool,
+      "voicemail_recording",
+      params.recordingId
+    );
     if (!user) {
       return;
     }
 
-    const params = recordingParamsSchema.parse(request.params);
     const recording = await getRecordingAudioFile(pool, params.recordingId);
     if (!recording) {
       return reply.code(404).send({ message: "Recording not found" });
@@ -650,15 +1025,35 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
       return reply.code(404).send({ message: "Recording file not found" });
     }
     if (fileStat.size === 0) {
-      return reply.code(409).send({ message: "Recording file is empty; delete it and upload the voicemail again" });
+      return reply
+        .code(409)
+        .send({ message: "Recording file is empty; delete it and upload the voicemail again" });
     }
 
-    reply
-      .header("Content-Type", getRecordingContentType(recording.filePath))
-      .header("Content-Length", fileStat.size)
-      .header("Content-Disposition", `inline; filename="${recording.filename}"`)
-      .send(await readFile(recording.filePath));
+    return sendAudioFile(request, reply, recording.filePath, recording.filename, fileStat.size);
   });
+
+  app.post(
+    "/admin/recordings/:recordingId/audio-ticket",
+    async (request, reply): Promise<MediaTicketResponse | void> => {
+      const user = await requireAdmin(request, reply, config, pool);
+      if (!user) {
+        return;
+      }
+      const params = recordingParamsSchema.parse(request.params);
+      if (!(await getRecordingAudioFile(pool, params.recordingId))) {
+        return reply.code(404).send({ message: "Recording not found" });
+      }
+      return issueMediaTicket(
+        pool,
+        user.id,
+        "voicemail_recording",
+        params.recordingId,
+        `/admin/recordings/${params.recordingId}/audio`,
+        config.MEDIA_TICKET_TTL_SECONDS
+      );
+    }
+  );
 
   app.delete("/admin/recordings/:recordingId", async (request, reply): Promise<DeleteResponse | void> => {
     const user = await requireAdmin(request, reply, config, pool);
@@ -668,43 +1063,55 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
 
     const params = recordingParamsSchema.parse(request.params);
     const deleted = await deleteRecording(pool, params.recordingId);
-    if (!deleted) {
+    if (deleted.status === "not_found") {
       return reply.code(404).send({ message: "Recording not found" });
     }
+    if (deleted.status === "in_use") {
+      return reply.code(409).send({ message: "Recording is assigned to an active call or voicemail job" });
+    }
 
-    await unlink(deleted.filePath).catch(() => undefined);
+    try {
+      await unlink(deleted.filePath);
+    } catch (error) {
+      if (!isMissingFileError(error)) {
+        await restoreDeletedRecording(pool, params.recordingId);
+        request.log.error(
+          { error, recordingId: params.recordingId },
+          "Voicemail recording deletion failed; the database record was restored"
+        );
+        return reply.code(503).send({ message: "Recording file could not be deleted; try again" });
+      }
+    }
     return { ok: true };
   });
 
-  app.post(
-    "/admin/contacts",
-    async (request, reply): Promise<MutationResponse<LeadSummary> | void> => {
-      const user = await requireAdmin(request, reply, config, pool);
-      if (!user) {
-        return;
-      }
+  app.post("/admin/contacts", async (request, reply): Promise<MutationResponse<LeadSummary> | void> => {
+    const user = await requireAdmin(request, reply, config, pool);
+    if (!user) {
+      return;
+    }
 
-      const input = createContactSchema.parse(request.body);
-      if (!(await campaignExists(pool, input.campaignId))) {
-        return reply.code(404).send({ message: "Campaign not found" });
-      }
+    const input = createContactSchema.parse(request.body);
+    if (!(await campaignExists(pool, input.campaignId))) {
+      return reply.code(404).send({ message: "Campaign not found" });
+    }
 
-      const normalized = normalizePhoneNumber(input.phoneNumber, config.DEFAULT_PHONE_COUNTRY_CODE);
-      if (!normalized.ok) {
-        return reply.code(400).send({ message: normalized.reason });
-      }
-      const mappedFields = Object.fromEntries((input.fields ?? []).map((field) => [field.label, field.value]));
-      if (input.company) {
-        mappedFields.Company = input.company;
-      }
+    const normalized = normalizePhoneNumber(input.phoneNumber, config.DEFAULT_PHONE_COUNTRY_CODE);
+    if (!normalized.ok) {
+      return reply.code(400).send({ message: normalized.reason });
+    }
+    const mappedFields = Object.fromEntries((input.fields ?? []).map((field) => [field.label, field.value]));
+    if (input.company) {
+      mappedFields.Company = input.company;
+    }
 
-      const result = await pool.query<{
-        id: string;
-        display_name: string | null;
-        phone_number: string;
-        mapped_fields_json: Record<string, unknown>;
-      }>(
-        `
+    const result = await pool.query<{
+      id: string;
+      display_name: string | null;
+      phone_number: string;
+      mapped_fields_json: Record<string, unknown>;
+    }>(
+      `
           insert into contacts (
             campaign_id,
             phone_number,
@@ -717,30 +1124,29 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
           on conflict (campaign_id, normalized_phone_number) do nothing
           returning id, display_name, phone_number, mapped_fields_json
         `,
-        [input.campaignId, input.phoneNumber, normalized.number, input.name, JSON.stringify(mappedFields)]
-      );
+      [input.campaignId, input.phoneNumber, normalized.number, input.name, JSON.stringify(mappedFields)]
+    );
 
-      const row = result.rows[0];
-      if (!row) {
-        return reply.code(409).send({ message: "Lead already exists in this campaign" });
-      }
-
-      const suppression = await findSuppression(pool, normalized.number);
-      return reply.code(201).send({
-        item: {
-          id: row.id,
-          name: row.display_name ?? input.name,
-          company: String(row.mapped_fields_json.Company ?? row.mapped_fields_json.company ?? ""),
-          phoneNumber: row.phone_number,
-          status: suppression ? "suppressed" : "ready",
-          fields: Object.entries(row.mapped_fields_json ?? {}).map(([label, value]) => ({
-            label,
-            value: String(value)
-          }))
-        }
-      });
+    const row = result.rows[0];
+    if (!row) {
+      return reply.code(409).send({ message: "Lead already exists in this campaign" });
     }
-  );
+
+    const suppression = await findSuppression(pool, normalized.number);
+    return reply.code(201).send({
+      item: {
+        id: row.id,
+        name: row.display_name ?? input.name,
+        company: String(row.mapped_fields_json.Company ?? row.mapped_fields_json.company ?? ""),
+        phoneNumber: row.phone_number,
+        status: suppression ? "suppressed" : "ready",
+        fields: Object.entries(row.mapped_fields_json ?? {}).map(([label, value]) => ({
+          label,
+          value: String(value)
+        }))
+      }
+    });
+  });
 
   app.post(
     "/admin/contacts/:contactId/suppress",
@@ -775,7 +1181,12 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
           on conflict (normalized_phone_number)
           do update set reason = excluded.reason
         `,
-        [row.phone_number, row.normalized_phone_number, input.reason ?? "Suppressed from campaign contact list", user.id]
+        [
+          row.phone_number,
+          row.normalized_phone_number,
+          input.reason ?? "Suppressed from campaign contact list",
+          user.id
+        ]
       );
 
       const item = await getContactListItem(pool, params.contactId);
@@ -903,7 +1314,10 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
 
   app.post(
     "/admin/suppression",
-    async (request, reply): Promise<MutationResponse<AdminOverviewResponse["suppression"][number]> | void> => {
+    async (
+      request,
+      reply
+    ): Promise<MutationResponse<AdminOverviewResponse["suppression"][number]> | void> => {
       const user = await requireAdmin(request, reply, config, pool);
       if (!user) {
         return;
@@ -914,29 +1328,128 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
       if (!normalized.ok) {
         return reply.code(400).send({ message: normalized.reason });
       }
-      const result = await pool.query<{
-        id: string;
-        phone_number: string;
-        reason: string | null;
-      }>(
-        `
-          insert into suppression_entries (phone_number, normalized_phone_number, reason, created_by_user_id)
-          values ($1, $2, $3, $4)
-          on conflict (normalized_phone_number)
-          do update set reason = excluded.reason
-          returning id, phone_number, reason
-        `,
-        [input.phoneNumber, normalized.number, input.reason ?? null, user.id]
-      );
-
-      const row = result.rows[0];
+      const client = await pool.connect();
+      let row: { id: string; phone_number: string; reason: string | null; inserted: boolean };
+      try {
+        await client.query("begin");
+        const result = await client.query<typeof row>(
+          `
+            insert into suppression_entries (phone_number, normalized_phone_number, reason, created_by_user_id)
+            values ($1, $2, $3, $4)
+            on conflict (normalized_phone_number)
+            do update set phone_number = excluded.phone_number,
+                          reason = excluded.reason,
+                          created_by_user_id = excluded.created_by_user_id
+            returning id, phone_number, reason, (xmax = 0) as inserted
+          `,
+          [input.phoneNumber, normalized.number, input.reason ?? null, user.id]
+        );
+        row = result.rows[0];
+        await client.query(
+          `
+            insert into suppression_events (
+              suppression_entry_id, actor_user_id, event_type, phone_number, normalized_phone_number, reason
+            )
+            values ($1, $2, $3, $4, $5, $6)
+          `,
+          [
+            row.id,
+            user.id,
+            row.inserted ? "created" : "updated",
+            row.phone_number,
+            normalized.number,
+            row.reason
+          ]
+        );
+        await client.query("commit");
+      } catch (error) {
+        await client.query("rollback");
+        throw error;
+      } finally {
+        client.release();
+      }
       return reply.code(201).send({
         item: {
           id: row.id,
           phoneNumber: row.phone_number,
-          reason: row.reason ?? "Suppressed"
+          reason: row.reason ?? "Suppressed",
+          createdAt: new Date().toISOString()
         }
       });
+    }
+  );
+
+  app.get("/admin/suppression", async (request, reply): Promise<SuppressionListResponse | void> => {
+    const user = await requireAdmin(request, reply, config, pool);
+    if (!user) {
+      return;
+    }
+    const query = suppressionQuerySchema.parse(request.query);
+    const offset = (query.page - 1) * query.pageSize;
+    const result = await pool.query<{
+      id: string;
+      phone_number: string;
+      reason: string | null;
+      created_at: Date;
+      total_count: string;
+    }>(
+      `
+        select id, phone_number, reason, created_at, count(*) over() as total_count
+        from suppression_entries
+        where ($1 = '' or concat_ws(' ', phone_number, normalized_phone_number, reason) ilike '%' || $1 || '%')
+        order by created_at desc
+        limit $2 offset $3
+      `,
+      [query.q.trim(), query.pageSize, offset]
+    );
+    const total = Number(result.rows[0]?.total_count ?? 0);
+    return {
+      items: result.rows.map((row) => ({
+        id: row.id,
+        phoneNumber: row.phone_number,
+        reason: row.reason ?? "Suppressed",
+        createdAt: row.created_at.toISOString()
+      })),
+      page: query.page,
+      pageSize: query.pageSize,
+      total,
+      totalPages: total ? Math.ceil(total / query.pageSize) : 0
+    };
+  });
+
+  app.post(
+    "/admin/suppression/import-csv-file",
+    async (request, reply): Promise<SuppressionImportResponse | void> => {
+      const user = await requireAdmin(request, reply, config, pool);
+      if (!user) {
+        return;
+      }
+      const file = await request.file();
+      if (!file) {
+        return reply.code(400).send({ message: "CSV file is required" });
+      }
+      if (!isCsvFilename(file.filename)) {
+        return reply.code(400).send({ message: "Only .csv files are supported" });
+      }
+      try {
+        const parsed = parseCsv((await file.toBuffer()).toString("utf8"));
+        if (!parsed.rows.length) {
+          return reply.code(400).send({ message: "CSV has no data rows" });
+        }
+        return reply.code(201).send(
+          await importSuppressionFromCsv(pool, {
+            actorUserId: user.id,
+            filename: file.filename,
+            parsed,
+            defaultCountryCode: config.DEFAULT_PHONE_COUNTRY_CODE
+          })
+        );
+      } catch (error) {
+        if (error instanceof CsvImportError) {
+          return reply.code(400).send({ message: error.message });
+        }
+        throw error;
+      }
     }
   );
 
@@ -947,8 +1460,45 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
     }
 
     const params = suppressionParamsSchema.parse(request.params);
-    const result = await pool.query("delete from suppression_entries where id = $1", [params.suppressionId]);
-    if (!result.rowCount) {
+    const client = await pool.connect();
+    let removed:
+      | { id: string; phone_number: string; normalized_phone_number: string; reason: string | null }
+      | undefined;
+    try {
+      await client.query("begin");
+      const result = await client.query<{
+        id: string;
+        phone_number: string;
+        normalized_phone_number: string;
+        reason: string | null;
+      }>(
+        `
+          delete from suppression_entries
+          where id = $1
+          returning id, phone_number, normalized_phone_number, reason
+        `,
+        [params.suppressionId]
+      );
+      removed = result.rows[0];
+      if (removed) {
+        await client.query(
+          `
+            insert into suppression_events (
+              suppression_entry_id, actor_user_id, event_type, phone_number, normalized_phone_number, reason
+            )
+            values (null, $1, 'removed', $2, $3, $4)
+          `,
+          [user.id, removed.phone_number, removed.normalized_phone_number, removed.reason]
+        );
+      }
+      await client.query("commit");
+    } catch (error) {
+      await client.query("rollback");
+      throw error;
+    } finally {
+      client.release();
+    }
+    if (!removed) {
       return reply.code(404).send({ message: "Suppression entry not found" });
     }
     return { ok: true };
@@ -973,12 +1523,14 @@ async function requireAdmin(
   return toPublicUser(user);
 }
 
-async function requireAdminWithOptionalQueryToken(
+async function requireAdminOrMediaTicket(
   request: FastifyRequest,
   reply: FastifyReply,
   config: AppConfig,
-  pool: pg.Pool
-): Promise<PublicUser | null> {
+  pool: pg.Pool,
+  resourceType: MediaResourceType,
+  resourceId: string
+): Promise<PublicUser | { ticket: true } | null> {
   const headerUser = await requireUser(request, config, pool);
   if (headerUser) {
     if (headerUser.role !== "admin") {
@@ -989,22 +1541,95 @@ async function requireAdminWithOptionalQueryToken(
   }
 
   const query = recordingAudioQuerySchema.parse(request.query);
-  const payload = query.token ? verifyAuthToken(config, query.token) : null;
-  if (!payload) {
+  if (
+    !query.ticket ||
+    !(await verifyMediaTicket(pool, {
+      ticket: query.ticket,
+      resourceType,
+      resourceId,
+      idleLifetimeSeconds: config.MEDIA_TICKET_TTL_SECONDS,
+      absoluteLifetimeSeconds: config.MEDIA_TICKET_MAX_LIFETIME_SECONDS
+    }))
+  ) {
     reply.code(401).send({ message: "Unauthorized" });
     return null;
+  }
+  return { ticket: true };
+}
+
+async function issueMediaTicket(
+  pool: pg.Pool,
+  userId: string,
+  resourceType: MediaResourceType,
+  resourceId: string,
+  path: string,
+  lifetimeSeconds: number
+): Promise<MediaTicketResponse> {
+  const created = await createMediaTicket(pool, { userId, resourceType, resourceId, lifetimeSeconds });
+  return {
+    url: `${path}?${new URLSearchParams({ ticket: created.ticket }).toString()}`,
+    expiresAt: created.expiresAt.toISOString()
+  };
+}
+
+function sendAudioFile(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  filePath: string,
+  filename: string,
+  size: number
+): void {
+  const rangeHeader = typeof request.headers.range === "string" ? request.headers.range : undefined;
+  const range = parseSingleByteRange(rangeHeader, size);
+  if (rangeHeader && !range) {
+    reply.code(416).header("Content-Range", `bytes */${size}`).send();
+    return;
   }
 
-  const user = await findUserById(pool, payload.sub);
-  if (!user) {
-    reply.code(401).send({ message: "Unauthorized" });
-    return null;
+  reply
+    .header("Content-Type", getRecordingContentType(filePath))
+    .header("Accept-Ranges", "bytes")
+    .header("Cache-Control", "private, no-store")
+    .header("Content-Disposition", `inline; filename="${filename.replace(/["\r\n]/g, "")}"`);
+  if (range) {
+    reply
+      .code(206)
+      .header("Content-Range", `bytes ${range.start}-${range.end}/${size}`)
+      .header("Content-Length", range.end - range.start + 1)
+      .send(createReadStream(filePath, range));
+    return;
   }
-  if (user.role !== "admin") {
-    reply.code(403).send({ message: "Admin role required" });
-    return null;
-  }
-  return toPublicUser(user);
+  reply.header("Content-Length", size).send(createReadStream(filePath));
+}
+
+function csvCell(value: string): string {
+  const spreadsheetSafe = /^[=+\-@]/.test(value.trimStart()) ? `'${value}` : value;
+  return `"${spreadsheetSafe.replaceAll('"', '""')}"`;
+}
+
+function isMissingFileError(error: unknown): boolean {
+  return Boolean(error && typeof error === "object" && "code" in error && error.code === "ENOENT");
+}
+
+async function auditBlockedManualDial(
+  pool: pg.Pool,
+  userId: string,
+  phoneNumber: string,
+  normalizedPhoneNumber: string,
+  reason: string
+): Promise<void> {
+  await pool.query(
+    `
+      insert into suppression_events (
+        suppression_entry_id, actor_user_id, event_type, phone_number, normalized_phone_number, reason
+      )
+      values (
+        (select id from suppression_entries where normalized_phone_number = $2 limit 1),
+        $1, 'blocked_manual_dial', $3, $2, $4
+      )
+    `,
+    [userId, normalizedPhoneNumber, phoneNumber, reason]
+  );
 }
 
 async function buildFreeSwitchDiagnostics(
@@ -1046,7 +1671,9 @@ async function runFreeSwitchSafeTest(pool: pg.Pool, config: AppConfig): Promise<
     apiStatusOk = true;
     const bgapi = await sendFreeSwitchBgapiCommand(config, "status");
     jobUuid = parseBgapiJobUuid(bgapi.body);
-    bgapiStatusQueued = Boolean(jobUuid || bgapi.body.includes("+OK") || bgapi.headers["reply-text"]?.includes("+OK"));
+    bgapiStatusQueued = Boolean(
+      jobUuid || bgapi.body.includes("+OK") || bgapi.headers["reply-text"]?.includes("+OK")
+    );
   } catch (error) {
     message = error instanceof Error ? error.message : "FreeSWITCH control plane test failed";
   }
@@ -1149,7 +1776,7 @@ function parseGatewayStatus(raw: string): FreeSwitchTrunkStatus {
   if (normalized.includes("dns error")) {
     return "dns_error";
   }
-  if (/\breged\b/.test(normalized) || normalized.includes("state") && normalized.includes("reged")) {
+  if (/\breged\b/.test(normalized) || (normalized.includes("state") && normalized.includes("reged"))) {
     return "ready";
   }
   if (normalized.includes("failed") || normalized.includes("fail_wait") || normalized.includes("unreged")) {
@@ -1195,53 +1822,6 @@ function isCsvImportCampaignForeignKeyError(error: unknown): error is { code: st
     "constraint" in error &&
     error.constraint === "csv_imports_campaign_id_fkey"
   );
-}
-
-async function getCsvImports(pool: pg.Pool): Promise<CsvImportHistoryResponse["imports"]> {
-  const result = await pool.query<{
-    id: string;
-    campaign_id: string;
-    campaign_name: string | null;
-    filename: string;
-    status: string;
-    total_rows: number;
-    imported_rows: number;
-    failed_rows: number;
-    field_mapping_json: { duplicateRows?: number } | null;
-    created_at: Date;
-    completed_at: Date | null;
-  }>(`
-    select
-      csv_imports.id,
-      csv_imports.campaign_id,
-      campaigns.name as campaign_name,
-      csv_imports.filename,
-      csv_imports.status,
-      csv_imports.total_rows,
-      csv_imports.imported_rows,
-      csv_imports.failed_rows,
-      csv_imports.field_mapping_json,
-      csv_imports.created_at,
-      csv_imports.completed_at
-    from csv_imports
-    left join campaigns on campaigns.id = csv_imports.campaign_id
-    order by csv_imports.created_at desc
-    limit 20
-  `);
-
-  return result.rows.map((row) => ({
-    id: row.id,
-    campaignId: row.campaign_id,
-    campaignName: row.campaign_name ?? "Deleted campaign",
-    filename: row.filename,
-    status: row.status,
-    totalRows: Number(row.total_rows),
-    importedRows: Number(row.imported_rows),
-    failedRows: Number(row.failed_rows),
-    duplicateRows: Number(row.field_mapping_json?.duplicateRows ?? 0),
-    createdAt: row.created_at.toISOString(),
-    completedAt: row.completed_at?.toISOString()
-  }));
 }
 
 async function getCsvImportDetail(pool: pg.Pool, importId: string): Promise<CsvImportDetailResponse | null> {
@@ -1441,10 +2021,10 @@ async function getCampaignContacts(
   };
 }
 
-
 export const __testing = {
   buildAgentDeskResponse,
   createDialerCall,
+  csvCell,
   formatElapsed,
   getActiveCallActions,
   getCallDetail,

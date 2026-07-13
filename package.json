@@ -10,12 +10,28 @@
     "build": "npm --workspace @outbound-dialer/shared run build && npm --workspace @outbound-dialer/api run build && npm --workspace @outbound-dialer/web run build",
     "dev:api": "npm --workspace @outbound-dialer/api run dev",
     "dev:web": "npm --workspace @outbound-dialer/web run dev",
-    "lint": "npm run lint --workspaces --if-present",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "eslint . --max-warnings 0",
+    "quality": "npm run lint && npm run format:check && npm run typecheck && npm test && npm run build",
     "smoke:web": "bash scripts/smoke-web.sh",
-    "test": "npm run test --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present && npm run test:ops",
+    "test:ops": "node --test tests/*.test.mjs",
+    "test:e2e": "playwright test",
+    "test:freeswitch": "bash scripts/test-freeswitch-scenarios.sh",
+    "test:load:desk": "node scripts/load-agent-desk.mjs",
     "typecheck": "npm --workspace @outbound-dialer/shared run typecheck && npm --workspace @outbound-dialer/api run typecheck && npm --workspace @outbound-dialer/web run typecheck"
   },
   "engines": {
     "node": ">=22"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "@playwright/test": "^1.61.1",
+    "eslint": "^9.39.5",
+    "eslint-config-prettier": "^10.1.8",
+    "globals": "^16.5.0",
+    "prettier": "^3.9.5",
+    "typescript-eslint": "^8.63.0"
   }
 }

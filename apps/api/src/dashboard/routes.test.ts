@@ -30,6 +30,15 @@ describe("dashboard route helpers", () => {
     assert.deepEqual(parsed.rows, [["Doe, Jane", "+1 415 555 0100", 'Acme "Labs"']]);
   });
 
+  it("neutralizes spreadsheet formulas in exported CSV cells", () => {
+    assert.equal(
+      __testing.csvCell('=HYPERLINK("https://example.test")'),
+      '"\'=HYPERLINK(""https://example.test"")"'
+    );
+    assert.equal(__testing.csvCell("\t@SUM(1,2)"), '"\'\t@SUM(1,2)"');
+    assert.equal(__testing.csvCell("Normal contact"), '"Normal contact"');
+  });
+
   it("parses BOM-prefixed CRLF CSV without shifting columns", () => {
     const parsed = parseCsv("\uFEFFname,phone\r\nJane,+14155550100\r\n");
 
@@ -48,11 +57,13 @@ describe("dashboard route helpers", () => {
 
     await assert.rejects(
       importContactsFromCsv(pool, selectedCampaignId, "contacts.csv", parseCsv("phone\n+14155550100"), "US"),
-      (error: unknown) => error instanceof CsvImportError && error.message === "CSV must include a name column"
+      (error: unknown) =>
+        error instanceof CsvImportError && error.message === "CSV must include a name column"
     );
     await assert.rejects(
       importContactsFromCsv(pool, selectedCampaignId, "contacts.csv", parseCsv("name\nJane"), "US"),
-      (error: unknown) => error instanceof CsvImportError && error.message === "CSV must include a phone column"
+      (error: unknown) =>
+        error instanceof CsvImportError && error.message === "CSV must include a phone column"
     );
   });
 
@@ -78,7 +89,12 @@ describe("dashboard route helpers", () => {
 
     assert.equal(result.failedRows, 1);
     assert.equal(result.importedRows, 0);
-    assert.ok(queries.some((query) => query.sql.includes("insert into csv_import_failures") && query.params[2] === "Name is required"));
+    assert.ok(
+      queries.some(
+        (query) =>
+          query.sql.includes("insert into csv_import_failures") && query.params[2] === "Name is required"
+      )
+    );
     assert.ok(!queries.some((query) => query.sql.includes("insert into contacts")));
   });
 
@@ -113,7 +129,7 @@ describe("dashboard route helpers", () => {
 
   it("does not fall back to another campaign for dialer actions when campaignId is selected", async () => {
     const pool = createQueryPool((_sql, params) => {
-      assert.deepEqual(params, [selectedCampaignId, false, null]);
+      assert.deepEqual(params, [selectedCampaignId, false, null, 2_147_483_647, 0]);
       return rows([]);
     });
 
@@ -124,7 +140,7 @@ describe("dashboard route helpers", () => {
 
   it("keeps fallback behavior for default desk campaign selection", async () => {
     const pool = createQueryPool((_sql, params) => {
-      assert.deepEqual(params, [null, true, null]);
+      assert.deepEqual(params, [null, true, null, 2_147_483_647, 0]);
       return rows([campaignRow()]);
     });
 
@@ -138,7 +154,7 @@ describe("dashboard route helpers", () => {
     const pool = createQueryPool((sql, params) => {
       assert.match(sql, /agents\.registered = true/);
       assert.match(sql, /agents\.user_id = \$3/);
-      assert.deepEqual(params, [selectedCampaignId, true, userId]);
+      assert.deepEqual(params, [selectedCampaignId, true, userId, 2_147_483_647, 0]);
       return rows([campaignRow({ agent_registered: true })]);
     });
 
@@ -186,6 +202,9 @@ describe("dashboard route helpers", () => {
     const pool = createTransactionalPool({
       clientHandler: (sql, params) => {
         clientQueries.push({ sql, params });
+        if (sql.includes("select registered, availability_status from agents")) {
+          return rows([{ registered: true, availability_status: "available" }]);
+        }
         if (sql.includes("from calls") && sql.includes("for update")) {
           return rows([{ id: "active-call" }]);
         }
@@ -217,6 +236,9 @@ describe("dashboard route helpers", () => {
     const pool = createTransactionalPool({
       clientHandler: (sql, params) => {
         clientQueries.push({ sql, params });
+        if (sql.includes("select registered, availability_status from agents")) {
+          return rows([{ registered: true, availability_status: "available" }]);
+        }
         if (sql.includes("from calls") && sql.includes("for update")) {
           return rows([]);
         }
@@ -280,8 +302,84 @@ describe("dashboard route helpers", () => {
 
   it("maps call creation failure reasons to operator-facing messages", () => {
     assert.equal(createDialerCallFailureMessage("active_call"), "An active call is already in progress");
-    assert.equal(createDialerCallFailureMessage("no_callable_contacts"), "No callable contacts are available");
+    assert.equal(
+      createDialerCallFailureMessage("no_callable_contacts"),
+      "No callable contacts are available"
+    );
+    assert.equal(
+      createDialerCallFailureMessage("agent_not_registered"),
+      "The browser phone must be connected before starting a call"
+    );
+    assert.equal(createDialerCallFailureMessage("agent_paused"), "Resume calling before starting a call");
+    assert.equal(
+      createDialerCallFailureMessage("agent_wrap_up"),
+      "Finish wrap-up or mark yourself ready before starting a call"
+    );
     assert.equal(createDialerCallFailureMessage("lead_not_callable"), "Lead is not callable");
+  });
+
+  for (const [availabilityStatus, reason] of [
+    ["paused", "agent_paused"],
+    ["wrap_up", "agent_wrap_up"]
+  ] as const) {
+    it(`refuses to reserve a call while the agent is ${availabilityStatus}`, async () => {
+      const queries: string[] = [];
+      const pool = createTransactionalPool({
+        clientHandler: (sql) => {
+          queries.push(sql);
+          if (sql.includes("select registered, availability_status")) {
+            return rows([{ registered: true, availability_status: availabilityStatus }]);
+          }
+          return rows([]);
+        }
+      });
+
+      const result = await createDialerCall(pool, config, {
+        agentId: "33333333-3333-4333-8333-333333333333",
+        campaignId: selectedCampaignId,
+        contactId: null,
+        destinationNumber: "+14155550100",
+        normalizedDestinationNumber: "+14155550100",
+        sipUsername: "agent1000",
+        manualDial: true,
+        callRecordingEnabled: false,
+        earlyMediaAvmdEnabled: false,
+        eventType: "manual_dial_started"
+      });
+
+      assert.deepEqual(result, { ok: false, reason });
+      assert.ok(queries.includes("rollback"));
+      assert.ok(!queries.some((sql) => sql.includes("insert into calls")));
+    });
+  }
+
+  it("refuses to reserve a call while the browser phone is unregistered", async () => {
+    const queries: string[] = [];
+    const pool = createTransactionalPool({
+      clientHandler: (sql) => {
+        queries.push(sql);
+        return sql.includes("select registered, availability_status from agents")
+          ? rows([{ registered: false, availability_status: "available" }])
+          : rows([]);
+      }
+    });
+
+    const result = await createDialerCall(pool, config, {
+      agentId: "33333333-3333-4333-8333-333333333333",
+      campaignId: selectedCampaignId,
+      contactId: null,
+      destinationNumber: "+14155550100",
+      normalizedDestinationNumber: "+14155550100",
+      sipUsername: "agent1000",
+      manualDial: true,
+      callRecordingEnabled: false,
+      earlyMediaAvmdEnabled: false,
+      eventType: "manual_dial_started"
+    });
+
+    assert.deepEqual(result, { ok: false, reason: "agent_not_registered" });
+    assert.ok(queries.includes("rollback"));
+    assert.ok(!queries.some((sql) => sql.includes("insert into calls")));
   });
 
   it("infers agent-ended outcomes from the persisted call state", () => {
@@ -306,15 +404,19 @@ describe("dashboard route helpers", () => {
   });
 
   it("enforces customer media action eligibility in the mutation helpers", async () => {
-    const pool = createQueryPool(() => rows([{
-      agent_id: "agent-1",
-      contact_id: null,
-      agent_leg_uuid: "agent-leg",
-      customer_leg_uuid: "customer-leg",
-      state: "customer_ringing",
-      selected_recording_id: null,
-      runtime_file_path: "/recordings/default.wav"
-    }]));
+    const pool = createQueryPool(() =>
+      rows([
+        {
+          agent_id: "agent-1",
+          contact_id: null,
+          agent_leg_uuid: "agent-leg",
+          customer_leg_uuid: "customer-leg",
+          state: "customer_ringing",
+          selected_recording_id: null,
+          runtime_file_path: "/recordings/default.wav"
+        }
+      ])
+    );
 
     assert.deepEqual(
       await dropVoicemailForCall(pool, config, userRow().id, "44444444-4444-4444-8444-444444444444"),
@@ -332,25 +434,66 @@ describe("dashboard route helpers", () => {
     const pool = createQueryPool((sql, params) => {
       assert.deepEqual(params, ["44444444-4444-4444-8444-444444444444"]);
       if (sql.includes("from calls")) {
-        return rows([{
-          id: "44444444-4444-4444-8444-444444444444",
-          lead_name: "Jane",
-          agent_name: "Alex",
-          phone_number: "+14155550100",
-          campaign_name: "Follow-up",
-          state: "completed",
-          outcome: "answered",
-          created_at: createdAt,
-          started_at: createdAt,
-          answered_at: createdAt,
-          ended_at: endedAt,
-          manual_dial: false,
-          duration_seconds: 60,
-          call_recording_path: null
-        }]);
+        return rows([
+          {
+            id: "44444444-4444-4444-8444-444444444444",
+            lead_name: "Jane",
+            agent_name: "Alex",
+            phone_number: "+14155550100",
+            campaign_name: "Follow-up",
+            state: "completed",
+            outcome: "answered",
+            created_at: createdAt,
+            started_at: createdAt,
+            answered_at: createdAt,
+            ended_at: endedAt,
+            manual_dial: false,
+            duration_seconds: 60,
+            call_recording_path: null,
+            call_recording_enabled: false,
+            voicemail_signal_status: null,
+            voicemail_confidence: null,
+            campaign_id: selectedCampaignId,
+            agent_user_id: userRow().id
+          }
+        ]);
       }
       if (sql.includes("from call_events")) {
-        return rows([{ event_type: "freeswitch_channel_answer", state: "bridged", created_at: createdAt }]);
+        return rows([
+          {
+            event_type: "freeswitch_channel_answer",
+            state: "bridged",
+            reason_code: null,
+            freeswitch_event_name: "CHANNEL_ANSWER",
+            api_command_name: null,
+            agent_leg_uuid: "agent-leg",
+            customer_leg_uuid: "customer-leg",
+            raw_json: { headers: { "hangup-cause": "NORMAL_CLEARING" } },
+            created_at: createdAt
+          }
+        ]);
+      }
+      if (sql.includes("from call_legs")) {
+        return rows([
+          {
+            type: "agent",
+            state: "ended",
+            freeswitch_uuid: "agent-leg",
+            sip_uri: "user/agent-1",
+            started_at: createdAt,
+            answered_at: createdAt,
+            ended_at: endedAt
+          },
+          {
+            type: "customer",
+            state: "ended",
+            freeswitch_uuid: "customer-leg",
+            sip_uri: "sofia/gateway/provider/+14155550100",
+            started_at: createdAt,
+            answered_at: createdAt,
+            ended_at: endedAt
+          }
+        ]);
       }
       throw new Error(`Unexpected query: ${sql}`);
     });
@@ -359,12 +502,22 @@ describe("dashboard route helpers", () => {
 
     assert.equal(detail?.call.outcome, "answered");
     assert.equal(detail?.call.phoneNumber, "+14155550100");
-    assert.deepEqual(detail?.timeline, [{
-      at: createdAt.toISOString(),
-      eventType: "freeswitch_channel_answer",
-      state: "bridged",
-      label: "Freeswitch Channel Answer"
-    }]);
+    assert.equal(detail?.call.hangupCause, "NORMAL_CLEARING");
+    assert.deepEqual(detail?.timeline, [
+      {
+        at: createdAt.toISOString(),
+        eventType: "freeswitch_channel_answer",
+        state: "bridged",
+        label: "Freeswitch Channel Answer",
+        reasonCode: null,
+        freeSwitchEventName: "CHANNEL_ANSWER",
+        apiCommandName: null,
+        agentLegUuid: "agent-leg",
+        customerLegUuid: "customer-leg"
+      }
+    ]);
+    assert.equal(detail?.legs.length, 2);
+    assert.equal(detail?.legs[0]?.hangupCause, "NORMAL_CLEARING");
   });
 
   it("resolves a persisted call recording without exposing unrelated call data", async () => {
@@ -372,6 +525,7 @@ describe("dashboard route helpers", () => {
     const recordingPath = `/var/lib/freeswitch/storage/recordings/calls/${callId}.wav`;
     const pool = createQueryPool((sql, params) => {
       assert.match(sql, /select call_recording_path/);
+      assert.match(sql, /call_recording_status = 'available'/);
       assert.deepEqual(params, [callId]);
       return rows([{ call_recording_path: recordingPath }]);
     });
@@ -381,6 +535,12 @@ describe("dashboard route helpers", () => {
 
   it("returns an explicit empty desk state instead of demo campaign data", async () => {
     const pool = createQueryPool((sql) => {
+      if (sql.includes("update agents") && sql.includes("availability_status")) {
+        return rows([]);
+      }
+      if (sql.includes("select availability_status")) {
+        return rows([{ availability_status: "available", wrap_up_until: null }]);
+      }
       if (sql.includes("from campaigns")) {
         return rows([]);
       }
@@ -403,6 +563,7 @@ describe("dashboard route helpers", () => {
     assert.deepEqual(result.availableCampaigns, []);
     assert.deepEqual(result.leads, []);
     assert.deepEqual(result.recordings, []);
+    assert.deepEqual(result.availability, { status: "available", wrapUpUntil: null });
     assert.equal(result.activeCall, null);
     assert.equal(result.softphone.status, "offline");
     assert.ok(!serialized.includes("campaign_demo_solar_followup"));
@@ -423,7 +584,8 @@ function createTransactionalPool(options: {
   poolHandler?: (sql: string, params: readonly unknown[]) => { rows: unknown[]; rowCount: number };
 }): pg.Pool {
   const client = {
-    query: (sql: string, params: readonly unknown[] = []) => Promise.resolve(options.clientHandler(sql, params)),
+    query: (sql: string, params: readonly unknown[] = []) =>
+      Promise.resolve(options.clientHandler(sql, params)),
     release: () => undefined
   };
   return {
@@ -437,16 +599,18 @@ function rows<T>(items: T[]): { rows: T[]; rowCount: number } {
   return { rows: items, rowCount: items.length };
 }
 
-function campaignRow(overrides: Partial<{
-  agent_registered: boolean;
-  call_recording_enabled: boolean;
-  early_media_avmd_enabled: boolean;
-  callable_leads: string;
-  id: string;
-  manual_dialing_enabled: boolean;
-  name: string;
-  status: "active" | "paused" | "draft";
-}> = {}) {
+function campaignRow(
+  overrides: Partial<{
+    agent_registered: boolean;
+    call_recording_enabled: boolean;
+    early_media_avmd_enabled: boolean;
+    callable_leads: string;
+    id: string;
+    manual_dialing_enabled: boolean;
+    name: string;
+    status: "active" | "paused" | "draft";
+  }> = {}
+) {
   return {
     id: selectedCampaignId,
     name: "Selected campaign",
@@ -466,6 +630,7 @@ function userRow(overrides: Partial<PublicUser> = {}): PublicUser {
     email: "agent@example.com",
     name: "Agent Example",
     role: "agent",
+    isActive: true,
     ...overrides
   };
 }

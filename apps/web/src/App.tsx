@@ -25,66 +25,82 @@ import {
   Square,
   Trash2,
   Upload,
+  UserCheck,
   UserPlus,
+  UserX,
   Users,
   Voicemail,
   XCircle
 } from "lucide-react";
 import {
   isApiError,
-  clearStoredToken,
   completeContact,
   createCampaign,
   createContact,
   createSuppression,
   createUser,
-  deleteCampaign,
   deleteRecording,
   deleteSuppression,
-  deleteUser,
   dropVoicemail,
   endCall,
+  fetchAdminCampaigns,
   fetchAdminOverview,
+  fetchAdminAudit,
+  fetchAdminRecordings,
+  fetchAdminUsers,
   fetchCampaignContacts,
   fetchCallDetail,
+  fetchCallHistory,
   fetchCsvImports,
   fetchCsvImportDetail,
   fetchAgentDesk,
   fetchFreeSwitchDiagnostics,
+  fetchSuppression,
   fetchMe,
   getCallRecordingAudioUrl,
   getRecordingAudioUrl,
-  getStoredToken,
+  downloadCallHistoryCsv,
   importCampaignCsvFile,
+  importSuppressionCsvFile,
   login,
+  logout,
   runFreeSwitchSafeTest,
   sendDtmf,
-  setStoredToken,
   setDefaultRecording,
   startLeadCall,
   startManualCall,
   startNextCall,
   suppressContact,
+  subscribeAgentEvents,
+  updateAgentAvailability,
   updateCampaign,
+  updateUser,
   uploadRecording,
   validateManualDial
 } from "./api";
 import { useSoftphoneRegistration } from "./softphone";
 import type { SoftphoneRuntime } from "./softphone";
 import type {
+  AdminCampaignListResponse,
   AdminOverviewResponse,
+  AdminAuditResponse,
+  AdminRecordingListResponse,
+  AdminUserListResponse,
   AgentDeskResponse,
   CampaignContactListItem,
   CampaignContactsResponse,
   CsvImportDetailResponse,
+  CsvImportHistoryResponse,
   CsvImportSummary,
   CallDetailResponse,
+  CallHistoryResponse,
   FreeSwitchDiagnosticsResponse,
   FreeSwitchSafeTestResponse,
   ImportCsvResponse,
   LeadSummary,
   ManualDialValidationResponse,
-  PublicUser
+  PublicUser,
+  SuppressionListResponse
 } from "./types";
 
 type View = "desk" | "campaigns" | "recordings" | "history" | "suppression" | "settings";
@@ -108,16 +124,22 @@ function getPhoneStatusCopy(softphone: SoftphoneRuntime): { detail: string; labe
     return { label: "Phone ready", detail: "Calls will connect in this browser." };
   }
   if (!softphone.microphoneAllowed) {
-    return { label: "Microphone access needed", detail: "Allow microphone access in your browser, then reload this page." };
+    return {
+      label: "Microphone access needed",
+      detail: "Allow microphone access in your browser, then reload this page."
+    };
   }
   if (softphone.state === "requesting_microphone" || softphone.state === "registering") {
     return { label: "Connecting phone", detail: "This usually takes a few seconds." };
   }
-  return { label: "Phone unavailable", detail: "Reload the page. If it stays offline, contact an administrator." };
+  return {
+    label: "Phone unavailable",
+    detail: "Reload the page. If it stays offline, contact an administrator."
+  };
 }
 
 export function App() {
-  const [tokenReady, setTokenReady] = useState(false);
+  const [sessionReady, setSessionReady] = useState(false);
   const [user, setUser] = useState<PublicUser | null>(null);
   const [desk, setDesk] = useState<AgentDeskResponse | null>(null);
   const [admin, setAdmin] = useState<AdminOverviewResponse | null>(null);
@@ -127,19 +149,14 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   const [manualDialNumber, setManualDialNumber] = useState("");
   const activeCallPollRequestRef = useRef(0);
+  const liveRefreshRequestRef = useRef(0);
 
   useEffect(() => {
-    const token = getStoredToken();
-    if (!token) {
-      setTokenReady(true);
-      return;
-    }
-
+    window.localStorage.removeItem("outbound_dialer_token");
     void hydrateSession();
   }, []);
 
   function resetSession(nextError: string | null = null) {
-    clearStoredToken();
     setUser(null);
     setDesk(null);
     setAdmin(null);
@@ -152,7 +169,10 @@ export function App() {
 
   async function hydrateSession() {
     try {
-      const [{ user: nextUser }, nextDesk] = await Promise.all([fetchMe(), fetchAgentDesk(selectedCampaignId ?? undefined)]);
+      const [{ user: nextUser }, nextDesk] = await Promise.all([
+        fetchMe(),
+        fetchAgentDesk(selectedCampaignId ?? undefined)
+      ]);
       setUser(nextUser);
       setDesk(nextDesk);
       setSelectedCampaignId(nextDesk.campaign?.id ?? null);
@@ -162,21 +182,28 @@ export function App() {
         setCsvImports(nextImports.imports);
       }
     } catch (sessionError) {
-      resetSession(getErrorMessage(sessionError, "Session expired"));
+      resetSession(
+        isApiError(sessionError) && sessionError.status === 401
+          ? null
+          : getErrorMessage(sessionError, "Could not load session")
+      );
     } finally {
-      setTokenReady(true);
+      setSessionReady(true);
     }
   }
 
   async function handleLogin(email: string, password: string) {
     setError(null);
-    const response = await login(email, password);
-    setStoredToken(response.token);
+    await login(email, password);
     await hydrateSession();
   }
 
-  function handleLogout() {
-    resetSession();
+  async function handleLogout() {
+    try {
+      await logout();
+    } finally {
+      resetSession();
+    }
   }
 
   async function handleCampaignChange(campaignId: string) {
@@ -222,11 +249,73 @@ export function App() {
     };
   }, [desk?.activeCall?.id, desk?.campaign?.id, selectedCampaignId, user]);
 
+  useEffect(() => {
+    if (!user) {
+      return undefined;
+    }
+
+    let stopped = false;
+    let debounce: number | null = null;
+    const refresh = async () => {
+      const requestId = ++liveRefreshRequestRef.current;
+      try {
+        if (user.role === "admin") {
+          const [nextDesk, nextAdmin, nextImports] = await Promise.all([
+            fetchAgentDesk(selectedCampaignId ?? undefined),
+            fetchAdminOverview(),
+            fetchCsvImports()
+          ]);
+          if (stopped || requestId !== liveRefreshRequestRef.current) return;
+          setDesk(nextDesk);
+          setSelectedCampaignId(nextDesk.campaign?.id ?? null);
+          setAdmin(nextAdmin);
+          setCsvImports(nextImports.imports);
+          return;
+        }
+
+        const nextDesk = await fetchAgentDesk(selectedCampaignId ?? undefined);
+        if (stopped || requestId !== liveRefreshRequestRef.current) return;
+        setDesk(nextDesk);
+        setSelectedCampaignId(nextDesk.campaign?.id ?? null);
+      } catch (refreshError) {
+        if (stopped || requestId !== liveRefreshRequestRef.current) return;
+        if (isApiError(refreshError) && refreshError.status === 401) {
+          resetSession("Session expired");
+        }
+      }
+    };
+    const scheduleRefresh = () => {
+      if (debounce !== null) window.clearTimeout(debounce);
+      debounce = window.setTimeout(() => void refresh(), 100);
+    };
+
+    let unsubscribe: () => void = () => undefined;
+    try {
+      unsubscribe = subscribeAgentEvents({
+        onConnectionChange: (connected) => {
+          if (!connected) scheduleRefresh();
+        },
+        onRefresh: scheduleRefresh
+      });
+    } catch {
+      // The periodic refresh below keeps the desk usable if SSE is unavailable.
+    }
+    const fallback = window.setInterval(() => void refresh(), 30_000);
+
+    return () => {
+      stopped = true;
+      liveRefreshRequestRef.current += 1;
+      if (debounce !== null) window.clearTimeout(debounce);
+      window.clearInterval(fallback);
+      unsubscribe();
+    };
+  }, [selectedCampaignId, user?.id, user?.role]);
+
   const isAgentOnly = user?.role === "agent";
   const activeView: View = isAgentOnly ? "desk" : view;
   const softphoneRuntime = useSoftphoneRegistration(user && activeView === "desk" ? user : null);
 
-  if (!tokenReady) {
+  if (!sessionReady) {
     return <div className="boot-screen">Loading dialer</div>;
   }
 
@@ -255,12 +344,17 @@ export function App() {
               const Icon = item.icon;
               return (
                 <button
+                  aria-current={item.id === activeView ? "page" : undefined}
                   className={item.id === activeView ? "nav-item active" : "nav-item"}
                   disabled={Boolean(desk.activeCall && activeView === "desk" && item.id !== "desk")}
                   key={item.id}
                   onClick={() => setView(item.id)}
                   type="button"
-                  title={desk.activeCall && activeView === "desk" && item.id !== "desk" ? "Finish the active call first" : item.label}
+                  title={
+                    desk.activeCall && activeView === "desk" && item.id !== "desk"
+                      ? "Finish the active call first"
+                      : item.label
+                  }
                 >
                   <Icon size={18} />
                   <span>{item.label}</span>
@@ -270,8 +364,18 @@ export function App() {
           </nav>
           <div className="sidebar-foot">
             <span>{user.name}</span>
-            <strong>{softphoneRuntime.registered ? "● Ready · Phone connected" : "● Phone connecting"}</strong>
-            <small>{desk.metrics.todayCalls} calls · {desk.metrics.voicemailsDropped} VM drops</small>
+            <strong>
+              {desk.availability.status === "paused"
+                ? `● Paused · ${softphoneRuntime.registered ? "Phone connected" : "Phone connecting"}`
+                : desk.availability.status === "wrap_up"
+                  ? `● Finishing notes · ${softphoneRuntime.registered ? "Phone connected" : "Phone connecting"}`
+                  : softphoneRuntime.registered
+                    ? "● Ready · Phone connected"
+                    : "● Phone connecting"}
+            </strong>
+            <small>
+              {desk.metrics.todayCalls} calls · {desk.metrics.voicemailsDropped} VM drops
+            </small>
           </div>
         </aside>
       )}
@@ -465,6 +569,8 @@ function AgentDesk({
   const [dtmfPending, setDtmfPending] = useState(false);
   const [endCallError, setEndCallError] = useState<string | null>(null);
   const campaign = desk.campaign;
+  const availabilityStatus = useEffectiveAvailability(desk.availability);
+  const canStartCalls = softphone.registered && availabilityStatus === "available";
 
   useEffect(() => {
     if (manualDialNumber && !desk.activeCall && campaign?.manualDialingEnabled) {
@@ -477,8 +583,8 @@ function AgentDesk({
       setCallNextError("No active campaign is available");
       return;
     }
-    if (!softphone.registered) {
-      setCallNextError("The browser phone is not ready yet");
+    if (!canStartCalls) {
+      setCallNextError(callStartBlockedMessage(desk, softphone));
       return;
     }
     setCallNextPending(true);
@@ -493,8 +599,8 @@ function AgentDesk({
   }
 
   async function callLead(lead: LeadSummary) {
-    if (!softphone.registered) {
-      setCallNextError("The browser phone is not ready yet");
+    if (!canStartCalls) {
+      setCallNextError(callStartBlockedMessage(desk, softphone));
       return;
     }
     setCallNextPending(true);
@@ -560,7 +666,9 @@ function AgentDesk({
             pending={endCallPending}
           />
         )}
-        <AgentNoCampaignStatus desk={desk} softphone={softphone} />
+        <AgentNoCampaignStatus desk={desk} onDeskChanged={onDeskChanged} softphone={softphone} />
+        <VoicemailJobs jobs={desk.voicemailJobs} />
+        <RecentAgentCalls calls={desk.recentCalls} />
       </section>
     );
   }
@@ -574,7 +682,7 @@ function AgentDesk({
     return (
       <section className="agent-grid active-agent-grid">
         <LeadQueue
-          canStartCalls={softphone.registered}
+          canStartCalls={canStartCalls}
           error={callNextError}
           leads={desk.leads}
           onCallLead={callLead}
@@ -593,6 +701,7 @@ function AgentDesk({
           pending={endCallPending}
         />
         <LeadContextPanel lead={activeLead} />
+        <VoicemailJobs jobs={desk.voicemailJobs} />
       </section>
     );
   }
@@ -600,6 +709,7 @@ function AgentDesk({
   if (deskMode === "manual" && campaign.manualDialingEnabled) {
     return (
       <ManualDialSurface
+        canStartCalls={canStartCalls}
         desk={campaignDesk}
         onDeskChanged={onDeskChanged}
         onOpenQueue={() => setDeskMode("ready")}
@@ -613,7 +723,7 @@ function AgentDesk({
   return (
     <section className="ready-desk-grid">
       <LeadQueue
-        canStartCalls={softphone.registered}
+        canStartCalls={canStartCalls}
         error={callNextError}
         leads={desk.leads}
         onCallLead={callLead}
@@ -624,10 +734,62 @@ function AgentDesk({
         desk={campaignDesk}
         mode="ready"
         onCampaignChange={onCampaignChange}
+        onDeskChanged={onDeskChanged}
         onOpenManual={() => setDeskMode("manual")}
         softphone={softphone}
       />
+      <VoicemailJobs jobs={desk.voicemailJobs} />
+      <RecentAgentCalls calls={desk.recentCalls} />
     </section>
+  );
+}
+
+function VoicemailJobs({ jobs }: { jobs: AgentDeskResponse["voicemailJobs"] }) {
+  if (!jobs.length) {
+    return null;
+  }
+  return (
+    <article className="panel background-jobs" aria-live="polite">
+      <PanelHeader icon={Voicemail} title="Voicemail jobs" meta={`${jobs.length} recent`} />
+      <div className="table-list">
+        {jobs.map((job) => (
+          <div className="table-row background-job-row" key={job.callId}>
+            <span>
+              <strong>{job.leadName}</strong>
+              <small>{job.phoneNumber}</small>
+            </span>
+            <StatusBadge
+              label={job.status === "playing" ? "Playing" : job.status}
+              tone={job.status === "completed" ? "good" : job.status === "interrupted" ? "bad" : "warn"}
+            />
+          </div>
+        ))}
+      </div>
+    </article>
+  );
+}
+
+function RecentAgentCalls({ calls }: { calls: AgentDeskResponse["recentCalls"] }) {
+  if (!calls.length) {
+    return null;
+  }
+  return (
+    <article className="panel recent-agent-calls">
+      <PanelHeader icon={History} title="Recent outcomes" meta={`${calls.length} calls`} />
+      <div className="table-list">
+        {calls.map((call) => (
+          <div className="table-row recent-call-row" key={call.id}>
+            <span>
+              <strong>{call.leadName}</strong>
+              <small>{call.phoneNumber}</small>
+            </span>
+            <b className={`outcome-badge outcome-${call.outcome ?? call.state}`}>
+              {formatOutcome(call.outcome, call.state)}
+            </b>
+          </div>
+        ))}
+      </div>
+    </article>
   );
 }
 
@@ -661,9 +823,11 @@ function LeadQueue({
   showRecommendedCall?: boolean;
 }) {
   const [query, setQuery] = useState("");
-  const recommended = leads.find((lead) => lead.status === "ready") ?? leads[0];
+  const recommended = leads.find((lead) => lead.status === "ready");
   const visibleLeads = leads.filter((lead) =>
-    `${lead.name} ${getDisplayCompany(lead.company)} ${lead.phoneNumber}`.toLowerCase().includes(query.trim().toLowerCase())
+    `${lead.name} ${getDisplayCompany(lead.company)} ${lead.phoneNumber}`
+      .toLowerCase()
+      .includes(query.trim().toLowerCase())
   );
   const activeQueue = !showRecommendedCall;
 
@@ -674,7 +838,7 @@ function LeadQueue({
           <h2>{activeQueue ? "Lead queue" : "Next leads"}</h2>
           <span>{leads.length}</span>
         </div>
-        <p>{activeQueue ? "Auto-advances after each outcome" : "Start the next call from the campaign queue."}</p>
+        <p>{activeQueue ? "Current campaign queue" : "Start the next call from the campaign queue."}</p>
       </div>
       {error && <p className="form-error">{error}</p>}
       {showRecommendedCall && recommended && (
@@ -683,11 +847,21 @@ function LeadQueue({
           <p>
             {recommended.name}, {recommended.phoneNumber}
           </p>
-          <button className="primary-action teal-action" disabled={pending || !canStartCalls} onClick={onCallNext} type="button">
+          <button
+            className="primary-action teal-action"
+            disabled={pending || !canStartCalls}
+            onClick={onCallNext}
+            type="button"
+          >
             <PhoneCall size={17} />
             {pending ? "Starting" : "Start next call"}
           </button>
         </div>
+      )}
+      {showRecommendedCall && !recommended && (
+        <p className="empty-state">
+          No contacts are callable yet. Retries become available after the configured cooldown.
+        </p>
       )}
       <label className="queue-search">
         <Search size={15} />
@@ -702,27 +876,29 @@ function LeadQueue({
         {visibleLeads.map((lead) => {
           const company = getDisplayCompany(lead.company);
           return (
-          <div className={`lead-table-row lead-${lead.status}`} key={lead.id} role="row">
-            <span className="lead-avatar" aria-hidden="true">{getInitials(lead.name)}</span>
-            <div className="lead-identity">
-              <strong>{lead.name}</strong>
-              {activeQueue && company && <small>{company}</small>}
-              <span>{lead.phoneNumber}</span>
+            <div className={`lead-table-row lead-${lead.status}`} key={lead.id} role="row">
+              <span className="lead-avatar" aria-hidden="true">
+                {getInitials(lead.name)}
+              </span>
+              <div className="lead-identity">
+                <strong>{lead.name}</strong>
+                {activeQueue && company && <small>{company}</small>}
+                <span>{lead.phoneNumber}</span>
+              </div>
+              <div className="lead-row-state">
+                <b>{formatLeadStatus(lead.status)}</b>
+                {showRecommendedCall && (
+                  <button
+                    className="pill-action"
+                    disabled={pending || lead.status !== "ready" || !canStartCalls}
+                    onClick={() => onCallLead(lead)}
+                    type="button"
+                  >
+                    Call
+                  </button>
+                )}
+              </div>
             </div>
-            <div className="lead-row-state">
-              <b>{lead.status === "calling" ? "Connected" : lead.status}</b>
-              {showRecommendedCall && (
-                <button
-                  className="pill-action"
-                  disabled={pending || lead.status !== "ready" || !canStartCalls}
-                  onClick={() => onCallLead(lead)}
-                  type="button"
-                >
-                  Call
-                </button>
-              )}
-            </div>
-          </div>
           );
         })}
         {!visibleLeads.length && (
@@ -736,12 +912,14 @@ function LeadQueue({
 }
 
 function getInitials(name: string): string {
-  return name
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((part) => part[0]?.toUpperCase())
-    .join("") || "?";
+  return (
+    name
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((part) => part[0]?.toUpperCase())
+      .join("") || "?"
+  );
 }
 
 function getDisplayCompany(company: string | null | undefined): string {
@@ -751,9 +929,10 @@ function getDisplayCompany(company: string | null | undefined): string {
 
 function LeadContextPanel({ lead }: { lead?: LeadSummary }) {
   const company = getDisplayCompany(lead?.company);
-  const visibleFields = lead?.fields
-    .filter(({ label }) => !["company", "name", "phone"].includes(label.toLowerCase()))
-    .slice(0, 5) ?? [];
+  const visibleFields =
+    lead?.fields
+      .filter(({ label }) => !["company", "name", "phone"].includes(label.toLowerCase()))
+      .slice(0, 5) ?? [];
 
   return (
     <article className="panel lead-context-panel">
@@ -783,10 +962,115 @@ function LeadContextPanel({ lead }: { lead?: LeadSummary }) {
         )}
       </div>
       <div className="compliance-card">
-        <CheckCircle2 size={15} />
-        <span>Callable · suppression check passed</span>
+        {lead?.status === "ready" ? <CheckCircle2 size={15} /> : <Clock3 size={15} />}
+        <span>{lead ? leadAvailabilityCopy(lead.status) : "Select a lead"}</span>
       </div>
     </article>
+  );
+}
+
+function formatLeadStatus(status: LeadSummary["status"]): string {
+  const labels: Record<LeadSummary["status"], string> = {
+    calling: "Connected",
+    completed: "Completed",
+    exhausted: "Attempt limit reached",
+    ready: "Ready",
+    retry_wait: "Retry later",
+    suppressed: "Suppressed"
+  };
+  return labels[status];
+}
+
+function leadAvailabilityCopy(status: LeadSummary["status"]): string {
+  if (status === "ready") return "Callable · suppression check passed";
+  if (status === "retry_wait") return "Retry cooldown is active";
+  if (status === "exhausted") return "Configured attempt limit reached";
+  if (status === "suppressed") return "Calling blocked by suppression";
+  if (status === "completed") return "Contact lifecycle completed";
+  return "Call in progress";
+}
+
+function useEffectiveAvailability(
+  availability: AgentDeskResponse["availability"]
+): AgentDeskResponse["availability"]["status"] {
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    setNow(Date.now());
+    if (availability.status !== "wrap_up" || !availability.wrapUpUntil) {
+      return;
+    }
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [availability.status, availability.wrapUpUntil]);
+
+  if (
+    availability.status === "wrap_up" &&
+    availability.wrapUpUntil &&
+    new Date(availability.wrapUpUntil).getTime() <= now
+  ) {
+    return "available";
+  }
+  return availability.status;
+}
+
+function callStartBlockedMessage(desk: AgentDeskResponse, softphone: SoftphoneRuntime): string {
+  if (!softphone.registered) {
+    return "The browser phone is not ready yet";
+  }
+  if (desk.availability.status === "paused") {
+    return "Resume calling before starting a call";
+  }
+  return "Finish your notes or mark yourself ready before starting a call";
+}
+
+function AvailabilityControl({
+  desk,
+  disabled = false,
+  onDeskChanged
+}: {
+  desk: AgentDeskResponse;
+  disabled?: boolean;
+  onDeskChanged: (desk: AgentDeskResponse) => void;
+}) {
+  const status = useEffectiveAvailability(desk.availability);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const paused = status === "paused";
+  const wrappingUp = status === "wrap_up";
+  const statusLabel = paused ? "Paused" : wrappingUp ? "Finishing notes" : "Ready";
+  const actionLabel = status === "available" ? "Pause" : paused ? "Resume calling" : "Ready now";
+
+  async function toggleAvailability() {
+    setPending(true);
+    setError(null);
+    try {
+      onDeskChanged(
+        await updateAgentAvailability({
+          status: status === "available" ? "paused" : "available",
+          campaignId: desk.campaign?.id
+        })
+      );
+    } catch (updateError) {
+      setError(updateError instanceof Error ? updateError.message : "Could not change availability");
+    } finally {
+      setPending(false);
+    }
+  }
+
+  return (
+    <div className="availability-control">
+      <StatusBadge label={statusLabel} tone={status === "available" ? "good" : "neutral"} />
+      <button
+        className="pill-action"
+        disabled={disabled || pending}
+        onClick={() => void toggleAvailability()}
+        type="button"
+      >
+        {pending ? "Saving" : actionLabel}
+      </button>
+      {error && <small className="form-error">{error}</small>}
+    </div>
   );
 }
 
@@ -794,12 +1078,14 @@ function AgentStatusPanel({
   desk,
   mode,
   onCampaignChange,
+  onDeskChanged,
   onOpenManual,
   softphone
 }: {
   desk: AgentDeskWithCampaign;
   mode: "ready" | "active";
   onCampaignChange: (campaignId: string) => Promise<void>;
+  onDeskChanged: (desk: AgentDeskResponse) => void;
   onOpenManual: () => void;
   softphone: SoftphoneRuntime;
 }) {
@@ -840,7 +1126,7 @@ function AgentStatusPanel({
       </label>
       {campaignError && <p className="form-error">{campaignError}</p>}
       <div className="status-stack">
-        <StatusBadge label={mode === "active" ? "In call" : "Ready"} tone="good" />
+        <AvailabilityControl desk={desk} disabled={mode === "active"} onDeskChanged={onDeskChanged} />
         <StatusBadge
           label={desk.campaign.manualDialingEnabled ? "Manual dialing enabled" : "Manual dialing disabled"}
           tone={desk.campaign.manualDialingEnabled ? "good" : "neutral"}
@@ -857,7 +1143,11 @@ function AgentStatusPanel({
       </div>
       <div className="softphone-actions">
         {softphone.callState === "active" && (
-          <button className="danger-action compact-action" onClick={() => void softphone.hangUpSoftphoneCall()} type="button">
+          <button
+            className="danger-action compact-action"
+            onClick={() => void softphone.hangUpSoftphoneCall()}
+            type="button"
+          >
             <PhoneOff size={16} />
             Hang up
           </button>
@@ -878,7 +1168,15 @@ function AgentStatusPanel({
   );
 }
 
-function AgentNoCampaignStatus({ desk, softphone }: { desk: AgentDeskResponse; softphone: SoftphoneRuntime }) {
+function AgentNoCampaignStatus({
+  desk,
+  onDeskChanged,
+  softphone
+}: {
+  desk: AgentDeskResponse;
+  onDeskChanged: (desk: AgentDeskResponse) => void;
+  softphone: SoftphoneRuntime;
+}) {
   const phoneStatus = getPhoneStatusCopy(softphone);
   return (
     <article className="panel agent-status-panel">
@@ -886,7 +1184,11 @@ function AgentNoCampaignStatus({ desk, softphone }: { desk: AgentDeskResponse; s
         <h2>Agent status</h2>
       </div>
       <div className="status-stack">
-        <StatusBadge label={desk.activeCall ? "In call" : "No campaign"} tone={desk.activeCall ? "good" : "neutral"} />
+        {desk.activeCall ? (
+          <StatusBadge label="In call" tone="good" />
+        ) : (
+          <AvailabilityControl desk={desk} onDeskChanged={onDeskChanged} />
+        )}
         <StatusBadge label="Manual dialing unavailable" tone="neutral" />
       </div>
       <div className="softphone-runtime-card">
@@ -908,6 +1210,7 @@ function AgentNoCampaignStatus({ desk, softphone }: { desk: AgentDeskResponse; s
 }
 
 function ManualDialSurface({
+  canStartCalls,
   desk,
   onDeskChanged,
   onOpenQueue,
@@ -915,6 +1218,7 @@ function ManualDialSurface({
   phoneNumber,
   softphone
 }: {
+  canStartCalls: boolean;
   desk: AgentDeskWithCampaign;
   onDeskChanged: (desk: AgentDeskResponse) => void;
   onOpenQueue: () => void;
@@ -946,8 +1250,8 @@ function ManualDialSurface({
   }
 
   async function startCall() {
-    if (!softphone.registered) {
-      setError("The browser phone is not ready yet");
+    if (!canStartCalls) {
+      setError(callStartBlockedMessage(desk, softphone));
       return;
     }
     setStartPending(true);
@@ -1008,7 +1312,7 @@ function ManualDialSurface({
               disabled={
                 startPending ||
                 !phoneNumber.trim() ||
-                !softphone.registered ||
+                !canStartCalls ||
                 !desk.campaign.manualDialingEnabled ||
                 result?.allowed === false
               }
@@ -1028,13 +1332,16 @@ function ManualDialSurface({
         <div className="surface-heading">
           <h2>Pre-call checks</h2>
         </div>
+        <AvailabilityControl desk={desk} onDeskChanged={onDeskChanged} />
         {error && <p className="form-error">{error}</p>}
         <div className="check-list">
           {checks.map((check) => (
             <CheckRow detail={check.detail} key={check.label} label={check.label} status={check.status} />
           ))}
           <CheckRow
-            detail={desk.recordings[0] ? "Selected by the campaign" : "Upload a voicemail recording to enable drop"}
+            detail={
+              desk.recordings[0] ? "Selected by the campaign" : "Upload a voicemail recording to enable drop"
+            }
             label="Voicemail recording"
             status={desk.recordings[0] ? "pass" : "warn"}
             value={desk.recordings[0]?.name}
@@ -1049,7 +1356,10 @@ function ManualDialSurface({
           <AlertTriangle size={18} />
           <div>
             <strong>Admin-controlled feature</strong>
-            <p>If manual dialing is disabled, this screen is hidden and agents can only call imported campaign leads.</p>
+            <p>
+              If manual dialing is disabled, this screen is hidden and agents can only call imported campaign
+              leads.
+            </p>
           </div>
         </div>
       </article>
@@ -1143,16 +1453,29 @@ function ActiveCall({
       <div className="call-stage">
         <div className="call-stage-top">
           <span>Live audio</span>
-          <strong aria-label={`Call duration ${formatDuration(activeCall.durationSeconds)}`}>{formatDuration(activeCall.durationSeconds)}</strong>
+          <strong aria-label={`Call duration ${formatDuration(activeCall.durationSeconds)}`}>
+            {formatDuration(activeCall.durationSeconds)}
+          </strong>
         </div>
         <div className="audio-waveform" aria-hidden="true">
-          {[18, 32, 46, 28, 58, 40, 24, 52, 68, 44, 30, 54, 36, 20, 42, 62, 38, 24, 48, 32, 18, 40, 26, 52, 34, 20, 44, 30].map((height, index) => (
+          {[
+            18, 32, 46, 28, 58, 40, 24, 52, 68, 44, 30, 54, 36, 20, 42, 62, 38, 24, 48, 32, 18, 40, 26, 52,
+            34, 20, 44, 30
+          ].map((height, index) => (
             <span key={`${height}-${index}`} style={{ height }} />
           ))}
         </div>
         <div className="call-stage-meta">
           <span>{activeCall.status === "bridged" ? "Stable media · customer connected" : durationLabel}</span>
-          <b>● REC</b>
+          <b className={`recording-state recording-${activeCall.callRecordingStatus}`}>
+            {activeCall.callRecordingStatus === "recording"
+              ? "● REC"
+              : activeCall.callRecordingStatus === "pending"
+                ? "REC pending"
+                : activeCall.callRecordingStatus === "failed"
+                  ? "REC failed"
+                  : "Not recorded"}
+          </b>
         </div>
       </div>
       <div className="handoff-card">
@@ -1192,18 +1515,29 @@ function ActiveCall({
           className="primary-action voicemail-primary-action"
           disabled={pending || dropPending || !dropRecordingId || !dropEligibility.allowed}
           onClick={() => onDropVoicemail(activeCall.id, dropRecordingId)}
-          title={!dropEligibility.allowed ? dropEligibility.reason ?? "Voicemail drop is not available yet" : undefined}
+          title={
+            !dropEligibility.allowed
+              ? (dropEligibility.reason ?? "Voicemail drop is not available yet")
+              : undefined
+          }
           type="button"
         >
           <Voicemail size={17} />
           {dropPending ? "Dropping" : "Drop voicemail"}
         </button>
-        <button className="danger-action" disabled={pending} onClick={() => onHangUp(activeCall.id)} type="button">
+        <button
+          className="danger-action"
+          disabled={pending}
+          onClick={() => onHangUp(activeCall.id)}
+          type="button"
+        >
           <PhoneOff size={17} />
           {pending ? "Ending" : "Hang up"}
         </button>
       </div>
-      {!dropEligibility.allowed && dropEligibility.reason && <p className="action-hint">{dropEligibility.reason}</p>}
+      {!dropEligibility.allowed && dropEligibility.reason && (
+        <p className="action-hint">{dropEligibility.reason}</p>
+      )}
       {error && <p className="form-error">{error}</p>}
       <details className="dtmf-panel">
         <summary>Keypad</summary>
@@ -1213,7 +1547,9 @@ function ActiveCall({
               disabled={dtmfPending || !dtmfEligibility.allowed}
               key={digit}
               onClick={() => void onSendDtmf(activeCall.id, digit)}
-              title={!dtmfEligibility.allowed ? dtmfEligibility.reason ?? "DTMF is not available yet" : undefined}
+              title={
+                !dtmfEligibility.allowed ? (dtmfEligibility.reason ?? "DTMF is not available yet") : undefined
+              }
               type="button"
             >
               {digit}
@@ -1221,7 +1557,9 @@ function ActiveCall({
           ))}
         </div>
       </details>
-      {!dtmfEligibility.allowed && dtmfEligibility.reason && <p className="action-hint">{dtmfEligibility.reason}</p>}
+      {!dtmfEligibility.allowed && dtmfEligibility.reason && (
+        <p className="action-hint">{dtmfEligibility.reason}</p>
+      )}
       <div className="timeline">
         {activeCall.timeline.map((item) => (
           <div className="timeline-item" key={`${item.at}-${item.label}`}>
@@ -1302,7 +1640,9 @@ function AdminView({
   }
 
   const content = {
-    campaigns: <Campaigns admin={admin} csvImports={csvImports} onChanged={onChanged} onManualDial={onManualDial} />,
+    campaigns: (
+      <Campaigns admin={admin} csvImports={csvImports} onChanged={onChanged} onManualDial={onManualDial} />
+    ),
     recordings: <Recordings admin={admin} onChanged={onChanged} />,
     history: <HistoryView admin={admin} />,
     suppression: <SuppressionView admin={admin} onChanged={onChanged} />,
@@ -1324,6 +1664,40 @@ function Campaigns({
   onChanged: () => Promise<void>;
   onManualDial: (phoneNumber: string) => void;
 }) {
+  const [query, setQuery] = useState("");
+  const [page, setPage] = useState(1);
+  const [pending, setPending] = useState(false);
+  const [libraryError, setLibraryError] = useState<string | null>(null);
+  const [library, setLibrary] = useState<AdminCampaignListResponse>({
+    items: admin.campaigns.slice(0, 25),
+    page: 1,
+    pageSize: 25,
+    total: admin.campaigns.length,
+    totalPages: admin.campaigns.length ? Math.ceil(admin.campaigns.length / 25) : 0
+  });
+
+  useEffect(() => {
+    let active = true;
+    const timeout = window.setTimeout(() => {
+      setPending(true);
+      setLibraryError(null);
+      void fetchAdminCampaigns({ q: query || undefined, page, pageSize: 25 })
+        .then((next) => {
+          if (active) setLibrary(next);
+        })
+        .catch((loadError) => {
+          if (active) setLibraryError(getErrorMessage(loadError, "Could not load campaign library"));
+        })
+        .finally(() => {
+          if (active) setPending(false);
+        });
+    }, 200);
+    return () => {
+      active = false;
+      window.clearTimeout(timeout);
+    };
+  }, [admin.campaigns, page, query]);
+
   return (
     <>
       <div className="operations-grid two">
@@ -1334,20 +1708,44 @@ function Campaigns({
         <CsvImportForm campaigns={admin.campaigns} onChanged={onChanged} />
         <CsvImportHistory imports={csvImports} />
       </div>
+      <article className="panel admin-library-toolbar">
+        <PanelHeader
+          icon={Upload}
+          title="Campaign library"
+          meta={pending ? "loading" : `${library.total} campaigns`}
+        />
+        <label className="queue-search">
+          <Search size={15} />
+          <input
+            aria-label="Search campaigns"
+            onChange={(event) => {
+              setQuery(event.target.value);
+              setPage(1);
+            }}
+            placeholder="Search name or status"
+            value={query}
+          />
+        </label>
+        {libraryError && <p className="form-error">{libraryError}</p>}
+        <AdminLibraryPagination
+          onPageChange={setPage}
+          page={library.page}
+          pending={pending}
+          totalPages={library.totalPages}
+        />
+      </article>
       <div className="operations-grid">
-        {admin.campaigns.map((campaign) => (
+        {library.items.map((campaign) => (
           <CampaignCard campaign={campaign} key={campaign.id} onChanged={onChanged} />
         ))}
+        {!library.items.length && <p className="empty-state">No campaigns match this search.</p>}
       </div>
       <CampaignContacts campaigns={admin.campaigns} onChanged={onChanged} onManualDial={onManualDial} />
     </>
   );
 }
 
-function getValidCampaignId(
-  campaignId: string,
-  campaigns: AdminOverviewResponse["campaigns"]
-): string {
+function getValidCampaignId(campaignId: string, campaigns: AdminOverviewResponse["campaigns"]): string {
   if (campaigns.some((campaign) => campaign.id === campaignId)) {
     return campaignId;
   }
@@ -1364,6 +1762,8 @@ function CampaignCard({
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(campaign.name);
   const [status, setStatus] = useState(campaign.status);
+  const [manualDialingEnabled, setManualDialingEnabled] = useState(campaign.manualDialingEnabled);
+  const [callRecordingEnabled, setCallRecordingEnabled] = useState(campaign.callRecordingEnabled);
   const [earlyMediaAvmdEnabled, setEarlyMediaAvmdEnabled] = useState(campaign.earlyMediaAvmdEnabled);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1371,15 +1771,29 @@ function CampaignCard({
   useEffect(() => {
     setName(campaign.name);
     setStatus(campaign.status);
+    setManualDialingEnabled(campaign.manualDialingEnabled);
+    setCallRecordingEnabled(campaign.callRecordingEnabled);
     setEarlyMediaAvmdEnabled(campaign.earlyMediaAvmdEnabled);
-  }, [campaign.earlyMediaAvmdEnabled, campaign.name, campaign.status]);
+  }, [
+    campaign.callRecordingEnabled,
+    campaign.earlyMediaAvmdEnabled,
+    campaign.manualDialingEnabled,
+    campaign.name,
+    campaign.status
+  ]);
 
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setPending(true);
     setError(null);
     try {
-      await updateCampaign(campaign.id, { name, status, earlyMediaAvmdEnabled });
+      await updateCampaign(campaign.id, {
+        name,
+        status,
+        manualDialingEnabled,
+        callRecordingEnabled,
+        earlyMediaAvmdEnabled
+      });
       setEditing(false);
       await onChanged();
     } catch (saveError) {
@@ -1389,17 +1803,23 @@ function CampaignCard({
     }
   }
 
-  async function remove() {
-    if (!window.confirm(`Delete campaign "${campaign.name}"?`)) {
+  async function archive() {
+    if (!window.confirm(`Archive campaign "${campaign.name}"? Historical calls will remain available.`)) {
       return;
     }
     setPending(true);
     setError(null);
     try {
-      await deleteCampaign(campaign.id);
+      await updateCampaign(campaign.id, {
+        name: campaign.name,
+        status: "archived",
+        manualDialingEnabled: campaign.manualDialingEnabled,
+        callRecordingEnabled: campaign.callRecordingEnabled,
+        earlyMediaAvmdEnabled: campaign.earlyMediaAvmdEnabled
+      });
       await onChanged();
     } catch (deleteError) {
-      setError(deleteError instanceof Error ? deleteError.message : "Could not delete campaign");
+      setError(deleteError instanceof Error ? deleteError.message : "Could not archive campaign");
     } finally {
       setPending(false);
     }
@@ -1422,7 +1842,13 @@ function CampaignCard({
           >
             {editing ? <XCircle size={16} /> : <Pencil size={16} />}
           </button>
-          <button className="icon-button danger-icon" disabled={pending} onClick={remove} title="Delete campaign" type="button">
+          <button
+            className="icon-button danger-icon"
+            disabled={pending || campaign.status === "archived"}
+            onClick={archive}
+            title="Archive campaign"
+            type="button"
+          >
             <Trash2 size={16} />
           </button>
         </div>
@@ -1439,7 +1865,24 @@ function CampaignCard({
               <option value="draft">draft</option>
               <option value="active">active</option>
               <option value="paused">paused</option>
+              <option value="archived">archived</option>
             </select>
+          </label>
+          <label className="checkbox-label">
+            <input
+              checked={manualDialingEnabled}
+              onChange={(event) => setManualDialingEnabled(event.target.checked)}
+              type="checkbox"
+            />
+            Allow manual dialing
+          </label>
+          <label className="checkbox-label">
+            <input
+              checked={callRecordingEnabled}
+              onChange={(event) => setCallRecordingEnabled(event.target.checked)}
+              type="checkbox"
+            />
+            Record calls
           </label>
           <label className="checkbox-label">
             <input
@@ -1451,7 +1894,8 @@ function CampaignCard({
           </label>
           {earlyMediaAvmdEnabled && (
             <p className="avmd-warning">
-              May detect voicemail beeps before answer, but slightly increases the chance of false positives from carrier tones.
+              May detect voicemail beeps before answer, but slightly increases the chance of false positives
+              from carrier tones.
             </p>
           )}
           <button className="primary-action compact-action" disabled={pending} type="submit">
@@ -1462,13 +1906,25 @@ function CampaignCard({
       ) : (
         <div className="campaign-badges">
           <StatusBadge label={campaign.status} tone="neutral" />
+          {campaign.manualDialingEnabled && <StatusBadge label="Manual dialing" tone="neutral" />}
+          {campaign.callRecordingEnabled && <StatusBadge label="Call recording" tone="good" />}
           {campaign.earlyMediaAvmdEnabled && <StatusBadge label="Early-media AVMD" tone="warn" />}
         </div>
       )}
       <div className="stat-row campaign-stat-row">
         <Metric label="Loaded" value={campaign.loaded} icon={Users} />
         <Metric label="Callable" value={campaign.callable} icon={PhoneCall} />
+        <Metric label="Attempted" value={campaign.attempted} icon={History} />
       </div>
+      {campaign.outcomeDistribution.length > 0 && (
+        <div className="kpi-outcomes campaign-outcomes" aria-label="Campaign outcome breakdown">
+          {campaign.outcomeDistribution.map((item) => (
+            <span key={item.outcome}>
+              <strong>{item.count}</strong> {item.outcome.replaceAll("_", " ")}
+            </span>
+          ))}
+        </div>
+      )}
       {error && <p className="form-error">{error}</p>}
     </article>
   );
@@ -1555,7 +2011,11 @@ function CampaignContacts({
 
   return (
     <article className="panel wide-panel contact-browser">
-      <PanelHeader icon={Users} title="Campaign contacts" meta={pending ? "loading" : `${contacts?.total ?? 0} found`} />
+      <PanelHeader
+        icon={Users}
+        title="Campaign contacts"
+        meta={pending ? "loading" : `${contacts?.total ?? 0} found`}
+      />
       <div className="contact-toolbar">
         <label>
           Campaign
@@ -1573,7 +2033,11 @@ function CampaignContacts({
         </label>
         <label>
           Search
-          <input onChange={(event) => setQuery(event.target.value)} placeholder="Name, phone, company" value={query} />
+          <input
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Name, phone, company"
+            value={query}
+          />
         </label>
         <label>
           Status
@@ -1678,7 +2142,10 @@ function CsvImportForm({
     <article className="panel form-panel">
       <PanelHeader icon={Upload} title="CSV import" meta="Name + phone" />
       <form className="stack-form" onSubmit={submit}>
-        <p className="form-help">Upload a CSV with <strong>name</strong> and <strong>phone</strong> columns. Phone is required for every imported lead.</p>
+        <p className="form-help">
+          Upload a CSV with <strong>name</strong> and <strong>phone</strong> columns. Phone is required for
+          every imported lead.
+        </p>
         <label>
           Campaign
           <select
@@ -1706,11 +2173,20 @@ function CsvImportForm({
             type="file"
           />
         </label>
-        {file && <p className="selected-file">Ready to import: <strong>{file.name}</strong></p>}
+        {file && (
+          <p className="selected-file">
+            Ready to import: <strong>{file.name}</strong>
+          </p>
+        )}
         {error && <p className="form-error">{error}</p>}
         {result && (
-          <div className={result.failedRows ? "import-result has-failures" : "import-result success"} role="status">
-            <strong>{result.importedRows} lead{result.importedRows === 1 ? "" : "s"} imported</strong>
+          <div
+            className={result.failedRows ? "import-result has-failures" : "import-result success"}
+            role="status"
+          >
+            <strong>
+              {result.importedRows} lead{result.importedRows === 1 ? "" : "s"} imported
+            </strong>
             <span>
               {result.failedRows
                 ? `${result.failedRows} row${result.failedRows === 1 ? "" : "s"} could not be imported from ${result.totalRows} total`
@@ -1731,6 +2207,37 @@ function CsvImportHistory({ imports }: { imports: CsvImportSummary[] }) {
   const [selected, setSelected] = useState<CsvImportDetailResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pendingId, setPendingId] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const [page, setPage] = useState(1);
+  const [listPending, setListPending] = useState(false);
+  const [list, setList] = useState<CsvImportHistoryResponse>({
+    imports,
+    page: 1,
+    pageSize: 20,
+    total: imports.length,
+    totalPages: imports.length ? Math.ceil(imports.length / 20) : 0
+  });
+
+  useEffect(() => {
+    let active = true;
+    const timeout = window.setTimeout(() => {
+      setListPending(true);
+      void fetchCsvImports({ q: query || undefined, page, pageSize: 20 })
+        .then((next) => {
+          if (active) setList(next);
+        })
+        .catch((loadError) => {
+          if (active) setError(getErrorMessage(loadError, "Could not load CSV import history"));
+        })
+        .finally(() => {
+          if (active) setListPending(false);
+        });
+    }, 200);
+    return () => {
+      active = false;
+      window.clearTimeout(timeout);
+    };
+  }, [imports, page, query]);
 
   async function selectImport(importId: string) {
     setPendingId(importId);
@@ -1746,11 +2253,32 @@ function CsvImportHistory({ imports }: { imports: CsvImportSummary[] }) {
 
   return (
     <article className="panel">
-      <PanelHeader icon={History} title="Recent imports" meta={`${imports.length} runs`} />
+      <PanelHeader
+        icon={History}
+        title="Import history"
+        meta={listPending ? "loading" : `${list.total} runs`}
+      />
+      <label className="queue-search">
+        <Search size={15} />
+        <input
+          aria-label="Search CSV imports"
+          onChange={(event) => {
+            setQuery(event.target.value);
+            setPage(1);
+          }}
+          placeholder="Search file, campaign or status"
+          value={query}
+        />
+      </label>
       <div className="table-list">
-        {imports.length === 0 && <div className="empty-row">No imports yet</div>}
-        {imports.map((item) => (
-          <button className="table-row import-row clickable-row" key={item.id} onClick={() => selectImport(item.id)} type="button">
+        {list.imports.length === 0 && <div className="empty-row">No imports match this search</div>}
+        {list.imports.map((item) => (
+          <button
+            className="table-row import-row clickable-row"
+            key={item.id}
+            onClick={() => selectImport(item.id)}
+            type="button"
+          >
             <strong>{item.filename}</strong>
             <span>{item.campaignName}</span>
             <span>
@@ -1760,6 +2288,12 @@ function CsvImportHistory({ imports }: { imports: CsvImportSummary[] }) {
           </button>
         ))}
       </div>
+      <AdminLibraryPagination
+        onPageChange={setPage}
+        page={list.page}
+        pending={listPending}
+        totalPages={list.totalPages}
+      />
       {error && <p className="form-error">{error}</p>}
       {selected && (
         <div className="import-detail">
@@ -1799,7 +2333,13 @@ function CreateCampaignForm({ onChanged }: { onChanged: () => Promise<void> }) {
     setPending(true);
     setError(null);
     try {
-      await createCampaign({ name, status, manualDialingEnabled, callRecordingEnabled, earlyMediaAvmdEnabled });
+      await createCampaign({
+        name,
+        status,
+        manualDialingEnabled,
+        callRecordingEnabled,
+        earlyMediaAvmdEnabled
+      });
       setName("");
       setStatus("draft");
       setEarlyMediaAvmdEnabled(false);
@@ -1817,7 +2357,12 @@ function CreateCampaignForm({ onChanged }: { onChanged: () => Promise<void> }) {
       <form className="stack-form" onSubmit={submit}>
         <label>
           Name
-          <input onChange={(event) => setName(event.target.value)} placeholder="Solar Follow-up" required value={name} />
+          <input
+            onChange={(event) => setName(event.target.value)}
+            placeholder="Solar Follow-up"
+            required
+            value={name}
+          />
         </label>
         <label>
           Status
@@ -1855,7 +2400,8 @@ function CreateCampaignForm({ onChanged }: { onChanged: () => Promise<void> }) {
         </div>
         {earlyMediaAvmdEnabled && (
           <p className="avmd-warning">
-            May detect voicemail beeps before answer, but slightly increases the chance of false positives from carrier tones.
+            May detect voicemail beeps before answer, but slightly increases the chance of false positives
+            from carrier tones.
           </p>
         )}
         {error && <p className="form-error">{error}</p>}
@@ -1927,7 +2473,12 @@ function CreateContactForm({
         </label>
         <label>
           Name
-          <input onChange={(event) => setName(event.target.value)} placeholder="Avery Johnson" required value={name} />
+          <input
+            onChange={(event) => setName(event.target.value)}
+            placeholder="Avery Johnson"
+            required
+            value={name}
+          />
         </label>
         <label>
           Phone
@@ -1940,7 +2491,11 @@ function CreateContactForm({
         </label>
         <label>
           Company
-          <input onChange={(event) => setCompany(event.target.value)} placeholder="North Bay Solar" value={company} />
+          <input
+            onChange={(event) => setCompany(event.target.value)}
+            placeholder="North Bay Solar"
+            value={company}
+          />
         </label>
         {error && <p className="form-error">{error}</p>}
         <button className="primary-action" disabled={pending || !campaigns.length} type="submit">
@@ -1962,7 +2517,19 @@ function Recordings({ admin, onChanged }: { admin: AdminOverviewResponse; onChan
   const [preview, setPreview] = useState<{ id: string; url: string } | null>(null);
   const previewAudioRef = useRef<HTMLAudioElement | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const defaultRecording = admin.recordings.find((recording) => recording.status === "default") ?? admin.recordings[0];
+  const [libraryError, setLibraryError] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const [page, setPage] = useState(1);
+  const [libraryPending, setLibraryPending] = useState(false);
+  const [library, setLibrary] = useState<AdminRecordingListResponse>({
+    items: admin.recordings.slice(0, 25),
+    page: 1,
+    pageSize: 25,
+    total: admin.recordings.length,
+    totalPages: admin.recordings.length ? Math.ceil(admin.recordings.length / 25) : 0
+  });
+  const defaultRecording =
+    admin.recordings.find((recording) => recording.status === "default") ?? admin.recordings[0];
   const [selectedRecordingId, setSelectedRecordingId] = useState(defaultRecording?.id ?? "");
   const [showUpload, setShowUpload] = useState(false);
 
@@ -1971,6 +2538,28 @@ function Recordings({ admin, onChanged }: { admin: AdminOverviewResponse; onChan
       setSelectedRecordingId(defaultRecording?.id ?? "");
     }
   }, [admin.recordings, defaultRecording?.id, selectedRecordingId]);
+
+  useEffect(() => {
+    let active = true;
+    const timeout = window.setTimeout(() => {
+      setLibraryPending(true);
+      setLibraryError(null);
+      void fetchAdminRecordings({ q: query || undefined, page, pageSize: 25 })
+        .then((next) => {
+          if (active) setLibrary(next);
+        })
+        .catch((loadError) => {
+          if (active) setLibraryError(getErrorMessage(loadError, "Could not load recording library"));
+        })
+        .finally(() => {
+          if (active) setLibraryPending(false);
+        });
+    }, 200);
+    return () => {
+      active = false;
+      window.clearTimeout(timeout);
+    };
+  }, [admin.recordings, page, query]);
 
   useEffect(() => {
     if (!preview) {
@@ -2038,29 +2627,33 @@ function Recordings({ admin, onChanged }: { admin: AdminOverviewResponse; onChan
     }
   }
 
-  function togglePreview(recordingId: string) {
+  async function togglePreview(recordingId: string) {
     if (preview?.id === recordingId) {
       setPreview(null);
       return;
     }
 
     setError(null);
-    const url = getRecordingAudioUrl(recordingId);
-    if (!url) {
-      setError("Sign in again to preview voicemail");
-      return;
+    try {
+      setPreview({ id: recordingId, url: await getRecordingAudioUrl(recordingId) });
+    } catch (previewError) {
+      setError(getErrorMessage(previewError, "Could not authorize voicemail preview"));
     }
-    setPreview({ id: recordingId, url });
   }
 
-  const selectedRecording = admin.recordings.find((recording) => recording.id === selectedRecordingId) ?? defaultRecording;
+  const selectedRecording =
+    admin.recordings.find((recording) => recording.id === selectedRecordingId) ?? defaultRecording;
   const totalStorage = admin.recordings.reduce((total, recording) => total + recording.fileSizeBytes, 0);
 
   return (
     <div className="recordings-view">
       <div className="recording-stats">
         <Metric label="Active recordings" value={admin.recordings.length} icon={FileAudio} />
-        <Metric label="Default length" value={defaultRecording?.durationSeconds ? `${defaultRecording.durationSeconds} sec` : "—"} icon={Clock3} />
+        <Metric
+          label="Default length"
+          value={defaultRecording?.durationSeconds ? `${defaultRecording.durationSeconds} sec` : "—"}
+          icon={Clock3}
+        />
         <Metric label="Storage used" value={formatBytes(totalStorage)} icon={Activity} />
       </div>
       <div className="recordings-layout">
@@ -2070,30 +2663,66 @@ function Recordings({ admin, onChanged }: { admin: AdminOverviewResponse; onChan
               <h2>Recording library</h2>
               <p>Versioned audio files available to agents</p>
             </div>
-            <button className="primary-action compact-action" onClick={() => setShowUpload(true)} type="button">
+            <button
+              className="primary-action compact-action"
+              onClick={() => setShowUpload(true)}
+              type="button"
+            >
               <Upload size={16} />
               Upload recording
             </button>
           </div>
           {error && <p className="form-error">{error}</p>}
+          {libraryError && <p className="form-error">{libraryError}</p>}
+          <label className="queue-search">
+            <Search size={15} />
+            <input
+              aria-label="Search recordings"
+              onChange={(event) => {
+                setQuery(event.target.value);
+                setPage(1);
+              }}
+              placeholder="Search recording name"
+              value={query}
+            />
+          </label>
           <div className="recording-table-head" aria-hidden="true">
-            <span>Name</span><span>Duration</span><span>Status</span><span />
+            <span>Name</span>
+            <span>Duration</span>
+            <span>Status</span>
+            <span />
           </div>
           <div className="recording-library-list">
-            {admin.recordings.map((recording) => (
-              <div className={recording.id === selectedRecording?.id ? "recording-library-row selected" : "recording-library-row"} key={recording.id}>
-                <button className="recording-select-button" onClick={() => { setSelectedRecordingId(recording.id); setShowUpload(false); }} type="button">
+            {library.items.map((recording) => (
+              <div
+                className={
+                  recording.id === selectedRecording?.id
+                    ? "recording-library-row selected"
+                    : "recording-library-row"
+                }
+                key={recording.id}
+              >
+                <button
+                  className="recording-select-button"
+                  onClick={() => {
+                    setSelectedRecordingId(recording.id);
+                    setShowUpload(false);
+                  }}
+                  type="button"
+                >
                   <strong>{recording.name}</strong>
                   <small>{formatBytes(recording.fileSizeBytes)}</small>
                 </button>
-                <span>{recording.durationSeconds ? formatDuration(recording.durationSeconds) : "Pending"}</span>
+                <span>
+                  {recording.durationSeconds ? formatDuration(recording.durationSeconds) : "Pending"}
+                </span>
                 <b>{recording.status}</b>
                 <button
                   className="icon-button"
                   onClick={() => {
                     setSelectedRecordingId(recording.id);
                     setShowUpload(false);
-                    togglePreview(recording.id);
+                    void togglePreview(recording.id);
                   }}
                   title={preview?.id === recording.id ? "Stop preview" : "Preview voicemail"}
                   type="button"
@@ -2102,8 +2731,14 @@ function Recordings({ admin, onChanged }: { admin: AdminOverviewResponse; onChan
                 </button>
               </div>
             ))}
-            {!admin.recordings.length && <p className="empty-state">No voicemail recordings uploaded yet.</p>}
+            {!library.items.length && <p className="empty-state">No recordings match this search.</p>}
           </div>
+          <AdminLibraryPagination
+            onPageChange={setPage}
+            page={library.page}
+            pending={libraryPending}
+            totalPages={library.totalPages}
+          />
         </article>
         <article className="panel recording-detail-panel">
           {showUpload ? (
@@ -2127,11 +2762,30 @@ function Recordings({ admin, onChanged }: { admin: AdminOverviewResponse; onChan
                     type="file"
                   />
                 </label>
-                <label>Voicemail name<input onChange={(event) => setName(event.target.value)} placeholder="Main voicemail" value={name} /></label>
-                <label className="checkbox-label"><input checked={makeDefault} onChange={(event) => setMakeDefault(event.target.checked)} type="checkbox" />Make default</label>
+                <label>
+                  Voicemail name
+                  <input
+                    onChange={(event) => setName(event.target.value)}
+                    placeholder="Main voicemail"
+                    value={name}
+                  />
+                </label>
+                <label className="checkbox-label">
+                  <input
+                    checked={makeDefault}
+                    onChange={(event) => setMakeDefault(event.target.checked)}
+                    type="checkbox"
+                  />
+                  Make default
+                </label>
                 {error && <p className="form-error">{error}</p>}
-                <button className="primary-action" disabled={pending || !file} type="submit"><Upload size={17} />{pending ? "Uploading" : "Upload voicemail"}</button>
-                <button className="secondary-action" onClick={() => setShowUpload(false)} type="button">Cancel</button>
+                <button className="primary-action" disabled={pending || !file} type="submit">
+                  <Upload size={17} />
+                  {pending ? "Uploading" : "Upload voicemail"}
+                </button>
+                <button className="secondary-action" onClick={() => setShowUpload(false)} type="button">
+                  Cancel
+                </button>
               </form>
             </>
           ) : selectedRecording ? (
@@ -2139,28 +2793,89 @@ function Recordings({ admin, onChanged }: { admin: AdminOverviewResponse; onChan
               <div className="surface-heading">
                 <span className="detail-eyebrow">Selected recording</span>
                 <h2>{selectedRecording.name}</h2>
-                <p>{selectedRecording.status === "default" ? "Default voicemail" : "Available for agent handoffs"}</p>
+                <p>
+                  {selectedRecording.status === "default"
+                    ? "Default voicemail"
+                    : "Available for agent handoffs"}
+                </p>
               </div>
               <div className="recording-player-card">
-                <button className="recording-play-button" onClick={() => togglePreview(selectedRecording.id)} type="button" title="Preview voicemail">
+                <button
+                  className="recording-play-button"
+                  onClick={() => void togglePreview(selectedRecording.id)}
+                  type="button"
+                  title="Preview voicemail"
+                >
                   {preview?.id === selectedRecording.id ? <Square size={18} /> : <Play size={18} />}
                 </button>
-                <strong>{selectedRecording.durationSeconds ? `00:00 / ${formatDuration(selectedRecording.durationSeconds)}` : "Duration pending"}</strong>
-                <div className="mini-waveform" aria-hidden="true">{[18, 28, 40, 22, 34, 48, 26, 38, 20, 44, 30, 42, 24, 36, 18, 32, 40, 22, 34, 18].map((height, index) => <span key={`${height}-${index}`} style={{ height }} />)}</div>
-                {preview?.id === selectedRecording.id && <audio autoPlay controls ref={previewAudioRef} src={preview.url} />}
+                <strong>
+                  {selectedRecording.durationSeconds
+                    ? `00:00 / ${formatDuration(selectedRecording.durationSeconds)}`
+                    : "Duration pending"}
+                </strong>
+                <div className="mini-waveform" aria-hidden="true">
+                  {[18, 28, 40, 22, 34, 48, 26, 38, 20, 44, 30, 42, 24, 36, 18, 32, 40, 22, 34, 18].map(
+                    (height, index) => (
+                      <span key={`${height}-${index}`} style={{ height }} />
+                    )
+                  )}
+                </div>
+                {preview?.id === selectedRecording.id && (
+                  <audio autoPlay controls ref={previewAudioRef} src={preview.url} />
+                )}
               </div>
-              <div className="recording-default-card"><CheckCircle2 size={16} /><span>{selectedRecording.status === "default" ? "Default for new calls" : "Ready to use in active calls"}</span></div>
+              <div className="recording-default-card">
+                <CheckCircle2 size={16} />
+                <span>
+                  {selectedRecording.status === "default"
+                    ? "Default for new calls"
+                    : "Ready to use in active calls"}
+                </span>
+              </div>
               <div className="recording-meta-list">
-                <div><span>Duration</span><strong>{selectedRecording.durationSeconds ? formatDuration(selectedRecording.durationSeconds) : "Pending"}</strong></div>
-                <div><span>File size</span><strong>{formatBytes(selectedRecording.fileSizeBytes)}</strong></div>
-                <div><span>Status</span><strong>{selectedRecording.status}</strong></div>
+                <div>
+                  <span>Duration</span>
+                  <strong>
+                    {selectedRecording.durationSeconds
+                      ? formatDuration(selectedRecording.durationSeconds)
+                      : "Pending"}
+                  </strong>
+                </div>
+                <div>
+                  <span>File size</span>
+                  <strong>{formatBytes(selectedRecording.fileSizeBytes)}</strong>
+                </div>
+                <div>
+                  <span>Status</span>
+                  <strong>{selectedRecording.status}</strong>
+                </div>
               </div>
               <div className="recording-detail-actions">
-                <button className="secondary-action" disabled={selectedRecording.status === "default" || defaultPendingId === selectedRecording.id} onClick={() => void makeRecordingDefault(selectedRecording.id)} type="button"><CheckCircle2 size={16} />{defaultPendingId === selectedRecording.id ? "Saving" : "Make default"}</button>
-                <button className="danger-action" disabled={deletePendingId === selectedRecording.id} onClick={() => void removeRecording(selectedRecording)} type="button"><Trash2 size={16} />Delete</button>
+                <button
+                  className="secondary-action"
+                  disabled={
+                    selectedRecording.status === "default" || defaultPendingId === selectedRecording.id
+                  }
+                  onClick={() => void makeRecordingDefault(selectedRecording.id)}
+                  type="button"
+                >
+                  <CheckCircle2 size={16} />
+                  {defaultPendingId === selectedRecording.id ? "Saving" : "Make default"}
+                </button>
+                <button
+                  className="danger-action"
+                  disabled={deletePendingId === selectedRecording.id}
+                  onClick={() => void removeRecording(selectedRecording)}
+                  type="button"
+                >
+                  <Trash2 size={16} />
+                  Delete
+                </button>
               </div>
             </>
-          ) : <p className="empty-state">Upload a recording to get started.</p>}
+          ) : (
+            <p className="empty-state">Upload a recording to get started.</p>
+          )}
         </article>
       </div>
     </div>
@@ -2182,56 +2897,247 @@ function formatBytes(value: number): string {
   return `${megabytes.toFixed(megabytes < 10 ? 1 : 0)} MB`;
 }
 
-function UsersPanel({ onChanged, users }: { onChanged: () => Promise<void>; users: PublicUser[] }) {
+function formatRecordingStatus(status: CallDetailResponse["call"]["recordingStatus"]): string {
+  switch (status) {
+    case "disabled":
+      return "Not enabled";
+    case "pending":
+      return "Pending";
+    case "recording":
+      return "Recording";
+    case "finalizing":
+      return "Verifying";
+    case "available":
+      return "Available";
+    case "expired":
+      return "Expired";
+    case "failed":
+      return "Failed";
+  }
+}
+
+function UsersPanel({
+  onChanged,
+  users
+}: {
+  onChanged: () => Promise<void>;
+  users: AdminOverviewResponse["users"];
+}) {
+  const [query, setQuery] = useState("");
+  const [page, setPage] = useState(1);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [list, setList] = useState<AdminUserListResponse>({
+    items: users.slice(0, 25),
+    page: 1,
+    pageSize: 25,
+    total: users.length,
+    totalPages: users.length ? Math.ceil(users.length / 25) : 0
+  });
+
+  useEffect(() => {
+    let active = true;
+    const timeout = window.setTimeout(() => {
+      setPending(true);
+      setError(null);
+      void fetchAdminUsers({ q: query || undefined, page, pageSize: 25 })
+        .then((next) => {
+          if (active) setList(next);
+        })
+        .catch((loadError) => {
+          if (active) setError(getErrorMessage(loadError, "Could not load users"));
+        })
+        .finally(() => {
+          if (active) setPending(false);
+        });
+    }, 200);
+    return () => {
+      active = false;
+      window.clearTimeout(timeout);
+    };
+  }, [page, query, users]);
+
   return (
     <article className="panel users-panel">
-      <PanelHeader icon={Users} title="Users" meta={`${users.length} seats`} />
+      <PanelHeader icon={Users} title="Users" meta={pending ? "loading" : `${list.total} seats`} />
       <CreateUserForm onChanged={onChanged} />
-      <UserList onChanged={onChanged} users={users} />
+      <label className="queue-search">
+        <Search size={15} />
+        <input
+          aria-label="Search users"
+          onChange={(event) => {
+            setQuery(event.target.value);
+            setPage(1);
+          }}
+          placeholder="Search name, email, role or status"
+          value={query}
+        />
+      </label>
+      {error && <p className="form-error">{error}</p>}
+      <UserList onChanged={onChanged} users={list.items} />
+      {!list.items.length && <p className="empty-state">No users match this search.</p>}
+      <AdminLibraryPagination
+        onPageChange={setPage}
+        page={list.page}
+        pending={pending}
+        totalPages={list.totalPages}
+      />
     </article>
   );
 }
 
-function UserList({ onChanged, users }: { onChanged: () => Promise<void>; users: PublicUser[] }) {
-  const [pendingId, setPendingId] = useState<string | null>(null);
+function UserList({
+  onChanged,
+  users
+}: {
+  onChanged: () => Promise<void>;
+  users: AdminOverviewResponse["users"];
+}) {
+  return (
+    <div className="table-list">
+      {users.map((user) => (
+        <UserRow key={user.id} onChanged={onChanged} user={user} />
+      ))}
+    </div>
+  );
+}
+
+function UserRow({
+  onChanged,
+  user
+}: {
+  onChanged: () => Promise<void>;
+  user: AdminOverviewResponse["users"][number];
+}) {
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(user.name);
+  const [email, setEmail] = useState(user.email);
+  const [role, setRole] = useState(user.role);
+  const [password, setPassword] = useState("");
+  const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  async function remove(user: PublicUser) {
-    if (!window.confirm(`Delete ${user.name}?`)) {
-      return;
-    }
-    setPendingId(user.id);
+  async function save(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setPending(true);
     setError(null);
     try {
-      await deleteUser(user.id);
+      await updateUser(user.id, { name, email, role, ...(password ? { password } : {}) });
+      setPassword("");
+      setEditing(false);
       await onChanged();
-    } catch (deleteError) {
-      setError(deleteError instanceof Error ? deleteError.message : "Could not delete user");
+    } catch (saveError) {
+      setError(getErrorMessage(saveError, "Could not update user"));
     } finally {
-      setPendingId(null);
+      setPending(false);
     }
   }
 
-  return (
-    <div className="table-list">
-      {error && <p className="form-error">{error}</p>}
-      {users.map((user) => (
-        <div className="table-row user-row" key={user.id}>
-          <strong>{user.name}</strong>
-          <span>{user.email}</span>
-          <b>{user.role}</b>
+  async function toggleActive() {
+    const action = user.isActive ? "deactivate" : "reactivate";
+    if (user.isActive && !window.confirm(`Deactivate ${user.name}? Their call history will be preserved.`)) {
+      return;
+    }
+    setPending(true);
+    setError(null);
+    try {
+      await updateUser(user.id, { isActive: !user.isActive });
+      await onChanged();
+    } catch (updateError) {
+      setError(getErrorMessage(updateError, `Could not ${action} user`));
+    } finally {
+      setPending(false);
+    }
+  }
+
+  if (editing) {
+    return (
+      <form className="user-edit-form" onSubmit={save}>
+        <div className="inline-fields">
+          <label>
+            Name
+            <input required value={name} onChange={(event) => setName(event.target.value)} />
+          </label>
+          <label>
+            Role
+            <select value={role} onChange={(event) => setRole(event.target.value as typeof role)}>
+              <option value="agent">agent</option>
+              <option value="admin">admin</option>
+            </select>
+          </label>
+        </div>
+        <label>
+          Email
+          <input required type="email" value={email} onChange={(event) => setEmail(event.target.value)} />
+        </label>
+        <label>
+          New password
+          <input
+            minLength={12}
+            type="password"
+            value={password}
+            placeholder="Leave blank to keep current password"
+            onChange={(event) => setPassword(event.target.value)}
+          />
+        </label>
+        {error && (
+          <p className="form-error" role="alert">
+            {error}
+          </p>
+        )}
+        <div className="row-actions">
+          <button className="primary-action compact-action" disabled={pending} type="submit">
+            Save
+          </button>
           <button
-            className="icon-button danger-icon"
-            disabled={pendingId === user.id}
-            onClick={() => remove(user)}
-            title="Delete user"
+            className="secondary-action compact-action"
+            disabled={pending}
+            onClick={() => setEditing(false)}
             type="button"
           >
-            <Trash2 size={16} />
+            Cancel
           </button>
         </div>
-      ))}
-    </div>
+      </form>
+    );
+  }
+
+  return (
+    <>
+      <div className={`table-row user-row ${user.isActive ? "" : "inactive"}`}>
+        <strong>{user.name}</strong>
+        <span>{user.email}</span>
+        <b>
+          {user.role} · {user.isActive ? "active" : "inactive"}
+          {user.agentRegistered !== null ? ` · phone ${user.agentRegistered ? "connected" : "offline"}` : ""}
+        </b>
+        <div className="row-actions">
+          <button
+            className="icon-button"
+            disabled={pending}
+            onClick={() => setEditing(true)}
+            title="Edit user"
+            type="button"
+          >
+            <Pencil size={16} />
+          </button>
+          <button
+            className={user.isActive ? "icon-button danger-icon" : "icon-button"}
+            disabled={pending}
+            onClick={() => void toggleActive()}
+            title={user.isActive ? "Deactivate user" : "Reactivate user"}
+            type="button"
+          >
+            {user.isActive ? <UserX size={16} /> : <UserCheck size={16} />}
+          </button>
+        </div>
+      </div>
+      {error && (
+        <p className="form-error" role="alert">
+          {error}
+        </p>
+      )}
+    </>
   );
 }
 
@@ -2242,18 +3148,13 @@ function CreateUserForm({ onChanged }: { onChanged: () => Promise<void> }) {
   const [password, setPassword] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [credentials, setCredentials] = useState<string | null>(null);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setPending(true);
     setError(null);
-    setCredentials(null);
     try {
-      const created = await createUser({ email, name, role, password });
-      if (created.agentCredentials) {
-        setCredentials(`${created.agentCredentials.sipUsername} / ${created.agentCredentials.sipPassword}`);
-      }
+      await createUser({ email, name, role, password });
       setEmail("");
       setName("");
       setPassword("");
@@ -2270,7 +3171,12 @@ function CreateUserForm({ onChanged }: { onChanged: () => Promise<void> }) {
       <div className="inline-fields">
         <label>
           Name
-          <input onChange={(event) => setName(event.target.value)} placeholder="Agent name" required value={name} />
+          <input
+            onChange={(event) => setName(event.target.value)}
+            placeholder="Agent name"
+            required
+            value={name}
+          />
         </label>
         <label>
           Role
@@ -2282,7 +3188,13 @@ function CreateUserForm({ onChanged }: { onChanged: () => Promise<void> }) {
       </div>
       <label>
         Email
-        <input onChange={(event) => setEmail(event.target.value)} placeholder="agent@example.com" required type="email" value={email} />
+        <input
+          onChange={(event) => setEmail(event.target.value)}
+          placeholder="agent@example.com"
+          required
+          type="email"
+          value={email}
+        />
       </label>
       <label>
         Password
@@ -2296,7 +3208,6 @@ function CreateUserForm({ onChanged }: { onChanged: () => Promise<void> }) {
         />
       </label>
       {error && <p className="form-error">{error}</p>}
-      {credentials && <p className="copy-note">SIP: {credentials}</p>}
       <button className="primary-action" disabled={pending} type="submit">
         <UserPlus size={17} />
         {pending ? "Creating" : "Create user"}
@@ -2311,6 +3222,79 @@ function HistoryView({ admin }: { admin: AdminOverviewResponse }) {
   const [detail, setDetail] = useState<CallDetailResponse | null>(null);
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [history, setHistory] = useState<CallHistoryResponse>({
+    items: admin.callHistory,
+    page: 1,
+    pageSize: 25,
+    total: admin.callHistory.length,
+    totalPages: admin.callHistory.length ? 1 : 0
+  });
+  const [query, setQuery] = useState("");
+  const [campaignId, setCampaignId] = useState("");
+  const [outcome, setOutcome] = useState("");
+  const [recording, setRecording] = useState<"" | "available" | "missing">("");
+  const [agentId, setAgentId] = useState("");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [voicemail, setVoicemail] = useState<"" | "drop" | "signal">("");
+  const [page, setPage] = useState(1);
+  const [historyPending, setHistoryPending] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    const timeout = window.setTimeout(() => {
+      setHistoryPending(true);
+      void fetchCallHistory({
+        page,
+        pageSize: 25,
+        q: query || undefined,
+        campaignId: campaignId || undefined,
+        agentId: agentId || undefined,
+        outcome: outcome || undefined,
+        from: historyDateBoundary(dateFrom, false),
+        to: historyDateBoundary(dateTo, true),
+        voicemail: voicemail || undefined,
+        recording: recording || undefined
+      })
+        .then((next) => {
+          if (active) setHistory(next);
+        })
+        .catch((loadError) => {
+          if (active) setError(getErrorMessage(loadError, "Could not load call history"));
+        })
+        .finally(() => {
+          if (active) setHistoryPending(false);
+        });
+    }, 200);
+    return () => {
+      active = false;
+      window.clearTimeout(timeout);
+    };
+  }, [agentId, campaignId, dateFrom, dateTo, outcome, page, query, recording, voicemail]);
+
+  async function exportHistory() {
+    setError(null);
+    try {
+      const blob = await downloadCallHistoryCsv({
+        q: query || undefined,
+        campaignId: campaignId || undefined,
+        agentId: agentId || undefined,
+        outcome: outcome || undefined,
+        from: historyDateBoundary(dateFrom, false),
+        to: historyDateBoundary(dateTo, true),
+        voicemail: voicemail || undefined,
+        recording: recording || undefined
+      });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `call-history-${new Date().toISOString().slice(0, 10)}.csv`;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (exportError) {
+      setError(getErrorMessage(exportError, "Could not export call history"));
+    }
+  }
 
   async function toggleCall(callId: string) {
     if (selectedCallId === callId) {
@@ -2335,7 +3319,152 @@ function HistoryView({ admin }: { admin: AdminOverviewResponse }) {
 
   return (
     <article className="panel wide-panel">
-      <PanelHeader icon={History} title="Call history" meta={`${admin.callHistory.length} recent`} />
+      <PanelHeader
+        icon={History}
+        title="Call history"
+        meta={historyPending ? "loading" : `${history.total} calls`}
+      />
+      <div className="history-filters">
+        <label>
+          Search
+          <input
+            aria-label="Search call history"
+            value={query}
+            onChange={(event) => {
+              setQuery(event.target.value);
+              setPage(1);
+            }}
+            placeholder="Lead, phone, campaign or agent"
+          />
+        </label>
+        <label>
+          Campaign
+          <select
+            value={campaignId}
+            onChange={(event) => {
+              setCampaignId(event.target.value);
+              setPage(1);
+            }}
+          >
+            <option value="">All campaigns</option>
+            {admin.campaigns.map((campaign) => (
+              <option key={campaign.id} value={campaign.id}>
+                {campaign.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Agent
+          <select
+            value={agentId}
+            onChange={(event) => {
+              setAgentId(event.target.value);
+              setPage(1);
+            }}
+          >
+            <option value="">All agents</option>
+            {admin.users
+              .filter((user) => user.role === "agent")
+              .map((agent) => (
+                <option key={agent.id} value={agent.id}>
+                  {agent.name}
+                </option>
+              ))}
+          </select>
+        </label>
+        <label>
+          Outcome
+          <select
+            value={outcome}
+            onChange={(event) => {
+              setOutcome(event.target.value);
+              setPage(1);
+            }}
+          >
+            <option value="">All outcomes</option>
+            {[
+              "answered",
+              "not_answered",
+              "busy",
+              "failed",
+              "voicemail_detected",
+              "voicemail_dropped",
+              "agent_canceled",
+              "customer_hung_up",
+              "suppressed"
+            ].map((item) => (
+              <option key={item} value={item}>
+                {formatOutcome(item as never, "completed")}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          From
+          <input
+            aria-label="History from date"
+            type="date"
+            value={dateFrom}
+            onChange={(event) => {
+              setDateFrom(event.target.value);
+              setPage(1);
+            }}
+          />
+        </label>
+        <label>
+          To
+          <input
+            aria-label="History to date"
+            type="date"
+            value={dateTo}
+            onChange={(event) => {
+              setDateTo(event.target.value);
+              setPage(1);
+            }}
+          />
+        </label>
+        <label>
+          Voicemail
+          <select
+            value={voicemail}
+            onChange={(event) => {
+              setVoicemail(event.target.value as typeof voicemail);
+              setPage(1);
+            }}
+          >
+            <option value="">Any</option>
+            <option value="drop">Drop requested</option>
+            <option value="signal">Signal detected</option>
+          </select>
+        </label>
+        <label>
+          Recording
+          <select
+            value={recording}
+            onChange={(event) => {
+              setRecording(event.target.value as typeof recording);
+              setPage(1);
+            }}
+          >
+            <option value="">Any</option>
+            <option value="available">Available</option>
+            <option value="missing">Missing</option>
+          </select>
+        </label>
+        <button
+          className="secondary-action compact-action"
+          onClick={() => void exportHistory()}
+          type="button"
+        >
+          Export CSV
+        </button>
+      </div>
+      {error && (
+        <p className="form-error" role="alert">
+          {error}
+        </p>
+      )}
       <div className="history-head" aria-hidden="true">
         <span>Lead</span>
         <span>Campaign</span>
@@ -2344,7 +3473,7 @@ function HistoryView({ admin }: { admin: AdminOverviewResponse }) {
         <span>Outcome</span>
       </div>
       <div className="table-list">
-        {admin.callHistory.map((call) => (
+        {history.items.map((call) => (
           <div className="history-entry" key={call.id}>
             <button
               aria-expanded={selectedCallId === call.id}
@@ -2369,16 +3498,62 @@ function HistoryView({ admin }: { admin: AdminOverviewResponse }) {
             {selectedCallId === call.id && (
               <div className="call-detail">
                 {pendingId === call.id && <p>Loading call details…</p>}
-                {error && <p className="form-error">{error}</p>}
                 {detail?.call.id === call.id && (
                   <>
                     <div className="call-detail-summary">
-                      <span><strong>Type</strong>{detail.call.manualDial ? "Manual dial" : "Campaign lead"}</span>
-                      <span><strong>Answered</strong>{detail.call.answeredAt ? formatDateTime(detail.call.answeredAt) : "Not answered"}</span>
-                      <span><strong>Ended</strong>{detail.call.endedAt ? formatDateTime(detail.call.endedAt) : "In progress"}</span>
-                      <span><strong>Recording</strong>{detail.call.callRecordingPath ? "Available" : "Not available"}</span>
+                      <span>
+                        <strong>Type</strong>
+                        {detail.call.manualDial ? "Manual dial" : "Campaign lead"}
+                      </span>
+                      <span>
+                        <strong>Answered</strong>
+                        {detail.call.answeredAt ? formatDateTime(detail.call.answeredAt) : "Not answered"}
+                      </span>
+                      <span>
+                        <strong>Ended</strong>
+                        {detail.call.endedAt ? formatDateTime(detail.call.endedAt) : "In progress"}
+                      </span>
+                      <span>
+                        <strong>Recording</strong>
+                        {formatRecordingStatus(detail.call.recordingStatus)}
+                      </span>
+                      {detail.call.recordingDurationSeconds !== null && (
+                        <span>
+                          <strong>Recording length</strong>
+                          {formatDuration(detail.call.recordingDurationSeconds)}
+                        </span>
+                      )}
+                      {detail.call.recordingFileSizeBytes !== null && (
+                        <span>
+                          <strong>Recording size</strong>
+                          {formatBytes(detail.call.recordingFileSizeBytes)}
+                        </span>
+                      )}
+                      {detail.call.recordingIntegrityCheckedAt && (
+                        <span>
+                          <strong>Integrity checked</strong>
+                          {formatDateTime(detail.call.recordingIntegrityCheckedAt)}
+                        </span>
+                      )}
+                      {detail.call.recordingFailureReason && (
+                        <span>
+                          <strong>Recording issue</strong>
+                          {detail.call.recordingFailureReason}
+                        </span>
+                      )}
+                      <span>
+                        <strong>VM signal</strong>
+                        {detail.call.voicemailSignal ?? "None"}
+                        {detail.call.voicemailConfidence !== null
+                          ? ` (${detail.call.voicemailConfidence})`
+                          : ""}
+                      </span>
+                      <span>
+                        <strong>Hangup</strong>
+                        {detail.call.hangupCause ?? detail.call.lastReasonCode ?? "Not reported"}
+                      </span>
                     </div>
-                    {detail.call.callRecordingPath && (
+                    {detail.call.recordingAvailable && (
                       <CallRecordingPlayer callId={detail.call.id} leadName={detail.call.leadName} />
                     )}
                     <div className="technical-details">
@@ -2392,14 +3567,50 @@ function HistoryView({ admin }: { admin: AdminOverviewResponse }) {
                         {technicalCallId === call.id ? "Hide technical details" : "Show technical details"}
                       </button>
                       {technicalCallId === call.id && (
-                        <div className="history-timeline">
-                          {detail.timeline.map((item) => (
-                            <div className="timeline-item" key={`${item.at}-${item.eventType}-${item.state}`}>
-                              <span>{formatDateTime(item.at)}</span>
-                              <p>{item.label}</p>
-                            </div>
-                          ))}
-                          {!detail.timeline.length && <p className="empty-state">No call events recorded.</p>}
+                        <div className="technical-call-details">
+                          <div className="call-leg-grid">
+                            {detail.legs?.map((leg) => (
+                              <div className="call-leg-card" key={leg.type}>
+                                <strong>{leg.type === "agent" ? "Agent leg" : "Customer leg"}</strong>
+                                <span>{leg.state}</span>
+                                <code>{leg.freeswitchUuid ?? "UUID not assigned"}</code>
+                                {leg.sipUri && <small>{leg.sipUri}</small>}
+                                {(leg.hangupCause || leg.reasonCode) && (
+                                  <small>
+                                    {[leg.hangupCause, leg.reasonCode].filter(Boolean).join(" · ")}
+                                  </small>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                          <div className="history-timeline">
+                            {detail.timeline.map((item, index) => (
+                              <div className="timeline-item" key={`${item.at}-${item.eventType}-${index}`}>
+                                <span>{formatDateTime(item.at)}</span>
+                                <p>{item.label}</p>
+                                {(item.reasonCode || item.freeSwitchEventName || item.apiCommandName) && (
+                                  <small>
+                                    {[item.freeSwitchEventName, item.apiCommandName, item.reasonCode]
+                                      .filter(Boolean)
+                                      .join(" · ")}
+                                  </small>
+                                )}
+                                {(item.agentLegUuid || item.customerLegUuid) && (
+                                  <code>
+                                    {[
+                                      item.agentLegUuid && `agent ${item.agentLegUuid}`,
+                                      item.customerLegUuid && `customer ${item.customerLegUuid}`
+                                    ]
+                                      .filter(Boolean)
+                                      .join(" · ")}
+                                  </code>
+                                )}
+                              </div>
+                            ))}
+                            {!detail.timeline.length && (
+                              <p className="empty-state">No call events recorded.</p>
+                            )}
+                          </div>
                         </div>
                       )}
                     </div>
@@ -2409,21 +3620,68 @@ function HistoryView({ admin }: { admin: AdminOverviewResponse }) {
             )}
           </div>
         ))}
-        {!admin.callHistory.length && <div className="empty-row">No calls yet</div>}
+        {!history.items.length && <div className="empty-row">No calls match these filters</div>}
+      </div>
+      <div className="pagination-controls">
+        <button
+          className="secondary-action compact-action"
+          disabled={history.page <= 1 || historyPending}
+          onClick={() => setPage((current) => Math.max(1, current - 1))}
+          type="button"
+        >
+          Previous
+        </button>
+        <span>
+          Page {history.page} of {Math.max(history.totalPages, 1)}
+        </span>
+        <button
+          className="secondary-action compact-action"
+          disabled={history.page >= history.totalPages || historyPending}
+          onClick={() => setPage((current) => current + 1)}
+          type="button"
+        >
+          Next
+        </button>
       </div>
     </article>
   );
 }
 
+function historyDateBoundary(value: string, endOfDay: boolean): string | undefined {
+  if (!value) return undefined;
+  const date = new Date(`${value}T00:00:00`);
+  if (endOfDay) {
+    date.setDate(date.getDate() + 1);
+    date.setMilliseconds(-1);
+  }
+  return date.toISOString();
+}
+
 function CallRecordingPlayer({ callId, leadName }: { callId: string; leadName: string }) {
-  const url = getCallRecordingAudioUrl(callId);
+  const [url, setUrl] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let active = true;
+    setUrl(null);
+    setError(null);
+    void getCallRecordingAudioUrl(callId)
+      .then((nextUrl) => {
+        if (active) setUrl(nextUrl);
+      })
+      .catch((loadError) => {
+        if (active) setError(getErrorMessage(loadError, "Could not authorize recording playback"));
+      });
+    return () => {
+      active = false;
+    };
+  }, [callId]);
   return (
     <div className="call-recording-player">
       <strong>Call recording</strong>
       {url ? (
         <audio aria-label={`Call recording for ${leadName}`} controls preload="metadata" src={url} />
       ) : (
-        <span>Sign in again to play this recording.</span>
+        <span aria-live="polite">{error ?? "Preparing secure playback…"}</span>
       )}
     </div>
   );
@@ -2462,33 +3720,280 @@ function formatOutcome(
   return labels[value] ?? value.replaceAll("_", " ");
 }
 
-function SettingsView({ admin, onChanged }: { admin: AdminOverviewResponse; onChanged: () => Promise<void> }) {
+function SettingsView({
+  admin,
+  onChanged
+}: {
+  admin: AdminOverviewResponse;
+  onChanged: () => Promise<void>;
+}) {
   return (
     <div className="operations-grid two">
       <FreeSwitchDiagnosticsPanel />
       <article className="panel">
-        <PanelHeader icon={Activity} title="Operations" meta="Today" />
+        <PanelHeader icon={BarChart3} title="Business KPIs" meta="Today" />
         <div className="stat-row">
-          <Metric label="Active agents" value={admin.stats.activeAgents} icon={Headphones} />
-          <Metric label="Live calls" value={admin.stats.liveCalls} icon={PhoneCall} />
+          <Metric label="Attempts" value={admin.stats.attemptedCallsToday} icon={PhoneCall} />
+          <Metric label="Contact rate" value={`${admin.stats.contactRate}%`} icon={CheckCircle2} />
+          <Metric label="Calls / hour" value={admin.stats.callsPerHour} icon={Clock3} />
+          <Metric
+            label="VM completed"
+            value={`${admin.stats.voicemailDropCompletionRate}%`}
+            icon={Voicemail}
+          />
+        </div>
+        <div className="kpi-outcomes">
+          {admin.stats.outcomeDistribution.map((item) => (
+            <span key={item.outcome}>
+              <strong>{item.count}</strong> {item.outcome.replaceAll("_", " ")}
+            </span>
+          ))}
         </div>
       </article>
       <UsersPanel onChanged={onChanged} users={admin.users} />
+      <AdminAuditPanel users={admin.users} />
     </div>
   );
 }
 
-function SuppressionView({ admin, onChanged }: { admin: AdminOverviewResponse; onChanged: () => Promise<void> }) {
+function AdminAuditPanel({ users }: { users: PublicUser[] }) {
+  const [page, setPage] = useState(1);
+  const [actorId, setActorId] = useState("");
+  const [method, setMethod] = useState<"" | "DELETE" | "PATCH" | "POST" | "PUT">("");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [audit, setAudit] = useState<AdminAuditResponse>({ page: 1, pageSize: 25, total: 0, items: [] });
+  const [error, setError] = useState<string | null>(null);
+  const [pending, setPending] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    setPending(true);
+    void fetchAdminAudit({
+      page,
+      pageSize: 25,
+      actorId: actorId || undefined,
+      method: method || undefined,
+      dateFrom: historyDateBoundary(dateFrom, false),
+      dateTo: historyDateBoundary(dateTo, true)
+    })
+      .then((next) => {
+        if (active) setAudit(next);
+      })
+      .catch((loadError) => {
+        if (active) setError(getErrorMessage(loadError, "Could not load admin audit"));
+      })
+      .finally(() => {
+        if (active) setPending(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [actorId, dateFrom, dateTo, method, page]);
+
+  const totalPages = audit.total ? Math.ceil(audit.total / audit.pageSize) : 0;
+  return (
+    <article className="panel admin-audit-panel">
+      <PanelHeader icon={Shield} title="Admin audit" meta={pending ? "loading" : `${audit.total} events`} />
+      <div className="history-filters compact-filters">
+        <label>
+          Actor
+          <select
+            value={actorId}
+            onChange={(event) => {
+              setActorId(event.target.value);
+              setPage(1);
+            }}
+          >
+            <option value="">All admins</option>
+            {users
+              .filter((user) => user.role === "admin")
+              .map((user) => (
+                <option key={user.id} value={user.id}>
+                  {user.name}
+                </option>
+              ))}
+          </select>
+        </label>
+        <label>
+          Action
+          <select
+            value={method}
+            onChange={(event) => {
+              setMethod(event.target.value as typeof method);
+              setPage(1);
+            }}
+          >
+            <option value="">All changes</option>
+            {["POST", "PATCH", "PUT", "DELETE"].map((item) => (
+              <option key={item} value={item}>
+                {item}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          From
+          <input
+            onChange={(event) => {
+              setDateFrom(event.target.value);
+              setPage(1);
+            }}
+            type="date"
+            value={dateFrom}
+          />
+        </label>
+        <label>
+          To
+          <input
+            onChange={(event) => {
+              setDateTo(event.target.value);
+              setPage(1);
+            }}
+            type="date"
+            value={dateTo}
+          />
+        </label>
+      </div>
+      {error && (
+        <p className="form-error" role="alert">
+          {error}
+        </p>
+      )}
+      <div className="table-list">
+        {audit.items.map((item) => (
+          <div className="table-row audit-row" key={item.id}>
+            <span>
+              <strong>{item.actorName}</strong>
+              <small>{formatDateTime(item.createdAt)}</small>
+            </span>
+            <span>
+              <strong>{item.method}</strong>
+              <small>{item.route}</small>
+            </span>
+            <StatusBadge label={String(item.statusCode)} tone="neutral" />
+          </div>
+        ))}
+        {!audit.items.length && !pending && <div className="empty-row">No admin changes match</div>}
+      </div>
+      <div className="pagination-controls">
+        <button
+          className="secondary-action compact-action"
+          disabled={page <= 1 || pending}
+          onClick={() => setPage((current) => current - 1)}
+          type="button"
+        >
+          Previous
+        </button>
+        <span>
+          Page {audit.page} of {Math.max(totalPages, 1)}
+        </span>
+        <button
+          className="secondary-action compact-action"
+          disabled={page >= totalPages || pending}
+          onClick={() => setPage((current) => current + 1)}
+          type="button"
+        >
+          Next
+        </button>
+      </div>
+    </article>
+  );
+}
+
+function SuppressionView({
+  admin,
+  onChanged
+}: {
+  admin: AdminOverviewResponse;
+  onChanged: () => Promise<void>;
+}) {
+  const [query, setQuery] = useState("");
+  const [page, setPage] = useState(1);
+  const [list, setList] = useState<SuppressionListResponse>({
+    items: admin.suppression,
+    page: 1,
+    pageSize: 25,
+    total: admin.suppression.length,
+    totalPages: admin.suppression.length ? 1 : 0
+  });
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    const timeout = window.setTimeout(() => {
+      setPending(true);
+      void fetchSuppression({ q: query || undefined, page, pageSize: 25 })
+        .then((next) => {
+          if (active) setList(next);
+        })
+        .catch((loadError) => {
+          if (active) setError(getErrorMessage(loadError, "Could not load suppression list"));
+        })
+        .finally(() => {
+          if (active) setPending(false);
+        });
+    }, 200);
+    return () => {
+      active = false;
+      window.clearTimeout(timeout);
+    };
+  }, [admin.suppression, page, query]);
+
   return (
     <div className="operations-grid two">
       <CreateSuppressionForm onChanged={onChanged} />
+      <SuppressionCsvImport onChanged={onChanged} />
       <article className="panel">
-        <PanelHeader icon={Ban} title="Suppressed numbers" meta={`${admin.suppression.length} entries`} />
+        <PanelHeader
+          icon={Ban}
+          title="Suppressed numbers"
+          meta={pending ? "loading" : `${list.total} entries`}
+        />
+        <label className="queue-search">
+          <Search size={15} />
+          <input
+            aria-label="Search suppressed numbers"
+            placeholder="Search number or reason"
+            value={query}
+            onChange={(event) => {
+              setQuery(event.target.value);
+              setPage(1);
+            }}
+          />
+        </label>
+        {error && (
+          <p className="form-error" role="alert">
+            {error}
+          </p>
+        )}
         <div className="table-list">
-          {admin.suppression.map((item) => (
+          {list.items.map((item) => (
             <SuppressionRow item={item} key={item.id} onChanged={onChanged} />
           ))}
-          {admin.suppression.length === 0 && <div className="empty-row">No suppressed numbers</div>}
+          {list.items.length === 0 && <div className="empty-row">No suppressed numbers match</div>}
+        </div>
+        <div className="pagination-controls">
+          <button
+            className="secondary-action compact-action"
+            disabled={page <= 1 || pending}
+            onClick={() => setPage((current) => current - 1)}
+            type="button"
+          >
+            Previous
+          </button>
+          <span>
+            Page {list.page} of {Math.max(list.totalPages, 1)}
+          </span>
+          <button
+            className="secondary-action compact-action"
+            disabled={page >= list.totalPages || pending}
+            onClick={() => setPage((current) => current + 1)}
+            type="button"
+          >
+            Next
+          </button>
         </div>
       </article>
     </div>
@@ -2506,6 +4011,11 @@ function SuppressionRow({
   const [error, setError] = useState<string | null>(null);
 
   async function remove() {
+    if (
+      !window.confirm(`Remove ${item.phoneNumber} from suppression? This action is written to the audit log.`)
+    ) {
+      return;
+    }
     setPending(true);
     setError(null);
     try {
@@ -2523,12 +4033,74 @@ function SuppressionRow({
       <div className="table-row suppression-row">
         <strong>{item.phoneNumber}</strong>
         <span>{item.reason}</span>
-        <button className="icon-button danger-icon" disabled={pending} onClick={remove} title="Remove suppression" type="button">
+        <button
+          className="icon-button danger-icon"
+          disabled={pending}
+          onClick={remove}
+          title="Remove suppression"
+          type="button"
+        >
           <Trash2 size={16} />
         </button>
       </div>
       {error && <p className="form-error">{error}</p>}
     </>
+  );
+}
+
+function SuppressionCsvImport({ onChanged }: { onChanged: () => Promise<void> }) {
+  const [file, setFile] = useState<File | null>(null);
+  const [pending, setPending] = useState(false);
+  const [result, setResult] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!file) return;
+    setPending(true);
+    setError(null);
+    setResult(null);
+    try {
+      const imported = await importSuppressionCsvFile(file);
+      setResult(
+        `${imported.importedRows} added · ${imported.updatedRows} updated · ${imported.failedRows} failed`
+      );
+      setFile(null);
+      await onChanged();
+    } catch (importError) {
+      setError(getErrorMessage(importError, "Could not import suppression CSV"));
+    } finally {
+      setPending(false);
+    }
+  }
+  return (
+    <article className="panel form-panel">
+      <PanelHeader icon={Upload} title="Import suppression CSV" meta="phone + optional reason" />
+      <form className="stack-form" onSubmit={submit}>
+        <label>
+          CSV file
+          <input
+            accept=".csv,text/csv"
+            required
+            type="file"
+            onChange={(event) => setFile(event.target.files?.[0] ?? null)}
+          />
+        </label>
+        {result && (
+          <p className="copy-note" aria-live="polite">
+            {result}
+          </p>
+        )}
+        {error && (
+          <p className="form-error" role="alert">
+            {error}
+          </p>
+        )}
+        <button className="primary-action" disabled={!file || pending} type="submit">
+          <Upload size={17} />
+          {pending ? "Importing" : "Import CSV"}
+        </button>
+      </form>
+    </article>
   );
 }
 
@@ -2605,9 +4177,20 @@ function FreeSwitchDiagnosticsPanel() {
       </div>
       {diagnostics && (
         <div className="diagnostic-flags">
-          <StatusBadge label={diagnostics.trunk.proxyConfigured ? "Proxy set" : "Proxy missing"} tone={diagnostics.trunk.proxyConfigured ? "good" : "bad"} />
-          <StatusBadge label={diagnostics.trunk.usernameConfigured ? "User set" : "User missing"} tone={diagnostics.trunk.mode === "ip_auth" || diagnostics.trunk.usernameConfigured ? "good" : "bad"} />
-          <StatusBadge label={diagnostics.trunk.callerIdConfigured ? "Caller ID set" : "Caller ID missing"} tone={diagnostics.trunk.callerIdConfigured ? "good" : "neutral"} />
+          <StatusBadge
+            label={diagnostics.trunk.proxyConfigured ? "Proxy set" : "Proxy missing"}
+            tone={diagnostics.trunk.proxyConfigured ? "good" : "bad"}
+          />
+          <StatusBadge
+            label={diagnostics.trunk.usernameConfigured ? "User set" : "User missing"}
+            tone={
+              diagnostics.trunk.mode === "ip_auth" || diagnostics.trunk.usernameConfigured ? "good" : "bad"
+            }
+          />
+          <StatusBadge
+            label={diagnostics.trunk.callerIdConfigured ? "Caller ID set" : "Caller ID missing"}
+            tone={diagnostics.trunk.callerIdConfigured ? "good" : "neutral"}
+          />
         </div>
       )}
       {safeTest && (
@@ -2694,7 +4277,11 @@ function CreateSuppressionForm({ onChanged }: { onChanged: () => Promise<void> }
         </label>
         <label>
           Reason
-          <input onChange={(event) => setReason(event.target.value)} placeholder="Do not call request" value={reason} />
+          <input
+            onChange={(event) => setReason(event.target.value)}
+            placeholder="Do not call request"
+            value={reason}
+          />
         </label>
         {error && <p className="form-error">{error}</p>}
         <button className="danger-action" disabled={pending} type="submit">
@@ -2706,15 +4293,43 @@ function CreateSuppressionForm({ onChanged }: { onChanged: () => Promise<void> }
   );
 }
 
-function PanelHeader({
-  icon: Icon,
-  meta,
-  title
+function AdminLibraryPagination({
+  onPageChange,
+  page,
+  pending,
+  totalPages
 }: {
-  icon: typeof BarChart3;
-  meta: string;
-  title: string;
+  onPageChange: (page: number) => void;
+  page: number;
+  pending: boolean;
+  totalPages: number;
 }) {
+  return (
+    <div className="pagination-controls">
+      <button
+        className="secondary-action compact-action"
+        disabled={page <= 1 || pending}
+        onClick={() => onPageChange(Math.max(1, page - 1))}
+        type="button"
+      >
+        Previous
+      </button>
+      <span>
+        Page {page} of {Math.max(totalPages, 1)}
+      </span>
+      <button
+        className="secondary-action compact-action"
+        disabled={page >= totalPages || pending}
+        onClick={() => onPageChange(page + 1)}
+        type="button"
+      >
+        Next
+      </button>
+    </div>
+  );
+}
+
+function PanelHeader({ icon: Icon, meta, title }: { icon: typeof BarChart3; meta: string; title: string }) {
   return (
     <div className="panel-header">
       <div>
@@ -2745,7 +4360,5 @@ function Metric({
 }
 
 function StatusBadge({ label, tone }: { label: string; tone: "good" | "bad" | "neutral" | "warn" }) {
-  return (
-    <span className={`status-badge ${tone}`}>{label}</span>
-  );
+  return <span className={`status-badge ${tone}`}>{label}</span>;
 }

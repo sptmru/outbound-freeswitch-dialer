@@ -6,6 +6,10 @@ dist-test/
 .env.local
 *.log
 logs/
+monitoring/textfile/*.prom
+backups/
+playwright-report/
+test-results/
 monitoring/generated/
 coverage/
 .DS_Store

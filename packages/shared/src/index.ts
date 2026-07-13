@@ -31,11 +31,27 @@ export const callOutcomes = [
 
 export type CallOutcome = (typeof callOutcomes)[number];
 
+export const callRecordingStatuses = [
+  "disabled",
+  "pending",
+  "recording",
+  "finalizing",
+  "available",
+  "expired",
+  "failed"
+] as const;
+
+export type CallRecordingStatus = (typeof callRecordingStatuses)[number];
+
 export const userRoles = ["agent", "admin"] as const;
 
 export type UserRole = (typeof userRoles)[number];
 
-export type CampaignStatus = "active" | "paused" | "draft";
+export const agentAvailabilityStatuses = ["available", "paused", "wrap_up"] as const;
+
+export type AgentAvailabilityStatus = (typeof agentAvailabilityStatuses)[number];
+
+export type CampaignStatus = "active" | "paused" | "draft" | "archived";
 
 export interface HealthResponse {
   status: "ok" | "degraded";
@@ -44,6 +60,7 @@ export interface HealthResponse {
   checks: {
     postgres: HealthCheck;
     freeswitchEsl: HealthCheck;
+    freeswitchEventListener: HealthCheck;
   };
 }
 
@@ -57,6 +74,24 @@ export interface PublicUser {
   email: string;
   name: string;
   role: UserRole;
+  isActive: boolean;
+}
+
+export interface AdminAuditResponse {
+  page: number;
+  pageSize: number;
+  total: number;
+  items: Array<{
+    id: string;
+    actorName: string;
+    actorEmail: string;
+    method: string;
+    route: string;
+    statusCode: number;
+    sourceIp: string | null;
+    metadata: Record<string, unknown>;
+    createdAt: string;
+  }>;
 }
 
 export interface LeadSummary {
@@ -64,12 +99,16 @@ export interface LeadSummary {
   name: string;
   company: string;
   phoneNumber: string;
-  status: "ready" | "calling" | "suppressed" | "completed";
+  status: "ready" | "calling" | "retry_wait" | "exhausted" | "suppressed" | "completed";
   fields: Array<{ label: string; value: string }>;
 }
 
 export interface AgentDeskResponse {
   user: PublicUser;
+  availability: {
+    status: AgentAvailabilityStatus;
+    wrapUpUntil: string | null;
+  };
   campaign: {
     id: string;
     name: string;
@@ -95,6 +134,22 @@ export interface AgentDeskResponse {
     voicemailsDropped: number;
     suppressed: number;
   };
+  voicemailJobs: Array<{
+    callId: string;
+    leadName: string;
+    phoneNumber: string;
+    status: "requested" | "playing" | "completed" | "interrupted" | "failed";
+    requestedAt: string;
+    updatedAt: string;
+  }>;
+  recentCalls: Array<{
+    id: string;
+    phoneNumber: string;
+    leadName: string;
+    outcome: CallOutcome | null;
+    state: CallState;
+    createdAt: string;
+  }>;
   leads: LeadSummary[];
   recordings: Array<{
     id: string;
@@ -112,12 +167,19 @@ export interface AgentDeskResponse {
     voicemailSignal: "none" | "possible" | "detected";
     recordingId: string | null;
     recordingName: string;
+    callRecordingEnabled: boolean;
+    callRecordingStatus: CallRecordingStatus;
     actions: {
       dropVoicemail: CallActionAvailability;
       sendDtmf: CallActionAvailability;
     };
     timeline: Array<{ at: string; label: string }>;
   } | null;
+}
+
+export interface UpdateAgentAvailabilityRequest {
+  status: Exclude<AgentAvailabilityStatus, "wrap_up">;
+  campaignId?: string;
 }
 
 export interface CallActionAvailability {
@@ -142,6 +204,15 @@ export interface AdminOverviewResponse {
     callsToday: number;
     suppressionEntries: number;
     liveCalls: number;
+    attemptedCallsToday: number;
+    answeredCallsToday: number;
+    contactRate: number;
+    voicemailDropsToday: number;
+    voicemailDropCompletionRate: number;
+    failedCallsToday: number;
+    callsPerHour: number;
+    agentUtilization: number;
+    outcomeDistribution: Array<{ outcome: string; count: number }>;
   };
   campaigns: Array<{
     id: string;
@@ -149,6 +220,10 @@ export interface AdminOverviewResponse {
     status: CampaignStatus;
     loaded: number;
     callable: number;
+    attempted: number;
+    outcomeDistribution: Array<{ outcome: string; count: number }>;
+    manualDialingEnabled: boolean;
+    callRecordingEnabled: boolean;
     earlyMediaAvmdEnabled: boolean;
   }>;
   recordings: Array<{
@@ -156,27 +231,54 @@ export interface AdminOverviewResponse {
     name: string;
     durationSeconds: number;
     fileSizeBytes: number;
-    runtimeFilePath: string;
     status: string;
   }>;
-  users: PublicUser[];
-  callHistory: Array<{
-    id: string;
-    leadName: string;
-    agentName: string;
-    phoneNumber: string;
-    campaignName: string;
-    state: CallState;
-    outcome: CallOutcome | null;
-    createdAt: string;
-    durationSeconds: number;
-    callRecordingPath: string | null;
-  }>;
+  users: Array<PublicUser & { agentRegistered: boolean | null }>;
+  callHistory: CallHistoryItem[];
   suppression: Array<{
     id: string;
     phoneNumber: string;
     reason: string;
+    createdAt: string;
   }>;
+}
+
+export interface AdminLibraryPage<T> {
+  items: T[];
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+}
+
+export type AdminCampaignListResponse = AdminLibraryPage<AdminOverviewResponse["campaigns"][number]>;
+
+export type AdminRecordingListResponse = AdminLibraryPage<AdminOverviewResponse["recordings"][number]>;
+
+export type AdminUserListResponse = AdminLibraryPage<AdminOverviewResponse["users"][number]>;
+
+export interface CallHistoryItem {
+  id: string;
+  leadName: string;
+  agentName: string;
+  phoneNumber: string;
+  campaignName: string;
+  campaignId: string | null;
+  agentId: string | null;
+  state: CallState;
+  outcome: CallOutcome | null;
+  createdAt: string;
+  durationSeconds: number;
+  recordingAvailable: boolean;
+  voicemailSignal: string | null;
+}
+
+export interface CallHistoryResponse {
+  items: CallHistoryItem[];
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
 }
 
 export interface CallDetailResponse {
@@ -185,12 +287,37 @@ export interface CallDetailResponse {
     answeredAt: string | null;
     endedAt: string | null;
     manualDial: boolean;
+    voicemailSignal: string | null;
+    voicemailConfidence: number | null;
+    recordingStatus: CallRecordingStatus;
+    recordingDurationSeconds: number | null;
+    recordingFileSizeBytes: number | null;
+    recordingIntegrityCheckedAt: string | null;
+    recordingFailureReason: string | null;
+    lastReasonCode: string | null;
+    hangupCause: string | null;
   };
+  legs: Array<{
+    type: "agent" | "customer";
+    state: string;
+    freeswitchUuid: string | null;
+    sipUri: string | null;
+    startedAt: string | null;
+    answeredAt: string | null;
+    endedAt: string | null;
+    hangupCause: string | null;
+    reasonCode: string | null;
+  }>;
   timeline: Array<{
     at: string;
     eventType: string;
     state: string;
     label: string;
+    reasonCode: string | null;
+    freeSwitchEventName: string | null;
+    apiCommandName: string | null;
+    agentLegUuid: string | null;
+    customerLegUuid: string | null;
   }>;
 }
 
@@ -209,6 +336,8 @@ export interface CreateCampaignRequest {
 export interface UpdateCampaignRequest {
   name: string;
   status: CampaignStatus;
+  manualDialingEnabled: boolean;
+  callRecordingEnabled: boolean;
   earlyMediaAvmdEnabled: boolean;
 }
 
@@ -234,10 +363,48 @@ export interface CreateUserRequest {
 
 export interface CreateUserResponse {
   user: PublicUser;
-  agentCredentials?: {
-    sipUsername: string;
-    sipPassword: string;
-  };
+}
+
+export interface UpdateUserRequest {
+  email?: string;
+  name?: string;
+  role?: UserRole;
+  isActive?: boolean;
+  password?: string;
+}
+
+export interface UpdateUserResponse {
+  user: PublicUser;
+}
+
+export interface MediaTicketResponse {
+  url: string;
+  expiresAt: string;
+}
+
+export interface SuppressionListResponse {
+  items: AdminOverviewResponse["suppression"];
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+}
+
+export interface SuppressionImportResponse {
+  filename: string;
+  totalRows: number;
+  importedRows: number;
+  updatedRows: number;
+  failedRows: number;
+  failures: Array<{ rowNumber: number; reason: string }>;
+}
+
+export interface RetentionRunResponse {
+  dryRun: boolean;
+  callRetentionDays: number;
+  recordingRetentionDays: number;
+  calls: number;
+  recordingFiles: number;
 }
 
 export interface ImportCsvRequest {
@@ -271,6 +438,10 @@ export interface CsvImportSummary {
 
 export interface CsvImportHistoryResponse {
   imports: CsvImportSummary[];
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
 }
 
 export interface CsvImportFailure {
@@ -349,12 +520,7 @@ export interface ManualDialValidationResponse {
 }
 
 export type FreeSwitchTrunkStatus =
-  | "ready"
-  | "not_configured"
-  | "registration_failed"
-  | "dns_error"
-  | "error"
-  | "unknown";
+  "ready" | "not_configured" | "registration_failed" | "dns_error" | "error" | "unknown";
 
 export interface FreeSwitchDiagnosticsResponse {
   checkedAt: string;
