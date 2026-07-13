@@ -210,7 +210,7 @@ describe("App Agent Desk empty states", () => {
     render(<App />);
 
     expect(await screen.findByRole("button", { name: "Campaigns" })).toBeDisabled();
-    expect(screen.getAllByTitle("Finish the active call first")).toHaveLength(4);
+    expect(screen.getAllByTitle("Finish the active call first")).toHaveLength(5);
   });
 
   it("shows the campaign early-media AVMD warning only while the setting is enabled", async () => {
@@ -266,7 +266,7 @@ describe("App Agent Desk empty states", () => {
     });
 
     render(<App />);
-    fireEvent.click(await screen.findByRole("button", { name: "Call History" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Call history" }));
     fireEvent.click(await screen.findByRole("button", { name: /Avery Johnson/ }));
 
     const player = await screen.findByLabelText("Call recording for Avery Johnson");

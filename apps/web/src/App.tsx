@@ -19,6 +19,8 @@ import {
   PhoneOff,
   Play,
   Radio,
+  Search,
+  Settings2,
   Shield,
   Square,
   Trash2,
@@ -85,15 +87,16 @@ import type {
   PublicUser
 } from "./types";
 
-type View = "desk" | "campaigns" | "recordings" | "history" | "settings";
+type View = "desk" | "campaigns" | "recordings" | "history" | "suppression" | "settings";
 type AgentDeskWithCampaign = AgentDeskResponse & { campaign: NonNullable<AgentDeskResponse["campaign"]> };
 
 const navItems: Array<{ id: View; label: string; icon: typeof BarChart3 }> = [
-  { id: "desk", label: "Agent Desk", icon: BarChart3 },
+  { id: "desk", label: "Agent desk", icon: BarChart3 },
   { id: "campaigns", label: "Campaigns", icon: Upload },
-  { id: "recordings", label: "Voicemail", icon: FileAudio },
-  { id: "history", label: "Call History", icon: History },
-  { id: "settings", label: "Settings", icon: Shield }
+  { id: "recordings", label: "Recordings", icon: FileAudio },
+  { id: "history", label: "Call history", icon: History },
+  { id: "suppression", label: "Suppression", icon: Ban },
+  { id: "settings", label: "Settings", icon: Settings2 }
 ];
 
 function getErrorMessage(error: unknown, fallback: string): string {
@@ -240,9 +243,12 @@ export function App() {
               <Radio size={19} />
             </div>
             <div>
-              <strong>Outbound</strong>
-              <span>Dialer</span>
+              <strong>Relay</strong>
             </div>
+          </div>
+          <div className="workspace-label">
+            <span>Workspace</span>
+            <strong>{desk.campaign?.name ?? "Outbound calling"}</strong>
           </div>
           <nav className="nav-list">
             {navItems.map((item) => {
@@ -263,8 +269,9 @@ export function App() {
             })}
           </nav>
           <div className="sidebar-foot">
-            <span>{desk.campaign?.name ?? "No active campaign"}</span>
-            <strong>{desk.campaign?.status ?? "setup"}</strong>
+            <span>{user.name}</span>
+            <strong>{softphoneRuntime.registered ? "● Ready · Phone connected" : "● Phone connecting"}</strong>
+            <small>{desk.metrics.todayCalls} calls · {desk.metrics.voicemailsDropped} VM drops</small>
           </div>
         </aside>
       )}
@@ -272,34 +279,37 @@ export function App() {
       <main className="workspace">
         <TopBar
           desk={desk}
+          view={activeView}
           showSoftphoneStatus={activeView === "desk"}
           softphone={softphoneRuntime}
           user={user}
           onLogout={handleLogout}
         />
-        {activeView === "desk" && (
-          <AgentDesk
-            desk={desk}
-            manualDialNumber={manualDialNumber}
-            onCampaignChange={handleCampaignChange}
-            onDeskChanged={setDesk}
-            onManualDialNumberChange={setManualDialNumber}
-            softphone={softphoneRuntime}
-          />
-        )}
-        {activeView !== "desk" && (
-          <AdminView
-            admin={admin}
-            csvImports={csvImports}
-            onChanged={hydrateSession}
-            onManualDial={(phoneNumber) => {
-              setManualDialNumber(phoneNumber);
-              setView("desk");
-            }}
-            view={activeView}
-            user={user}
-          />
-        )}
+        <div className="workspace-content">
+          {activeView === "desk" && (
+            <AgentDesk
+              desk={desk}
+              manualDialNumber={manualDialNumber}
+              onCampaignChange={handleCampaignChange}
+              onDeskChanged={setDesk}
+              onManualDialNumberChange={setManualDialNumber}
+              softphone={softphoneRuntime}
+            />
+          )}
+          {activeView !== "desk" && (
+            <AdminView
+              admin={admin}
+              csvImports={csvImports}
+              onChanged={hydrateSession}
+              onManualDial={(phoneNumber) => {
+                setManualDialNumber(phoneNumber);
+                setView("desk");
+              }}
+              view={activeView}
+              user={user}
+            />
+          )}
+        </div>
       </main>
     </div>
   );
@@ -338,8 +348,8 @@ function LoginScreen({
             <Radio size={19} />
           </div>
           <div>
-            <strong>Outbound</strong>
-            <span>Dialer</span>
+            <strong>Relay</strong>
+            <span>Outbound calling workspace</span>
           </div>
         </div>
         <form onSubmit={submit}>
@@ -377,26 +387,45 @@ function TopBar({
   onLogout,
   showSoftphoneStatus,
   softphone,
-  user
+  user,
+  view
 }: {
   desk: AgentDeskResponse;
   onLogout: () => void;
   showSoftphoneStatus: boolean;
   softphone: SoftphoneRuntime;
   user: PublicUser;
+  view: View;
 }) {
+  const titles: Record<View, { title: string; subtitle: string }> = {
+    desk: {
+      title: "Agent desk",
+      subtitle: desk.campaign
+        ? `${desk.campaign.name} / ${desk.campaign.callableLeads} callable leads`
+        : "No active campaign"
+    },
+    campaigns: { title: "Campaigns", subtitle: "Lead queues, imports and campaign controls" },
+    recordings: { title: "Voicemail recordings", subtitle: "Approved audio used by agent handoffs" },
+    history: { title: "Call history", subtitle: "Outcomes and recorded conversations" },
+    suppression: { title: "Suppression", subtitle: "Numbers excluded from outbound calling" },
+    settings: { title: "Settings", subtitle: "Users, calling controls and operations" }
+  };
+  const heading = titles[view];
   return (
     <header className="topbar">
-      <p>{desk.campaign?.name ?? "No active campaign"}</p>
+      <div className="topbar-title">
+        <h1>{heading.title}</h1>
+        <p>{heading.subtitle}</p>
+      </div>
       <div className="topbar-actions">
         {showSoftphoneStatus && (
           <>
             <StatusBadge
-              label={softphone.registered ? "Phone ready" : "Phone offline"}
+              label={softphone.registered ? "● Phone connected" : "● Phone offline"}
               tone={softphone.registered ? "good" : "bad"}
             />
             <StatusBadge
-              label={softphone.microphoneAllowed ? "Mic ready" : "Mic blocked"}
+              label={softphone.microphoneAllowed ? "● Mic allowed" : "● Mic blocked"}
               tone={softphone.microphoneAllowed ? "good" : "bad"}
             />
           </>
@@ -539,6 +568,9 @@ function AgentDesk({
   const campaignDesk = desk as AgentDeskWithCampaign;
 
   if (desk.activeCall) {
+    const activeLead = desk.leads.find(
+      (lead) => lead.status === "calling" || lead.phoneNumber === desk.activeCall?.phoneNumber
+    );
     return (
       <section className="agent-grid active-agent-grid">
         <LeadQueue
@@ -560,13 +592,7 @@ function AgentDesk({
           dtmfPending={dtmfPending}
           pending={endCallPending}
         />
-        <AgentStatusPanel
-          desk={campaignDesk}
-          mode="active"
-          onCampaignChange={onCampaignChange}
-          onOpenManual={() => setDeskMode("manual")}
-          softphone={softphone}
-        />
+        <LeadContextPanel lead={activeLead} />
       </section>
     );
   }
@@ -634,13 +660,21 @@ function LeadQueue({
   pending: boolean;
   showRecommendedCall?: boolean;
 }) {
+  const [query, setQuery] = useState("");
   const recommended = leads.find((lead) => lead.status === "ready") ?? leads[0];
+  const visibleLeads = leads.filter((lead) =>
+    `${lead.name} ${lead.company} ${lead.phoneNumber}`.toLowerCase().includes(query.trim().toLowerCase())
+  );
+  const activeQueue = !showRecommendedCall;
 
   return (
     <article className="panel lead-queue next-leads-panel">
       <div className="surface-heading">
-        <h2>Next leads</h2>
-        <p>No live call is active. Start the next call from the campaign queue.</p>
+        <div className="heading-with-count">
+          <h2>{activeQueue ? "Lead queue" : "Next leads"}</h2>
+          <span>{leads.length}</span>
+        </div>
+        <p>{activeQueue ? "Auto-advances after each outcome" : "Start the next call from the campaign queue."}</p>
       </div>
       {error && <p className="form-error">{error}</p>}
       {showRecommendedCall && recommended && (
@@ -655,31 +689,91 @@ function LeadQueue({
           </button>
         </div>
       )}
+      <label className="queue-search">
+        <Search size={15} />
+        <input
+          aria-label="Search leads"
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="Search name or phone"
+          value={query}
+        />
+      </label>
       <div className="lead-table" role="table" aria-label="Next leads">
-        <div className="lead-table-row lead-table-head" role="row">
-          <span>Lead</span>
-          <span>Phone</span>
-          <span>Action</span>
-        </div>
-        {leads.map((lead) => (
-          <div className="lead-table-row" key={lead.id} role="row">
-            <strong>{lead.name}</strong>
-            <span>{lead.phoneNumber}</span>
-            <button
-              className="pill-action"
-              disabled={pending || lead.status !== "ready" || !canStartCalls}
-              onClick={() => onCallLead(lead)}
-              type="button"
-            >
-              Call
-            </button>
+        {visibleLeads.map((lead) => (
+          <div className={`lead-table-row lead-${lead.status}`} key={lead.id} role="row">
+            <span className="lead-avatar" aria-hidden="true">{getInitials(lead.name)}</span>
+            <div className="lead-identity">
+              <strong>{lead.name}</strong>
+              {activeQueue && lead.company && <small>{lead.company}</small>}
+              <span>{lead.phoneNumber}</span>
+            </div>
+            <div className="lead-row-state">
+              <b>{lead.status === "calling" ? "Connected" : lead.status}</b>
+              {showRecommendedCall && (
+                <button
+                  className="pill-action"
+                  disabled={pending || lead.status !== "ready" || !canStartCalls}
+                  onClick={() => onCallLead(lead)}
+                  type="button"
+                >
+                  Call
+                </button>
+              )}
+            </div>
           </div>
         ))}
-        {!leads.length && (
+        {!visibleLeads.length && (
           <div className="lead-table-empty" role="row">
-            No leads are queued for this campaign.
+            {leads.length ? "No leads match your search." : "No leads are queued for this campaign."}
           </div>
         )}
+      </div>
+    </article>
+  );
+}
+
+function getInitials(name: string): string {
+  return name
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase())
+    .join("") || "?";
+}
+
+function LeadContextPanel({ lead }: { lead?: LeadSummary }) {
+  const visibleFields = lead?.fields
+    .filter(({ label }) => !["company", "name", "phone"].includes(label.toLowerCase()))
+    .slice(0, 5) ?? [];
+
+  return (
+    <article className="panel lead-context-panel">
+      <div className="surface-heading">
+        <h2>Lead context</h2>
+        <p>Visible throughout the call</p>
+      </div>
+      <div className="company-card">
+        <span>Company</span>
+        <strong>{lead?.company || "Manual call"}</strong>
+        <small>{lead ? "Campaign lead" : "No lead profile is linked"}</small>
+      </div>
+      <div className="lead-facts">
+        {visibleFields.map((field) => (
+          <div key={field.label}>
+            <span>{field.label}</span>
+            <strong>{field.value}</strong>
+          </div>
+        ))}
+        {!visibleFields.length && (
+          <div>
+            <span>Phone</span>
+            <strong>{lead?.phoneNumber ?? "Not available"}</strong>
+          </div>
+        )}
+      </div>
+      <div className="compliance-card">
+        <CheckCircle2 size={15} />
+        <span>Callable · suppression check passed</span>
       </div>
     </article>
   );
@@ -1024,52 +1118,42 @@ function ActiveCall({
   };
   return (
     <article className="panel active-call">
-      <PanelHeader icon={PhoneCall} title="Active call" meta={durationLabel} />
+      <div className="call-status-line">
+        <StatusBadge label={`● ${durationLabel}`} tone="good" />
+        <span>Call {activeCall.id.slice(0, 8).toUpperCase()}</span>
+      </div>
       <div className="call-hero">
         <div>
           <h2>{activeCall.leadName}</h2>
           <p>{activeCall.phoneNumber}</p>
           {activeCall.campaignName && <small>{activeCall.campaignName}</small>}
         </div>
-        <span aria-label={`Call duration ${formatDuration(activeCall.durationSeconds)}`}>{formatDuration(activeCall.durationSeconds)}</span>
       </div>
-      <div className="call-actions">
-        <button className="danger-action" disabled={pending} onClick={() => onHangUp(activeCall.id)} type="button">
-          <PhoneOff size={17} />
-          {pending ? "Ending" : "Hang up"}
-        </button>
-        <button
-          className="primary-action"
-          disabled={pending || dropPending || !dropRecordingId || !dropEligibility.allowed}
-          onClick={() => onDropVoicemail(activeCall.id, dropRecordingId)}
-          title={!dropEligibility.allowed ? dropEligibility.reason ?? "Voicemail drop is not available yet" : undefined}
-          type="button"
-        >
-          <Voicemail size={17} />
-          {dropPending ? "Dropping" : "Drop voicemail"}
-        </button>
-      </div>
-      {!dropEligibility.allowed && dropEligibility.reason && <p className="action-hint">{dropEligibility.reason}</p>}
-      {error && <p className="form-error">{error}</p>}
-      <div className="dtmf-panel">
-        <div className="dtmf-pad" aria-label="DTMF keypad">
-          {["1", "2", "3", "4", "5", "6", "7", "8", "9", "*", "0", "#"].map((digit) => (
-            <button
-              disabled={dtmfPending || !dtmfEligibility.allowed}
-              key={digit}
-              onClick={() => void onSendDtmf(activeCall.id, digit)}
-              title={!dtmfEligibility.allowed ? dtmfEligibility.reason ?? "DTMF is not available yet" : undefined}
-              type="button"
-            >
-              {digit}
-            </button>
+      <div className="call-stage">
+        <div className="call-stage-top">
+          <span>Live audio</span>
+          <strong aria-label={`Call duration ${formatDuration(activeCall.durationSeconds)}`}>{formatDuration(activeCall.durationSeconds)}</strong>
+        </div>
+        <div className="audio-waveform" aria-hidden="true">
+          {[18, 32, 46, 28, 58, 40, 24, 52, 68, 44, 30, 54, 36, 20, 42, 62, 38, 24, 48, 32, 18, 40, 26, 52, 34, 20, 44, 30].map((height, index) => (
+            <span key={`${height}-${index}`} style={{ height }} />
           ))}
         </div>
+        <div className="call-stage-meta">
+          <span>{activeCall.status === "bridged" ? "Stable media · customer connected" : durationLabel}</span>
+          <b>● REC</b>
+        </div>
       </div>
-      {!dtmfEligibility.allowed && dtmfEligibility.reason && <p className="action-hint">{dtmfEligibility.reason}</p>}
+      <div className="handoff-card">
+        <Voicemail size={18} />
+        <div>
+          <strong>Voicemail reached?</strong>
+          <span>Start playback and release the agent leg.</span>
+        </div>
+      </div>
       <div className="signal-strip">
         <div className={`voicemail-signal ${activeCall.voicemailSignal}`}>
-          <span>VM/beep signal</span>
+          <span>VM / beep signal</span>
           <strong>{voicemailSignal.label}</strong>
           <small>{voicemailSignal.detail}</small>
         </div>
@@ -1092,6 +1176,41 @@ function ActiveCall({
           {!desk.recordings.length && <strong>No voicemail recordings</strong>}
         </div>
       </div>
+      <div className="call-actions call-actions-stacked">
+        <button
+          className="primary-action voicemail-primary-action"
+          disabled={pending || dropPending || !dropRecordingId || !dropEligibility.allowed}
+          onClick={() => onDropVoicemail(activeCall.id, dropRecordingId)}
+          title={!dropEligibility.allowed ? dropEligibility.reason ?? "Voicemail drop is not available yet" : undefined}
+          type="button"
+        >
+          <Voicemail size={17} />
+          {dropPending ? "Dropping" : "Drop voicemail"}
+        </button>
+        <button className="danger-action" disabled={pending} onClick={() => onHangUp(activeCall.id)} type="button">
+          <PhoneOff size={17} />
+          {pending ? "Ending" : "Hang up"}
+        </button>
+      </div>
+      {!dropEligibility.allowed && dropEligibility.reason && <p className="action-hint">{dropEligibility.reason}</p>}
+      {error && <p className="form-error">{error}</p>}
+      <details className="dtmf-panel">
+        <summary>Keypad</summary>
+        <div className="dtmf-pad" aria-label="DTMF keypad">
+          {["1", "2", "3", "4", "5", "6", "7", "8", "9", "*", "0", "#"].map((digit) => (
+            <button
+              disabled={dtmfPending || !dtmfEligibility.allowed}
+              key={digit}
+              onClick={() => void onSendDtmf(activeCall.id, digit)}
+              title={!dtmfEligibility.allowed ? dtmfEligibility.reason ?? "DTMF is not available yet" : undefined}
+              type="button"
+            >
+              {digit}
+            </button>
+          ))}
+        </div>
+      </details>
+      {!dtmfEligibility.allowed && dtmfEligibility.reason && <p className="action-hint">{dtmfEligibility.reason}</p>}
       <div className="timeline">
         {activeCall.timeline.map((item) => (
           <div className="timeline-item" key={`${item.at}-${item.label}`}>
@@ -1175,6 +1294,7 @@ function AdminView({
     campaigns: <Campaigns admin={admin} csvImports={csvImports} onChanged={onChanged} onManualDial={onManualDial} />,
     recordings: <Recordings admin={admin} onChanged={onChanged} />,
     history: <HistoryView admin={admin} />,
+    suppression: <SuppressionView admin={admin} onChanged={onChanged} />,
     settings: <SettingsView admin={admin} onChanged={onChanged} />,
     desk: null
   }[view];
@@ -1831,6 +1951,15 @@ function Recordings({ admin, onChanged }: { admin: AdminOverviewResponse; onChan
   const [preview, setPreview] = useState<{ id: string; url: string } | null>(null);
   const previewAudioRef = useRef<HTMLAudioElement | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const defaultRecording = admin.recordings.find((recording) => recording.status === "default") ?? admin.recordings[0];
+  const [selectedRecordingId, setSelectedRecordingId] = useState(defaultRecording?.id ?? "");
+  const [showUpload, setShowUpload] = useState(false);
+
+  useEffect(() => {
+    if (!admin.recordings.some((recording) => recording.id === selectedRecordingId)) {
+      setSelectedRecordingId(defaultRecording?.id ?? "");
+    }
+  }, [admin.recordings, defaultRecording?.id, selectedRecordingId]);
 
   useEffect(() => {
     if (!preview) {
@@ -1858,6 +1987,7 @@ function Recordings({ admin, onChanged }: { admin: AdminOverviewResponse; onChan
       setFile(null);
       setName("");
       setMakeDefault(true);
+      setShowUpload(false);
       form.reset();
       await onChanged();
     } catch (uploadError) {
@@ -1912,105 +2042,117 @@ function Recordings({ admin, onChanged }: { admin: AdminOverviewResponse; onChan
     setPreview({ id: recordingId, url });
   }
 
+  const selectedRecording = admin.recordings.find((recording) => recording.id === selectedRecordingId) ?? defaultRecording;
+  const totalStorage = admin.recordings.reduce((total, recording) => total + recording.fileSizeBytes, 0);
+
   return (
-    <>
-      <article className="panel form-panel">
-        <PanelHeader icon={Upload} title="Upload voicemail" meta="WAV or MP3" />
-        <form className="stack-form" onSubmit={submit}>
-          <label>
-            Voicemail file
-            <input
-              accept=".wav,.mp3,audio/wav,audio/mpeg"
-              onChange={(event) => {
-                const nextFile = event.target.files?.[0] ?? null;
-                setFile(nextFile);
-                if (nextFile && !name.trim()) {
-                  setName(nextFile.name.replace(/\.[^.]+$/, ""));
-                }
-              }}
-              required
-              type="file"
-            />
-          </label>
-          <label>
-            Voicemail name
-            <input onChange={(event) => setName(event.target.value)} placeholder="Main voicemail" value={name} />
-          </label>
-          <div className="toggle-row">
-            <label>
-              <input checked={makeDefault} onChange={(event) => setMakeDefault(event.target.checked)} type="checkbox" />
-              Make default
-            </label>
+    <div className="recordings-view">
+      <div className="recording-stats">
+        <Metric label="Active recordings" value={admin.recordings.length} icon={FileAudio} />
+        <Metric label="Default length" value={defaultRecording?.durationSeconds ? `${defaultRecording.durationSeconds} sec` : "—"} icon={Clock3} />
+        <Metric label="Storage used" value={formatBytes(totalStorage)} icon={Activity} />
+      </div>
+      <div className="recordings-layout">
+        <article className="panel recording-library-panel">
+          <div className="recording-library-header">
+            <div className="surface-heading">
+              <h2>Recording library</h2>
+              <p>Versioned audio files available to agents</p>
+            </div>
+            <button className="primary-action compact-action" onClick={() => setShowUpload(true)} type="button">
+              <Upload size={16} />
+              Upload recording
+            </button>
           </div>
           {error && <p className="form-error">{error}</p>}
-          <button className="primary-action" disabled={pending || !file} type="submit">
-            <Upload size={17} />
-            {pending ? "Uploading" : "Upload voicemail"}
-          </button>
-        </form>
-      </article>
-      <article className="panel wide-panel">
-        <PanelHeader icon={FileAudio} title="Voicemail recordings" meta={`${admin.recordings.length} files`} />
-        <div className="table-list">
-          {admin.recordings.map((recording) => (
-            <div className="recording-item" key={recording.id}>
-              <div className="table-row recording-row">
-                <div>
+          <div className="recording-table-head" aria-hidden="true">
+            <span>Name</span><span>Duration</span><span>Status</span><span />
+          </div>
+          <div className="recording-library-list">
+            {admin.recordings.map((recording) => (
+              <div className={recording.id === selectedRecording?.id ? "recording-library-row selected" : "recording-library-row"} key={recording.id}>
+                <button className="recording-select-button" onClick={() => { setSelectedRecordingId(recording.id); setShowUpload(false); }} type="button">
                   <strong>{recording.name}</strong>
-                  <small>{recording.status === "default" ? "Used by default" : "Available for calls"}</small>
-                </div>
-                <span>
-                  {recording.durationSeconds ? `${recording.durationSeconds}s` : "Duration pending"} ·{" "}
-                  {formatBytes(recording.fileSizeBytes)}
-                </span>
+                  <small>{formatBytes(recording.fileSizeBytes)}</small>
+                </button>
+                <span>{recording.durationSeconds ? formatDuration(recording.durationSeconds) : "Pending"}</span>
                 <b>{recording.status}</b>
                 <button
                   className="icon-button"
-                  disabled={deletePendingId === recording.id}
-                  onClick={() => togglePreview(recording.id)}
+                  onClick={() => {
+                    setSelectedRecordingId(recording.id);
+                    setShowUpload(false);
+                    togglePreview(recording.id);
+                  }}
                   title={preview?.id === recording.id ? "Stop preview" : "Preview voicemail"}
                   type="button"
                 >
                   {preview?.id === recording.id ? <Square size={16} /> : <Play size={16} />}
                 </button>
-                <button
-                  className="secondary-action compact-action"
-                  disabled={
-                    recording.status === "default" ||
-                    defaultPendingId === recording.id ||
-                    deletePendingId === recording.id
-                  }
-                  onClick={() => void makeRecordingDefault(recording.id)}
-                  type="button"
-                >
-                  <CheckCircle2 size={16} />
-                  {defaultPendingId === recording.id ? "Saving" : "Default"}
-                </button>
-                <button
-                  className="icon-button danger-icon"
-                  disabled={deletePendingId === recording.id || defaultPendingId === recording.id}
-                  onClick={() => void removeRecording(recording)}
-                  title="Delete voicemail"
-                  type="button"
-                >
-                  <Trash2 size={16} />
-                </button>
               </div>
-              {preview?.id === recording.id && (
-                <audio
-                  autoPlay
-                  className="recording-preview"
-                  controls
-                  ref={previewAudioRef}
-                  src={preview.url}
-                />
-              )}
-            </div>
-          ))}
-          {!admin.recordings.length && <p className="empty-state">No voicemail recordings uploaded yet.</p>}
-        </div>
-      </article>
-    </>
+            ))}
+            {!admin.recordings.length && <p className="empty-state">No voicemail recordings uploaded yet.</p>}
+          </div>
+        </article>
+        <article className="panel recording-detail-panel">
+          {showUpload ? (
+            <>
+              <div className="surface-heading">
+                <span className="detail-eyebrow">New recording</span>
+                <h2>Upload voicemail</h2>
+                <p>WAV or MP3 audio for agent handoffs</p>
+              </div>
+              <form className="stack-form" onSubmit={submit}>
+                <label>
+                  Voicemail file
+                  <input
+                    accept=".wav,.mp3,audio/wav,audio/mpeg"
+                    onChange={(event) => {
+                      const nextFile = event.target.files?.[0] ?? null;
+                      setFile(nextFile);
+                      if (nextFile && !name.trim()) setName(nextFile.name.replace(/\.[^.]+$/, ""));
+                    }}
+                    required
+                    type="file"
+                  />
+                </label>
+                <label>Voicemail name<input onChange={(event) => setName(event.target.value)} placeholder="Main voicemail" value={name} /></label>
+                <label className="checkbox-label"><input checked={makeDefault} onChange={(event) => setMakeDefault(event.target.checked)} type="checkbox" />Make default</label>
+                {error && <p className="form-error">{error}</p>}
+                <button className="primary-action" disabled={pending || !file} type="submit"><Upload size={17} />{pending ? "Uploading" : "Upload voicemail"}</button>
+                <button className="secondary-action" onClick={() => setShowUpload(false)} type="button">Cancel</button>
+              </form>
+            </>
+          ) : selectedRecording ? (
+            <>
+              <div className="surface-heading">
+                <span className="detail-eyebrow">Selected recording</span>
+                <h2>{selectedRecording.name}</h2>
+                <p>{selectedRecording.status === "default" ? "Default voicemail" : "Available for agent handoffs"}</p>
+              </div>
+              <div className="recording-player-card">
+                <button className="recording-play-button" onClick={() => togglePreview(selectedRecording.id)} type="button" title="Preview voicemail">
+                  {preview?.id === selectedRecording.id ? <Square size={18} /> : <Play size={18} />}
+                </button>
+                <strong>{selectedRecording.durationSeconds ? `00:00 / ${formatDuration(selectedRecording.durationSeconds)}` : "Duration pending"}</strong>
+                <div className="mini-waveform" aria-hidden="true">{[18, 28, 40, 22, 34, 48, 26, 38, 20, 44, 30, 42, 24, 36, 18, 32, 40, 22, 34, 18].map((height, index) => <span key={`${height}-${index}`} style={{ height }} />)}</div>
+                {preview?.id === selectedRecording.id && <audio autoPlay controls ref={previewAudioRef} src={preview.url} />}
+              </div>
+              <div className="recording-default-card"><CheckCircle2 size={16} /><span>{selectedRecording.status === "default" ? "Default for new calls" : "Ready to use in active calls"}</span></div>
+              <div className="recording-meta-list">
+                <div><span>Duration</span><strong>{selectedRecording.durationSeconds ? formatDuration(selectedRecording.durationSeconds) : "Pending"}</strong></div>
+                <div><span>File size</span><strong>{formatBytes(selectedRecording.fileSizeBytes)}</strong></div>
+                <div><span>Status</span><strong>{selectedRecording.status}</strong></div>
+              </div>
+              <div className="recording-detail-actions">
+                <button className="secondary-action" disabled={selectedRecording.status === "default" || defaultPendingId === selectedRecording.id} onClick={() => void makeRecordingDefault(selectedRecording.id)} type="button"><CheckCircle2 size={16} />{defaultPendingId === selectedRecording.id ? "Saving" : "Make default"}</button>
+                <button className="danger-action" disabled={deletePendingId === selectedRecording.id} onClick={() => void removeRecording(selectedRecording)} type="button"><Trash2 size={16} />Delete</button>
+              </div>
+            </>
+          ) : <p className="empty-state">Upload a recording to get started.</p>}
+        </article>
+      </div>
+    </div>
   );
 }
 
@@ -2314,16 +2456,6 @@ function SettingsView({ admin, onChanged }: { admin: AdminOverviewResponse; onCh
     <div className="operations-grid two">
       <FreeSwitchDiagnosticsPanel />
       <article className="panel">
-        <PanelHeader icon={Ban} title="Suppression" meta={`${admin.suppression.length} entries`} />
-        <div className="table-list">
-          {admin.suppression.map((item) => (
-            <SuppressionRow item={item} key={item.id} onChanged={onChanged} />
-          ))}
-          {admin.suppression.length === 0 && <div className="empty-row">No suppressed numbers</div>}
-        </div>
-      </article>
-      <CreateSuppressionForm onChanged={onChanged} />
-      <article className="panel">
         <PanelHeader icon={Activity} title="Operations" meta="Today" />
         <div className="stat-row">
           <Metric label="Active agents" value={admin.stats.activeAgents} icon={Headphones} />
@@ -2331,6 +2463,23 @@ function SettingsView({ admin, onChanged }: { admin: AdminOverviewResponse; onCh
         </div>
       </article>
       <UsersPanel onChanged={onChanged} users={admin.users} />
+    </div>
+  );
+}
+
+function SuppressionView({ admin, onChanged }: { admin: AdminOverviewResponse; onChanged: () => Promise<void> }) {
+  return (
+    <div className="operations-grid two">
+      <CreateSuppressionForm onChanged={onChanged} />
+      <article className="panel">
+        <PanelHeader icon={Ban} title="Suppressed numbers" meta={`${admin.suppression.length} entries`} />
+        <div className="table-list">
+          {admin.suppression.map((item) => (
+            <SuppressionRow item={item} key={item.id} onChanged={onChanged} />
+          ))}
+          {admin.suppression.length === 0 && <div className="empty-row">No suppressed numbers</div>}
+        </div>
+      </article>
     </div>
   );
 }
@@ -2573,7 +2722,7 @@ function Metric({
 }: {
   icon: typeof BarChart3;
   label: string;
-  value: number;
+  value: number | string;
 }) {
   return (
     <div className="metric-card">
@@ -2586,9 +2735,6 @@ function Metric({
 
 function StatusBadge({ label, tone }: { label: string; tone: "good" | "bad" | "neutral" | "warn" }) {
   return (
-    <span className={`status-badge ${tone}`}>
-      <Clock3 size={14} />
-      {label}
-    </span>
+    <span className={`status-badge ${tone}`}>{label}</span>
   );
 }
