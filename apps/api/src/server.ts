@@ -2,6 +2,7 @@ import cors from "@fastify/cors";
 import multipart from "@fastify/multipart";
 import Fastify from "fastify";
 import { ZodError } from "zod";
+import { startAgentRegistrationReconciler } from "./agent-registrations.js";
 import { registerAuthRoutes } from "./auth/routes.js";
 import { loadConfig } from "./config.js";
 import { registerDashboardRoutes } from "./dashboard/routes.js";
@@ -20,6 +21,7 @@ const app = Fastify({
 });
 const pool = createPool(config);
 let stopFreeSwitchEventListener: (() => void) | null = null;
+let stopAgentRegistrationReconciler: (() => void) | null = null;
 
 app.setErrorHandler((error, _request, reply) => {
   if (error instanceof ZodError) {
@@ -97,10 +99,12 @@ async function start() {
     port: config.API_PORT
   });
   stopFreeSwitchEventListener = startFreeSwitchEventListener(config, pool, app.log);
+  stopAgentRegistrationReconciler = startAgentRegistrationReconciler(config, pool, app.log);
 }
 
 const shutdown = async () => {
   app.log.info("shutting down");
+  stopAgentRegistrationReconciler?.();
   stopFreeSwitchEventListener?.();
   await app.close();
   await pool.end();
