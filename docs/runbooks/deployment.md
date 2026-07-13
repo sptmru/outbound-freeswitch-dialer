@@ -12,6 +12,8 @@ This runbook does not configure or change the host firewall or host-published po
 - Production `.env` at repository root with mode `0600`.
 - Non-placeholder `JWT_SECRET`, `SIP_SECRET_ENCRYPTION_KEY`, `POSTGRES_PASSWORD`, `POSTGRES_EXPORTER_PASSWORD`, `FREESWITCH_ESL_PASSWORD`, `GRAFANA_ADMIN_PASSWORD`, and `BACKUP_ENCRYPTION_PASSPHRASE` (at least 32 characters where preflight requires it). The exporter password is independent from the application owner and is applied to a dedicated `outbound_dialer_exporter` role with `pg_monitor`, read-only transactions, and no application-schema privileges.
 - Immutable `FREESWITCH_BASE_IMAGE` `@sha256` digest, valid dialer/Grafana domains, and TLS email.
+- For AWS, a public-subnet EC2 host with a stable Elastic IP, literal matching `FREESWITCH_EXTERNAL_SIP_IP`/`FREESWITCH_EXTERNAL_RTP_IP`, the instance private IPv4 in `TURN_RELAY_IP`, and Security Group rules from the [AWS networking runbook](aws-networking.md).
+- A strong `TURN_SHARED_SECRET`, pinned `COTURN_IMAGE`, and `TURN_URLS` using the primary `LETSENCRYPT_DOMAIN`. The API issues short-lived credentials; never publish the shared secret as a frontend build variable.
 - For an HTTPS FreeSWITCH WSS upstream, certificate verification is on by default. Set `FREESWITCH_WS_UPSTREAM_TLS_SERVER_NAME` to the name on the upstream certificate; `ALLOW_UNVERIFIED_FREESWITCH_WS_UPSTREAM=true` is break-glass only for a separately approved private/self-signed endpoint.
 - A real Alertmanager receiver, or an explicitly documented `ALLOW_NO_ALERT_RECEIVER=true` exception.
 - `BACKUP_S3_URI`, or an explicitly documented `ALLOW_LOCAL_ONLY_BACKUPS=true` exception.

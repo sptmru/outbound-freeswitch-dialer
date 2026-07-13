@@ -1,4 +1,5 @@
 import type pg from "pg";
+import { createHmac } from "node:crypto";
 import type { UserRole } from "@outbound-dialer/shared";
 import type { AppConfig } from "./config.js";
 import { decryptSecret, encryptSecret, secretNeedsReencryption } from "./auth/crypto.js";
@@ -32,6 +33,39 @@ export interface AgentSoftphoneProvisioning {
   displayName: string;
   websocketUrl: string;
   domain: string;
+  iceServers: Array<{
+    urls: string[];
+    username?: string;
+    credential?: string;
+  }>;
+}
+
+function commaSeparatedUrls(value: string | undefined): string[] {
+  return (value ?? "")
+    .split(",")
+    .map((url) => url.trim())
+    .filter(Boolean);
+}
+
+export function buildSoftphoneIceServers(
+  config: AppConfig,
+  userId: string,
+  nowSeconds = Math.floor(Date.now() / 1000)
+): AgentSoftphoneProvisioning["iceServers"] {
+  const iceServers: AgentSoftphoneProvisioning["iceServers"] = [];
+  const stunUrls = commaSeparatedUrls(config.ICE_STUN_URLS);
+  if (stunUrls.length) {
+    iceServers.push({ urls: stunUrls });
+  }
+
+  const turnUrls = commaSeparatedUrls(config.TURN_URLS);
+  if (turnUrls.length && config.TURN_SHARED_SECRET) {
+    const username = `${nowSeconds + config.TURN_CREDENTIAL_TTL_SECONDS}:${userId}`;
+    const credential = createHmac("sha1", config.TURN_SHARED_SECRET).update(username).digest("base64");
+    iceServers.push({ urls: turnUrls, username, credential });
+  }
+
+  return iceServers;
 }
 
 export interface CreateUserInput {
@@ -220,7 +254,8 @@ export async function getSoftphoneProvisioningForUser(
     sipPassword,
     displayName,
     websocketUrl: config.FREESWITCH_WEBRTC_PUBLIC_WS_URL ?? `wss://${config.FREESWITCH_DOMAIN}/freeswitch-ws`,
-    domain: config.FREESWITCH_DOMAIN
+    domain: config.FREESWITCH_DOMAIN,
+    iceServers: buildSoftphoneIceServers(config, user.id)
   };
 }
 

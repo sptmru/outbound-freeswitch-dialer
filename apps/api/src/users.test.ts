@@ -6,9 +6,34 @@ import { describe, it } from "node:test";
 import type pg from "pg";
 import type { AppConfig } from "./config.js";
 import { encryptSecret } from "./auth/crypto.js";
-import { getSoftphoneProvisioningForUser } from "./users.js";
+import { buildSoftphoneIceServers, getSoftphoneProvisioningForUser } from "./users.js";
 
 describe("user provisioning helpers", () => {
+  it("issues Google STUN plus short-lived Coturn REST credentials", () => {
+    const config = {
+      ICE_STUN_URLS: "stun:stun.l.google.com:19302, stun:stun1.l.google.com:19302",
+      TURN_URLS:
+        "turn:dialer.example.com:3478?transport=udp,turn:dialer.example.com:3478?transport=tcp,turns:dialer.example.com:5349?transport=tcp",
+      TURN_SHARED_SECRET: "test-turn-secret-that-is-at-least-32-bytes",
+      TURN_CREDENTIAL_TTL_SECONDS: 3600
+    } as AppConfig;
+
+    const result = buildSoftphoneIceServers(config, "agent-id", 1_700_000_000);
+
+    assert.deepEqual(result[0], {
+      urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"]
+    });
+    assert.deepEqual(result[1], {
+      urls: [
+        "turn:dialer.example.com:3478?transport=udp",
+        "turn:dialer.example.com:3478?transport=tcp",
+        "turns:dialer.example.com:5349?transport=tcp"
+      ],
+      username: "1700003600:agent-id",
+      credential: "y7AAWSXzEbyMOh7mWjDbzMyj228="
+    });
+  });
+
   it("recreates missing FreeSWITCH XML before returning existing softphone credentials", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "outbound-dialer-users-"));
     const config = createConfig(tempDir);

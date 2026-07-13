@@ -43,6 +43,7 @@ Firewall policy and changes to host-published ports were intentionally excluded 
 - [Backup and restore](docs/runbooks/backup-restore.md)
 - [Incident response](docs/runbooks/incident-response.md)
 - [SIP/RTP capture](docs/runbooks/pcap.md)
+- [AWS NAT, firewall, STUN, and TURN](docs/runbooks/aws-networking.md)
 - [AI development workflow](docs/ai-development-workflow.md)
 - [Architecture decisions](docs/adr/0001-initial-architecture.md)
 

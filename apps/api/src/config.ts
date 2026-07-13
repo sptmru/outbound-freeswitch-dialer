@@ -74,6 +74,10 @@ const envSchema = z.object({
   FREESWITCH_DOMAIN: z.string().default("localhost"),
   FREESWITCH_WEBRTC_WSS_PORT: z.coerce.number().int().positive().default(7443),
   FREESWITCH_WEBRTC_PUBLIC_WS_URL: z.string().url().optional(),
+  ICE_STUN_URLS: z.string().default("stun:stun.l.google.com:19302,stun:stun1.l.google.com:19302"),
+  TURN_URLS: z.string().optional(),
+  TURN_SHARED_SECRET: z.string().min(32).optional(),
+  TURN_CREDENTIAL_TTL_SECONDS: z.coerce.number().int().min(300).max(86400).default(3600),
   MONITORING_STUCK_CALL_SECONDS: z.coerce.number().int().positive().default(900),
   SIP_TRUNK_MODE: z.enum(["registration", "ip_auth"]).default("registration"),
   SIP_TRUNK_PROXY: z.string().optional(),
@@ -106,6 +110,11 @@ function assertProductionConfiguration(config: z.infer<typeof envSchema>): void 
   requireProductionSecret(problems, "JWT_SECRET", config.JWT_SECRET);
   requireProductionSecret(problems, "FREESWITCH_ESL_PASSWORD", config.FREESWITCH_ESL_PASSWORD);
   requireProductionSecret(problems, "SIP_SECRET_ENCRYPTION_KEY", config.SIP_SECRET_ENCRYPTION_KEY);
+  requireProductionSecret(problems, "TURN_SHARED_SECRET", config.TURN_SHARED_SECRET);
+
+  if (!config.TURN_URLS) {
+    problems.push("TURN_URLS must be configured in production");
+  }
 
   if (config.BOOTSTRAP_ADMIN_EMAIL) {
     requireProductionSecret(problems, "BOOTSTRAP_ADMIN_PASSWORD", config.BOOTSTRAP_ADMIN_PASSWORD);

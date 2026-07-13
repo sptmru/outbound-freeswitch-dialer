@@ -198,6 +198,11 @@ export interface SoftphoneProvisioningResponse {
   displayName: string;
   websocketUrl: string;
   domain: string;
+  iceServers: Array<{
+    urls: string[];
+    username?: string;
+    credential?: string;
+  }>;
 }
 
 export interface AdminOverviewResponse {

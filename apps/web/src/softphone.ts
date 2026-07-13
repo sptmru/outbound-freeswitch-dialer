@@ -281,6 +281,9 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
           },
           uri,
           sessionDescriptionHandlerFactoryOptions: {
+            peerConnectionConfiguration: {
+              iceServers: provisioning.iceServers
+            },
             constraints: {
               audio: true,
               video: false

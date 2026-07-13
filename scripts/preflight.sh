@@ -34,6 +34,43 @@ strong_secret() {
   [[ ! "${value}" =~ change-me|ClueCon|example|not-configured ]] || fail "${name} contains a placeholder value"
 }
 
+ipv4() {
+  local value="$1"
+  local first second third fourth extra
+  IFS=. read -r first second third fourth extra <<< "${value}"
+  [[ -z "${extra:-}" && -n "${fourth:-}" ]] || return 1
+  for octet in "${first}" "${second}" "${third}" "${fourth}"; do
+    [[ "${octet}" =~ ^[0-9]+$ ]] || return 1
+    (( 10#${octet} <= 255 )) || return 1
+  done
+}
+
+public_ipv4() {
+  local value="$1"
+  local first second _
+  ipv4 "${value}" || return 1
+  IFS=. read -r first second _ <<< "${value}"
+  first=$((10#${first}))
+  second=$((10#${second}))
+  (( first >= 1 && first <= 223 )) || return 1
+  (( first != 10 )) || return 1
+  (( first != 100 || second < 64 || second > 127 )) || return 1
+  (( first != 127 )) || return 1
+  (( first != 169 || second != 254 )) || return 1
+  (( first != 172 || second < 16 || second > 31 )) || return 1
+  (( first != 192 || second != 168 )) || return 1
+}
+
+private_ipv4() {
+  local value="$1"
+  local first second _
+  ipv4 "${value}" || return 1
+  IFS=. read -r first second _ <<< "${value}"
+  first=$((10#${first}))
+  second=$((10#${second}))
+  (( first == 10 || (first == 172 && second >= 16 && second <= 31) || (first == 192 && second == 168) ))
+}
+
 for command in awk crontab curl docker find git grep mktemp node npm openssl stat tar; do
   command -v "${command}" >/dev/null || fail "missing required command: ${command}"
 done
@@ -52,11 +89,47 @@ strong_secret POSTGRES_EXPORTER_PASSWORD
 strong_secret JWT_SECRET
 strong_secret SIP_SECRET_ENCRYPTION_KEY
 strong_secret FREESWITCH_ESL_PASSWORD
+strong_secret TURN_SHARED_SECRET
 strong_secret GRAFANA_ADMIN_PASSWORD
 strong_secret BACKUP_ENCRYPTION_PASSPHRASE
 required LETSENCRYPT_DOMAIN
 required LETSENCRYPT_EMAIL
 required GRAFANA_DOMAIN
+required FREESWITCH_EXTERNAL_SIP_IP
+required FREESWITCH_EXTERNAL_RTP_IP
+required TURN_URLS
+required TURN_RELAY_IP
+required COTURN_IMAGE
+
+public_ipv4 "${FREESWITCH_EXTERNAL_SIP_IP}" \
+  || fail "FREESWITCH_EXTERNAL_SIP_IP must be the literal public/Elastic IPv4 address (not auto-nat or STUN)"
+public_ipv4 "${FREESWITCH_EXTERNAL_RTP_IP}" \
+  || fail "FREESWITCH_EXTERNAL_RTP_IP must be the literal public/Elastic IPv4 address (not auto-nat or STUN)"
+[[ "${FREESWITCH_EXTERNAL_SIP_IP}" == "${FREESWITCH_EXTERNAL_RTP_IP}" ]] \
+  || fail "the current single-EC2 topology requires matching FreeSWITCH SIP and RTP public IPs"
+private_ipv4 "${TURN_RELAY_IP}" || fail "TURN_RELAY_IP must be the EC2 instance's literal RFC1918 private IPv4 address"
+[[ "${TURN_RELAY_IP}" != "${FREESWITCH_EXTERNAL_RTP_IP}" ]] \
+  || fail "TURN_RELAY_IP must be the EC2 private address, not its Elastic IP"
+[[ "${TURN_URLS}" == *"${LETSENCRYPT_DOMAIN}"* ]] \
+  || fail "TURN_URLS must use the primary LETSENCRYPT_DOMAIN hostname"
+[[ "${COTURN_IMAGE}" =~ @sha256:[0-9a-f]{64}$ ]] \
+  || fail "COTURN_IMAGE must use an immutable @sha256 digest"
+
+turn_min_port="${TURN_MIN_PORT:-49152}"
+turn_max_port="${TURN_MAX_PORT:-49252}"
+turn_port="${TURN_PORT:-3478}"
+turn_tls_port="${TURN_TLS_PORT:-5349}"
+rtp_start_port="${FREESWITCH_RTP_START_PORT:-16384}"
+rtp_end_port="${FREESWITCH_RTP_END_PORT:-16484}"
+for port_name in turn_port turn_tls_port turn_min_port turn_max_port rtp_start_port rtp_end_port; do
+  [[ "${!port_name}" =~ ^[0-9]+$ && "${!port_name}" -ge 1024 && "${!port_name}" -le 65535 ]] \
+    || fail "${port_name} must be a port between 1024 and 65535"
+done
+(( turn_min_port <= turn_max_port )) || fail "TURN_MIN_PORT must not exceed TURN_MAX_PORT"
+(( rtp_start_port <= rtp_end_port )) || fail "FREESWITCH_RTP_START_PORT must not exceed FREESWITCH_RTP_END_PORT"
+if (( turn_min_port <= rtp_end_port && rtp_start_port <= turn_max_port )); then
+  fail "Coturn relay and FreeSWITCH RTP port ranges must not overlap"
+fi
 
 if [[ -n "${BOOTSTRAP_ADMIN_EMAIL:-}" ]]; then
   strong_secret BOOTSTRAP_ADMIN_PASSWORD
