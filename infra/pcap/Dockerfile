@@ -24,5 +24,7 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /app/apps/api/dist/pcap-capture-server.js /app/pcap-capture-server.js
+COPY --chmod=0755 infra/pcap/entrypoint.sh /usr/local/bin/pcap-entrypoint
 
+ENTRYPOINT ["/usr/local/bin/pcap-entrypoint"]
 CMD ["node", "/app/pcap-capture-server.js"]
