@@ -111,7 +111,7 @@ jobs:
             exit 1
           fi
 
-      - name: Deploy exact commit to client production
+      - name: Deploy to production
         shell: bash
         env:
           TARGET_SHA: ${{ github.sha }}
