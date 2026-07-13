@@ -83,11 +83,33 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          for name in DEPLOY_HOST DEPLOY_PORT DEPLOY_USER DEPLOY_SSH_PRIVATE_KEY DEPLOY_SSH_KNOWN_HOSTS; do
+            if [[ -z "${!name}" ]]; then
+              echo "Missing required client-production secret for ${name}" >&2
+              exit 1
+            fi
+          done
+          [[ "${DEPLOY_PORT}" =~ ^[0-9]+$ ]] || {
+            echo "CLIENT_DEPLOY_PORT must be numeric" >&2
+            exit 1
+          }
+
           install -m 700 -d "${HOME}/.ssh"
           printf '%s\n' "${DEPLOY_SSH_PRIVATE_KEY}" > "${HOME}/.ssh/client-deploy"
           chmod 600 "${HOME}/.ssh/client-deploy"
           printf '%s\n' "${DEPLOY_SSH_KNOWN_HOSTS}" > "${HOME}/.ssh/known_hosts"
           chmod 600 "${HOME}/.ssh/known_hosts"
+
+          known_hosts_target="${DEPLOY_HOST}"
+          if [[ "${DEPLOY_PORT}" != "22" ]]; then
+            known_hosts_target="[${DEPLOY_HOST}]:${DEPLOY_PORT}"
+          fi
+          if ! ssh-keygen -F "${known_hosts_target}" -f "${HOME}/.ssh/known_hosts" |
+            grep -qE '[[:space:]]ssh-ed25519[[:space:]]'; then
+            echo "CLIENT_DEPLOY_SSH_KNOWN_HOSTS has no ED25519 key for ${known_hosts_target}" >&2
+            echo "Store a complete known_hosts line using the exact CLIENT_DEPLOY_HOST and CLIENT_DEPLOY_PORT." >&2
+            exit 1
+          fi
 
       - name: Deploy exact commit to client production
         shell: bash

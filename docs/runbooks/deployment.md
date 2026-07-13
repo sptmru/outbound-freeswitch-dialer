@@ -66,6 +66,8 @@ Create a GitHub Environment named `client-production` with these secrets:
 - `CLIENT_DEPLOY_SSH_PRIVATE_KEY`: private key used only by GitHub Actions to reach the deployment account;
 - `CLIENT_DEPLOY_SSH_KNOWN_HOSTS`: pinned `known_hosts` line for the exact hostname/IP and port used above.
 
+The host field in `CLIENT_DEPLOY_SSH_KNOWN_HOSTS` must exactly match `CLIENT_DEPLOY_HOST`. For port `22`, use `<host> ssh-ed25519 <public-key>`; for a non-standard port, use `[<host>]:<port> ssh-ed25519 <public-key>`. Obtain the public key or fingerprint through a trusted client-server console and verify it before saving the secret. Do not disable `StrictHostKeyChecking` or replace the pinned entry with an unverified runtime scan.
+
 The client checkout separately needs read-only GitHub access, preferably through a repository deploy key, because the server runs `git fetch`. The deployment account needs permission to run Docker and the host commands required by preflight. Keep `main` protected against force pushes so an approved deployment commit remains an ancestor of `origin/main`.
 
 Leave `CLIENT_DEPLOY_ENABLED` absent or set to `false` during bootstrap. After this workflow commit has landed on `main`, manually update `/opt/outbound-dialer` once so `scripts/deploy-commit.sh` exists, complete the target `.env` and deployment acceptance checks, add the environment secrets, and only then set the repository variable to `true`. The next push to `main` will be the first automatic deployment.
