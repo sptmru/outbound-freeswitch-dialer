@@ -60,6 +60,18 @@ ensure_module_load() {
   echo "Enabled FreeSWITCH module ${module} in ${modules_conf}"
 }
 
+disable_module_load() {
+  module="$1"
+  modules_conf="$CONFIG_DIR/autoload_configs/modules.conf.xml"
+
+  if ! grep -Eq "<load module=\"${module}\"[[:space:]]*/?>" "$modules_conf"; then
+    return
+  fi
+
+  sed -i "/<load module=\"${module}\"[[:space:]]*\/>/d" "$modules_conf"
+  echo "Disabled unused FreeSWITCH module ${module} in ${modules_conf}"
+}
+
 legacy_env() {
   name="$1"
   legacy_prefix="MA${EMPTY:-}XO"
@@ -113,6 +125,7 @@ render "$TEMPLATE_DIR/dialplan/default/outbound-sip-trunk.xml.tpl" "$CONFIG_DIR/
 render "$TEMPLATE_DIR/dialplan/default/voicemail-drop.xml.tpl" "$CONFIG_DIR/dialplan/default/voicemail-drop.xml"
 ensure_module_load "mod_avmd"
 ensure_module_load "mod_amd"
+disable_module_load "mod_signalwire"
 
 legacy_name="ma${EMPTY:-}xo"
 rm -f "$CONFIG_DIR/dialplan/default/outbound-${legacy_name}.xml"

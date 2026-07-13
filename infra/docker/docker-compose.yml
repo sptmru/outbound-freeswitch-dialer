@@ -250,7 +250,7 @@ services:
     image: quay.io/prometheuscommunity/postgres-exporter:v0.19.1
     restart: unless-stopped
     environment:
-      DATA_SOURCE_NAME: ${DATABASE_URL}
+      DATA_SOURCE_NAME: ${DATABASE_URL}?sslmode=disable
     depends_on:
       postgres:
         condition: service_healthy
