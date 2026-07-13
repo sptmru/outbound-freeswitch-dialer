@@ -17,7 +17,7 @@ describe("PostgreSQL migration integration", { skip: !databaseUrl }, () => {
       const migrations = await pool.query<{ checksum_sha256: string; filename: string }>(
         "select filename, checksum_sha256 from schema_migrations order by filename"
       );
-      assert.ok(migrations.rowCount && migrations.rowCount >= 12);
+      assert.ok(migrations.rowCount && migrations.rowCount >= 14);
       for (const migration of migrations.rows) {
         assert.match(migration.filename, /^\d{3}_.+\.sql$/);
         assert.match(migration.checksum_sha256, /^[a-f0-9]{64}$/);
@@ -26,6 +26,25 @@ describe("PostgreSQL migration integration", { skip: !databaseUrl }, () => {
       const auditTable = await pool.query("select auth_version from users limit 0");
       assert.equal(auditTable.fields[0]?.name, "auth_version");
       assert.equal((await pool.query("select 1 from admin_audit_events limit 0")).command, "SELECT");
+
+      const notificationClient = await pool.connect();
+      try {
+        await notificationClient.query("listen outbound_dialer_changes");
+
+        const noOpNotifications = collectNotifications(notificationClient);
+        await pool.query("update agents set updated_at = updated_at where false");
+        assert.deepEqual(await noOpNotifications, []);
+
+        const insertNotifications = collectNotifications(notificationClient);
+        const notificationCampaign = await pool.query<{ id: string }>(
+          "insert into campaigns (name) values ('Live event integration') returning id"
+        );
+        assert.deepEqual(await insertNotifications, ["campaigns"]);
+        await notificationClient.query("unlisten outbound_dialer_changes");
+        await pool.query("delete from campaigns where id = $1", [notificationCampaign.rows[0]?.id]);
+      } finally {
+        notificationClient.release();
+      }
 
       const firstRecording = await createRecording(pool, {
         name: "Integration default one",
@@ -194,3 +213,12 @@ describe("PostgreSQL migration integration", { skip: !databaseUrl }, () => {
     }
   });
 });
+
+async function collectNotifications(client: pg.PoolClient, milliseconds = 100): Promise<string[]> {
+  const payloads: string[] = [];
+  const onNotification = (message: { payload?: string }) => payloads.push(message.payload ?? "");
+  client.on("notification", onNotification);
+  await new Promise((resolve) => setTimeout(resolve, milliseconds));
+  client.off("notification", onNotification);
+  return payloads;
+}
