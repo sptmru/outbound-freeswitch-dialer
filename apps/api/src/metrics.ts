@@ -60,6 +60,22 @@ const recordingFailuresWindow = gauge(
   "outbound_dialer_recording_failures_window",
   "Call recording failures during the monitoring window."
 );
+const pcapCaptureEnabled = gauge(
+  "outbound_dialer_pcap_capture_enabled",
+  "Whether automatic per-call PCAP capture is enabled."
+);
+const pcapCapturesActive = gauge(
+  "outbound_dialer_pcap_captures_active",
+  "Per-call PCAP captures currently running."
+);
+const pcapCaptureFailuresWindow = gauge(
+  "outbound_dialer_pcap_capture_failures_window",
+  "Per-call PCAP captures that failed during the monitoring window."
+);
+const pcapStorageBytes = gauge(
+  "outbound_dialer_pcap_storage_bytes",
+  "Bytes occupied by available per-call PCAP files."
+);
 const voicemailDropsWindow = gauge(
   "outbound_dialer_voicemail_drops_window",
   "Voicemail drops with confirmed playback completion during the monitoring window."
@@ -85,6 +101,11 @@ const retentionDeletedCalls = new Counter({
 const retentionDeletedRecordings = new Counter({
   name: "outbound_dialer_retention_deleted_recordings_total",
   help: "Call recording files deleted or confirmed absent by automatic retention.",
+  registers: [registry]
+});
+const retentionDeletedPcaps = new Counter({
+  name: "outbound_dialer_retention_deleted_pcaps_total",
+  help: "Per-call PCAP files deleted or confirmed absent by automatic retention.",
   registers: [registry]
 });
 
@@ -149,6 +170,7 @@ eslListenerConnected.set(0);
 export function registerMetrics(app: FastifyInstance, config: AppConfig, pool: pg.Pool): void {
   eslListenerEnabled.set(config.FREESWITCH_ESL_ENABLED ? 1 : 0);
   retentionEnabled.set(config.RETENTION_ENABLED ? 1 : 0);
+  pcapCaptureEnabled.set(config.PCAP_CAPTURE_ENABLED ? 1 : 0);
   app.addHook("onRequest", async (request) => {
     requestStartedAt.set(request, process.hrtime.bigint());
   });
@@ -208,10 +230,15 @@ export function recordFreeSwitchEventError(): void {
   eslEventErrors.inc();
 }
 
-export function recordRetentionSuccess(result: { calls: number; recordingFiles: number }): void {
+export function recordRetentionSuccess(result: {
+  calls: number;
+  recordingFiles: number;
+  pcapFiles: number;
+}): void {
   retentionLastSuccess.set(Date.now() / 1000);
   retentionDeletedCalls.inc(result.calls);
   retentionDeletedRecordings.inc(result.recordingFiles);
+  retentionDeletedPcaps.inc(result.pcapFiles);
 }
 
 export function recordRetentionFailure(): void {
@@ -241,6 +268,9 @@ async function refreshDatabaseMetrics(pool: pg.Pool, stuckCallSeconds: number): 
         attempted: string;
         failed: string;
         recording_failures: string;
+        pcap_active: string;
+        pcap_failures: string;
+        pcap_storage_bytes: string;
         voicemail_drops: string;
       }>(`
         select
@@ -248,6 +278,9 @@ async function refreshDatabaseMetrics(pool: pg.Pool, stuckCallSeconds: number): 
           (select count(*) from calls where answered_at >= now() - interval '15 minutes') as answered,
           (select count(*) from calls where ended_at >= now() - interval '15 minutes' and (state = 'failed' or outcome = 'failed')) as failed,
           (select count(*) from call_events where created_at >= now() - interval '24 hours' and event_type in ('call_recording_failed', 'call_recording_integrity_failed')) as recording_failures,
+          (select count(*) from call_pcaps where status = 'capturing') as pcap_active,
+          (select count(*) from call_pcaps where updated_at >= now() - interval '24 hours' and status = 'failed') as pcap_failures,
+          (select coalesce(sum(file_size_bytes), 0) from call_pcaps where status = 'available') as pcap_storage_bytes,
           (select count(*) from calls where voicemail_playback_completed_at >= now() - interval '24 hours' and outcome = 'voicemail_dropped') as voicemail_drops
       `)
     ]);
@@ -262,6 +295,9 @@ async function refreshDatabaseMetrics(pool: pg.Pool, stuckCallSeconds: number): 
     callsAnsweredWindow.set(toNumber(recent?.answered));
     callsFailedWindow.set(toNumber(recent?.failed));
     recordingFailuresWindow.set(toNumber(recent?.recording_failures));
+    pcapCapturesActive.set(toNumber(recent?.pcap_active));
+    pcapCaptureFailuresWindow.set(toNumber(recent?.pcap_failures));
+    pcapStorageBytes.set(toNumber(recent?.pcap_storage_bytes));
     voicemailDropsWindow.set(toNumber(recent?.voicemail_drops));
     databaseSnapshotUp.set(1);
   } catch {

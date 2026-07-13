@@ -7,6 +7,7 @@ import {
   BarChart3,
   CheckCircle2,
   Clock3,
+  Download,
   FileAudio,
   Headphones,
   History,
@@ -60,6 +61,7 @@ import {
   getCallRecordingAudioUrl,
   getRecordingAudioUrl,
   downloadCallHistoryCsv,
+  downloadCallPcap,
   importCampaignCsvFile,
   importSuppressionCsvFile,
   login,
@@ -3239,6 +3241,7 @@ function HistoryView({ admin }: { admin: AdminOverviewResponse }) {
   const [voicemail, setVoicemail] = useState<"" | "drop" | "signal">("");
   const [page, setPage] = useState(1);
   const [historyPending, setHistoryPending] = useState(false);
+  const [pcapPendingId, setPcapPendingId] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -3314,6 +3317,24 @@ function HistoryView({ admin }: { admin: AdminOverviewResponse }) {
       setError(getErrorMessage(detailError, "Could not load call details"));
     } finally {
       setPendingId(null);
+    }
+  }
+
+  async function downloadPcap(callId: string) {
+    setPcapPendingId(callId);
+    setError(null);
+    try {
+      const blob = await downloadCallPcap(callId);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${callId}.pcap`;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (downloadError) {
+      setError(getErrorMessage(downloadError, "Could not download PCAP capture"));
+    } finally {
+      setPcapPendingId(null);
     }
   }
 
@@ -3517,6 +3538,22 @@ function HistoryView({ admin }: { admin: AdminOverviewResponse }) {
                         <strong>Recording</strong>
                         {formatRecordingStatus(detail.call.recordingStatus)}
                       </span>
+                      <span>
+                        <strong>Packet capture</strong>
+                        {detail.call.pcapStatus ? formatPcapStatus(detail.call.pcapStatus) : "Not captured"}
+                      </span>
+                      {detail.call.pcapFileSizeBytes !== null && (
+                        <span>
+                          <strong>PCAP size</strong>
+                          {formatBytes(detail.call.pcapFileSizeBytes)}
+                        </span>
+                      )}
+                      {detail.call.pcapFailureReason && (
+                        <span>
+                          <strong>PCAP issue</strong>
+                          {detail.call.pcapFailureReason}
+                        </span>
+                      )}
                       {detail.call.recordingDurationSeconds !== null && (
                         <span>
                           <strong>Recording length</strong>
@@ -3555,6 +3592,23 @@ function HistoryView({ admin }: { admin: AdminOverviewResponse }) {
                     </div>
                     {detail.call.recordingAvailable && (
                       <CallRecordingPlayer callId={detail.call.id} leadName={detail.call.leadName} />
+                    )}
+                    {detail.call.pcapAvailable && (
+                      <div className="pcap-download-card">
+                        <div>
+                          <strong>Packet capture</strong>
+                          <small>May include traffic from overlapping calls on the same SIP/RTP ports.</small>
+                        </div>
+                        <button
+                          className="secondary-action compact-action"
+                          disabled={pcapPendingId === call.id}
+                          onClick={() => void downloadPcap(call.id)}
+                          type="button"
+                        >
+                          <Download size={15} />
+                          {pcapPendingId === call.id ? "Preparing" : "Download PCAP"}
+                        </button>
+                      </div>
                     )}
                     <div className="technical-details">
                       <button
@@ -3696,6 +3750,17 @@ function formatDateTime(value: string): string {
     dateStyle: "medium",
     timeStyle: "short"
   }).format(date);
+}
+
+function formatPcapStatus(status: NonNullable<CallDetailResponse["call"]["pcapStatus"]>): string {
+  const labels = {
+    pending: "Pending",
+    capturing: "Capturing",
+    available: "Available",
+    failed: "Failed",
+    expired: "Expired"
+  } as const;
+  return labels[status];
 }
 
 function formatOutcome(

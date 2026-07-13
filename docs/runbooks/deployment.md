@@ -52,6 +52,26 @@ The script performs these steps:
 
 `SKIP_DEPLOY_CHECKS`, `SKIP_PRE_DEPLOY_BACKUP`, `ALLOW_ACTIVE_CALL_DEPLOY`, `ALLOW_UNVERIFIED_ACTIVE_CALL_STATE`, `ALLOW_UNCONFIGURED_SIP_TRUNK`, `ALLOW_NO_ALERT_RECEIVER`, and `ALLOW_LOCAL_ONLY_BACKUPS` are break-glass/risk-acceptance controls. Do not use them in an ordinary release; record owner, reason, time, and follow-up whenever one is used.
 
+## GitHub Main-Branch Deployment
+
+Pushes to `main` deploy to the client production host only after both GitHub Actions quality and browser jobs pass and the repository variable `CLIENT_DEPLOY_ENABLED` is exactly `true`. The `deploy-client` job connects over SSH and asks the persistent `/opt/outbound-dialer` checkout to deploy the exact `${{ github.sha }}` through `scripts/deploy-commit.sh`.
+
+The target host keeps its production `.env` at `/opt/outbound-dialer/.env` with mode `0600`; no application or provider secrets are copied into GitHub. The wrapper takes a non-blocking deployment lock, refuses a dirty checkout, fetches `origin/main`, verifies the requested full SHA belongs to that branch, checks it out detached, and delegates all release gates to `scripts/deploy.sh`.
+
+Create a GitHub Environment named `client-production` with these secrets:
+
+- `CLIENT_DEPLOY_HOST`: client server hostname or IP;
+- `CLIENT_DEPLOY_PORT`: SSH port, normally `22`;
+- `CLIENT_DEPLOY_USER`: dedicated deployment account;
+- `CLIENT_DEPLOY_SSH_PRIVATE_KEY`: private key used only by GitHub Actions to reach the deployment account;
+- `CLIENT_DEPLOY_SSH_KNOWN_HOSTS`: pinned `known_hosts` line for the exact hostname/IP and port used above.
+
+The client checkout separately needs read-only GitHub access, preferably through a repository deploy key, because the server runs `git fetch`. The deployment account needs permission to run Docker and the host commands required by preflight. Keep `main` protected against force pushes so an approved deployment commit remains an ancestor of `origin/main`.
+
+Leave `CLIENT_DEPLOY_ENABLED` absent or set to `false` during bootstrap. After this workflow commit has landed on `main`, manually update `/opt/outbound-dialer` once so `scripts/deploy-commit.sh` exists, complete the target `.env` and deployment acceptance checks, add the environment secrets, and only then set the repository variable to `true`. The next push to `main` will be the first automatic deployment.
+
+GitHub job concurrency and the host `flock` prevent overlapping releases. A deploy rejected because calls are active or because another release is running remains failed and must be rerun later; the workflow does not enable any break-glass override or perform a blind automatic rollback.
+
 ## Two-Stage SIP Credential Encryption Rollout
 
 SIP passwords historically use `v1`, whose key is derived from `JWT_SECRET`. Current code reads both `v1` and `v2`; `v2` uses the independent `SIP_SECRET_ENCRYPTION_KEY`. Enabling `v2` writes also migrates existing `v1` rows transactionally at API startup. A pre-dual-read image cannot decrypt `v2`, so this change must span two deployments.

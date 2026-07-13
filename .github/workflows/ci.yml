@@ -58,3 +58,48 @@ jobs:
       - run: npm run build
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e
+
+  deploy-client:
+    if: >-
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main' &&
+      vars.CLIENT_DEPLOY_ENABLED == 'true'
+    needs: [quality, browser]
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    environment:
+      name: client-production
+    concurrency:
+      group: client-production
+      cancel-in-progress: false
+    env:
+      DEPLOY_HOST: ${{ secrets.CLIENT_DEPLOY_HOST }}
+      DEPLOY_PORT: ${{ secrets.CLIENT_DEPLOY_PORT }}
+      DEPLOY_USER: ${{ secrets.CLIENT_DEPLOY_USER }}
+      DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.CLIENT_DEPLOY_SSH_PRIVATE_KEY }}
+      DEPLOY_SSH_KNOWN_HOSTS: ${{ secrets.CLIENT_DEPLOY_SSH_KNOWN_HOSTS }}
+    steps:
+      - name: Configure deployment SSH key
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -m 700 -d "${HOME}/.ssh"
+          printf '%s\n' "${DEPLOY_SSH_PRIVATE_KEY}" > "${HOME}/.ssh/client-deploy"
+          chmod 600 "${HOME}/.ssh/client-deploy"
+          printf '%s\n' "${DEPLOY_SSH_KNOWN_HOSTS}" > "${HOME}/.ssh/known_hosts"
+          chmod 600 "${HOME}/.ssh/known_hosts"
+
+      - name: Deploy exact commit to client production
+        shell: bash
+        env:
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          ssh \
+            -i "${HOME}/.ssh/client-deploy" \
+            -p "${DEPLOY_PORT}" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            "/opt/outbound-dialer/scripts/deploy-commit.sh '${TARGET_SHA}'"

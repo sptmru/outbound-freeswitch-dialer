@@ -70,6 +70,10 @@ services:
       VOICEMAIL_UPLOAD_MAX_BYTES: ${VOICEMAIL_UPLOAD_MAX_BYTES:-67108864}
       VOICEMAIL_DROP_START_TIMEOUT_SECONDS: ${VOICEMAIL_DROP_START_TIMEOUT_SECONDS:-120}
       CALL_RECORDINGS_STORAGE_DIR: /var/lib/freeswitch/storage/recordings/calls
+      PCAP_CAPTURE_ENABLED: ${PCAP_CAPTURE_ENABLED:-false}
+      PCAP_CAPTURE_SOCKET: /run/outbound-dialer-pcap/capture.sock
+      PCAP_STORAGE_DIR: /var/lib/outbound-dialer/pcaps
+      PCAP_RETENTION_DAYS: ${PCAP_RETENTION_DAYS:-7}
       CALL_LOG_RETENTION_DAYS: ${CALL_LOG_RETENTION_DAYS:-7}
       CALL_RECORDING_RETENTION_DAYS: ${CALL_RECORDING_RETENTION_DAYS:-30}
       RETENTION_ENABLED: ${RETENTION_ENABLED:-true}
@@ -91,6 +95,8 @@ services:
         condition: service_healthy
       freeswitch:
         condition: service_started
+      pcap-capture:
+        condition: service_healthy
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
@@ -98,6 +104,8 @@ services:
     volumes:
       - freeswitch_generated:/var/lib/outbound-dialer/freeswitch
       - ../freeswitch/recordings:/var/lib/freeswitch/storage/recordings
+      - pcap_storage:/var/lib/outbound-dialer/pcaps
+      - pcap_socket:/run/outbound-dialer-pcap
     healthcheck:
       test:
         [
@@ -217,6 +225,54 @@ services:
       - freeswitch_generated:/var/lib/outbound-dialer/freeswitch
       - freeswitch_logs:/var/log/freeswitch
       - ../freeswitch/recordings:/var/lib/freeswitch/storage/recordings
+
+  pcap-capture:
+    image: outbound-dialer-pcap:${APP_VERSION:-local}
+    build:
+      context: ../..
+      dockerfile: infra/pcap/Dockerfile
+    restart: unless-stopped
+    init: true
+    labels:
+      com.outbound-dialer.version: ${APP_VERSION:-local}
+    read_only: true
+    network_mode: host
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - KILL
+      - NET_ADMIN
+      - NET_RAW
+      - SETGID
+      - SETUID
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      PCAP_CAPTURE_ENABLED: ${PCAP_CAPTURE_ENABLED:-false}
+      PCAP_CAPTURE_INTERFACE: ${PCAP_CAPTURE_INTERFACE:-any}
+      PCAP_CAPTURE_SOCKET: /run/outbound-dialer-pcap/capture.sock
+      PCAP_STORAGE_DIR: /var/lib/outbound-dialer/pcaps
+      FREESWITCH_INTERNAL_SIP_PORT: ${FREESWITCH_INTERNAL_SIP_PORT:-5060}
+      FREESWITCH_EXTERNAL_PROFILE_SIP_PORT: ${FREESWITCH_EXTERNAL_PROFILE_SIP_PORT:-5080}
+      FREESWITCH_EXTERNAL_PROFILE_TLS_PORT: ${FREESWITCH_EXTERNAL_PROFILE_TLS_PORT:-5081}
+      FREESWITCH_WEBRTC_WSS_PORT: ${FREESWITCH_WEBRTC_WSS_PORT:-7443}
+      FREESWITCH_RTP_START_PORT: ${FREESWITCH_RTP_START_PORT:-16384}
+      FREESWITCH_RTP_END_PORT: ${FREESWITCH_RTP_END_PORT:-16484}
+    volumes:
+      - pcap_storage:/var/lib/outbound-dialer/pcaps
+      - pcap_socket:/run/outbound-dialer-pcap
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "const http=require('http');const r=http.request({socketPath:process.env.PCAP_CAPTURE_SOCKET,path:'/health'},x=>process.exit(x.statusCode===200?0:1));r.on('error',()=>process.exit(1));r.end()"
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 5
 
   fail2ban:
     image: ${FAIL2BAN_IMAGE:-crazymax/fail2ban@sha256:7cd8a427a44675397398a8dace2a3d755e62c72527f8730e4fd37697731a9321}
@@ -428,5 +484,7 @@ volumes:
   prometheus_data:
   alertmanager_data:
   grafana_data:
+  pcap_storage:
+  pcap_socket:
   loki_data:
   alloy_data:

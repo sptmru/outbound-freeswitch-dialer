@@ -11,7 +11,7 @@ export type LockedRetentionResult =
 
 export async function runRetentionWithAdvisoryLock(
   pool: pg.Pool,
-  input: { callRetentionDays: number; recordingRetentionDays: number },
+  input: { callRetentionDays: number; recordingRetentionDays: number; pcapRetentionDays: number },
   options: { runner?: typeof runRetention } = {}
 ): Promise<LockedRetentionResult> {
   const client = await pool.connect();
@@ -32,7 +32,8 @@ export async function runRetentionWithAdvisoryLock(
       result: await runner(pool, {
         dryRun: false,
         callRetentionDays: input.callRetentionDays,
-        recordingRetentionDays: input.recordingRetentionDays
+        recordingRetentionDays: input.recordingRetentionDays,
+        pcapRetentionDays: input.pcapRetentionDays
       })
     };
   } finally {
@@ -67,7 +68,8 @@ export function startRetentionScheduler(
         pool,
         {
           callRetentionDays: config.CALL_LOG_RETENTION_DAYS,
-          recordingRetentionDays: config.CALL_RECORDING_RETENTION_DAYS
+          recordingRetentionDays: config.CALL_RECORDING_RETENTION_DAYS,
+          pcapRetentionDays: config.PCAP_RETENTION_DAYS
         },
         {
           runner: (runnerPool, input) =>
@@ -76,6 +78,12 @@ export function startRetentionScheduler(
                 logger.error(
                   { error, callId: recording.id },
                   "Call recording retention unlink failed; metadata was preserved"
+                );
+              },
+              onPcapUnlinkError: (error, capture) => {
+                logger.error(
+                  { error, callId: capture.call_id },
+                  "PCAP retention unlink failed; metadata was preserved"
                 );
               }
             })

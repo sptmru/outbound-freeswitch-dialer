@@ -53,6 +53,13 @@ const envSchema = z.object({
   VOICEMAIL_UPLOAD_MAX_BYTES: z.coerce.number().int().min(1_000_000).max(268_435_456).default(67_108_864),
   VOICEMAIL_DROP_START_TIMEOUT_SECONDS: z.coerce.number().int().min(10).max(900).default(120),
   CALL_RECORDINGS_STORAGE_DIR: z.string().default("/var/lib/freeswitch/storage/recordings/calls"),
+  PCAP_CAPTURE_ENABLED: z
+    .string()
+    .optional()
+    .transform((value) => value === "true"),
+  PCAP_CAPTURE_SOCKET: z.string().default("/run/outbound-dialer-pcap/capture.sock"),
+  PCAP_STORAGE_DIR: z.string().default("/var/lib/outbound-dialer/pcaps"),
+  PCAP_RETENTION_DAYS: z.coerce.number().int().min(1).max(365).default(7),
   CALL_LOG_RETENTION_DAYS: z.coerce.number().int().min(1).max(3650).default(7),
   CALL_RECORDING_RETENTION_DAYS: z.coerce.number().int().min(1).max(3650).default(30),
   RETENTION_ENABLED: z

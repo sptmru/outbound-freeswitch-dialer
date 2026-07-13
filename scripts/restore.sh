@@ -79,7 +79,7 @@ compose() {
 
 mkdir -p "${ROOT_DIR}/logs" "${ROOT_DIR}/monitoring/generated" "${RECORDINGS_DIR}"
 missing_release_image=false
-for image in api web proxy freeswitch; do
+for image in api web proxy freeswitch pcap; do
   if ! docker image inspect "outbound-dialer-${image}:${APP_VERSION}" >/dev/null 2>&1; then
     missing_release_image=true
   fi
@@ -93,7 +93,7 @@ if [[ "${missing_release_image}" == "true" ]]; then
     echo "Refusing to build restore images from a dirty working tree" >&2
     exit 1
   }
-  compose build api web proxy freeswitch
+  compose build api web proxy freeswitch pcap-capture
 fi
 compose run --rm monitoring-config
 ENV_FILE="${ENV_FILE}" "${ROOT_DIR}/scripts/validate-monitoring-config.sh"
@@ -125,7 +125,7 @@ mark_restore_failed() {
 }
 trap mark_restore_failed ERR
 
-compose stop api freeswitch
+compose stop api freeswitch pcap-capture
 compose up -d postgres
 compose exec -T postgres pg_restore \
   --username "${POSTGRES_USER}" \

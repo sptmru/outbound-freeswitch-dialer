@@ -43,6 +43,10 @@ export const callRecordingStatuses = [
 
 export type CallRecordingStatus = (typeof callRecordingStatuses)[number];
 
+export const callPcapStatuses = ["pending", "capturing", "available", "failed", "expired"] as const;
+
+export type CallPcapStatus = (typeof callPcapStatuses)[number];
+
 export const userRoles = ["agent", "admin"] as const;
 
 export type UserRole = (typeof userRoles)[number];
@@ -270,6 +274,8 @@ export interface CallHistoryItem {
   createdAt: string;
   durationSeconds: number;
   recordingAvailable: boolean;
+  pcapStatus: CallPcapStatus | null;
+  pcapAvailable: boolean;
   voicemailSignal: string | null;
 }
 
@@ -294,6 +300,12 @@ export interface CallDetailResponse {
     recordingFileSizeBytes: number | null;
     recordingIntegrityCheckedAt: string | null;
     recordingFailureReason: string | null;
+    pcapStatus: CallPcapStatus | null;
+    pcapFileSizeBytes: number | null;
+    pcapStartedAt: string | null;
+    pcapEndedAt: string | null;
+    pcapFailureReason: string | null;
+    pcapAvailable: boolean;
     lastReasonCode: string | null;
     hangupCause: string | null;
   };
@@ -403,8 +415,10 @@ export interface RetentionRunResponse {
   dryRun: boolean;
   callRetentionDays: number;
   recordingRetentionDays: number;
+  pcapRetentionDays: number;
   calls: number;
   recordingFiles: number;
+  pcapFiles: number;
 }
 
 export interface ImportCsvRequest {

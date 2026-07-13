@@ -223,6 +223,19 @@ export async function downloadCallHistoryCsv(
   return response.blob();
 }
 
+export async function downloadCallPcap(callId: string): Promise<Blob> {
+  const response = await fetch(`${API_BASE_URL}/admin/calls/${encodeURIComponent(callId)}/pcap`, {
+    credentials: "include"
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    const message =
+      isRecord(body) && typeof body.message === "string" ? body.message : "Could not download PCAP capture";
+    throw new ApiError(message, response.status, body);
+  }
+  return response.blob();
+}
+
 export async function fetchFreeSwitchDiagnostics(): Promise<FreeSwitchDiagnosticsResponse> {
   return apiFetch<FreeSwitchDiagnosticsResponse>("/admin/freeswitch/diagnostics");
 }

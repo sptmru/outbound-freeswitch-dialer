@@ -38,7 +38,7 @@ target_version="${1:-${default_target_version}}"
 [[ -n "${target_version}" ]] || { echo "No rollback version available" >&2; exit 1; }
 [[ "${ROLLBACK_CONFIRM:-}" == "rollback-${target_version}" ]] || { echo "Set ROLLBACK_CONFIRM=rollback-${target_version}" >&2; exit 1; }
 
-for image in api web proxy freeswitch; do
+for image in api web proxy freeswitch pcap; do
   docker image inspect "outbound-dialer-${image}:${target_version}" >/dev/null
 done
 
@@ -78,7 +78,7 @@ mark_rollback_failed() {
 trap mark_rollback_failed ERR
 
 APP_ENV_FILE="${ENV_FILE}" APP_VERSION="${target_version}" docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" \
-  up -d --no-build --wait api web proxy freeswitch
+  up -d --no-build --wait api web proxy freeswitch pcap-capture
 WEB_SMOKE_URL="${WEB_SMOKE_URL:-https://${LETSENCRYPT_DOMAIN}}" "${ROOT_DIR}/scripts/smoke-web.sh"
 deployment_state_write \
   "${STATE_FILE}" \

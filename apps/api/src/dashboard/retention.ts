@@ -4,7 +4,12 @@ import type { RetentionRunResponse } from "@outbound-dialer/shared";
 
 export async function runRetention(
   pool: pg.Pool,
-  input: { dryRun: boolean; callRetentionDays: number; recordingRetentionDays: number },
+  input: {
+    dryRun: boolean;
+    callRetentionDays: number;
+    recordingRetentionDays: number;
+    pcapRetentionDays: number;
+  },
   options: RetentionOptions = {}
 ): Promise<RetentionRunResponse> {
   const recordings = await pool.query<{ id: string; call_recording_path: string }>(
@@ -17,6 +22,17 @@ export async function runRetention(
     `,
     [input.recordingRetentionDays]
   );
+  const pcaps = await pool.query<{ call_id: string; file_path: string }>(
+    `
+      select call_id, file_path
+      from call_pcaps
+      join calls on calls.id = call_pcaps.call_id
+      where call_pcaps.file_path is not null
+        and coalesce(calls.ended_at, calls.created_at) < now() - ($1::text || ' days')::interval
+        and calls.state in ('completed', 'failed', 'canceled')
+    `,
+    [input.pcapRetentionDays]
+  );
   if (input.dryRun) {
     const calls = await pool.query<{ count: string }>(
       `
@@ -28,15 +44,23 @@ export async function runRetention(
             call_recording_path is null
             or coalesce(ended_at, created_at) < now() - ($2::text || ' days')::interval
           )
+          and not exists (
+            select 1 from call_pcaps
+            where call_pcaps.call_id = calls.id
+              and call_pcaps.file_path is not null
+              and coalesce(calls.ended_at, calls.created_at) >= now() - ($3::text || ' days')::interval
+          )
       `,
-      [input.callRetentionDays, input.recordingRetentionDays]
+      [input.callRetentionDays, input.recordingRetentionDays, input.pcapRetentionDays]
     );
     return {
       dryRun: true,
       callRetentionDays: input.callRetentionDays,
       recordingRetentionDays: input.recordingRetentionDays,
+      pcapRetentionDays: input.pcapRetentionDays,
       calls: Number(calls.rows[0]?.count ?? 0),
-      recordingFiles: recordings.rowCount ?? recordings.rows.length
+      recordingFiles: recordings.rowCount ?? recordings.rows.length,
+      pcapFiles: pcaps.rowCount ?? pcaps.rows.length
     };
   }
 
@@ -53,6 +77,19 @@ export async function runRetention(
         unlinkedRecordingIds.push(recording.id);
       } else {
         options.onUnlinkError?.(error, recording);
+      }
+    }
+  }
+  const unlinkedPcapCallIds: string[] = [];
+  for (const capture of pcaps.rows) {
+    try {
+      await unlinkFile(capture.file_path);
+      unlinkedPcapCallIds.push(capture.call_id);
+    } catch (error) {
+      if (isMissingFileError(error)) {
+        unlinkedPcapCallIds.push(capture.call_id);
+      } else {
+        options.onPcapUnlinkError?.(error, capture);
       }
     }
   }
@@ -76,12 +113,33 @@ export async function runRetention(
         [unlinkedRecordingIds]
       );
     }
+    if (unlinkedPcapCallIds.length) {
+      await client.query(
+        `
+          update call_pcaps
+          set file_path = null,
+              file_size_bytes = null,
+              status = 'expired',
+              failure_reason = null,
+              updated_at = now()
+          where call_id = any($1::uuid[])
+            and file_path is not null
+            and status in ('available', 'failed')
+        `,
+        [unlinkedPcapCallIds]
+      );
+    }
     const deleted = await client.query(
       `
         delete from calls
         where coalesce(ended_at, created_at) < now() - ($1::text || ' days')::interval
           and state in ('completed', 'failed', 'canceled')
           and call_recording_path is null
+          and not exists (
+            select 1 from call_pcaps
+            where call_pcaps.call_id = calls.id
+              and call_pcaps.file_path is not null
+          )
       `,
       [input.callRetentionDays]
     );
@@ -98,14 +156,17 @@ export async function runRetention(
     dryRun: false,
     callRetentionDays: input.callRetentionDays,
     recordingRetentionDays: input.recordingRetentionDays,
+    pcapRetentionDays: input.pcapRetentionDays,
     calls: deletedCalls,
-    recordingFiles: unlinkedRecordingIds.length
+    recordingFiles: unlinkedRecordingIds.length,
+    pcapFiles: unlinkedPcapCallIds.length
   };
 }
 
 export type RetentionOptions = {
   unlinkFile?: (path: string) => Promise<void>;
   onUnlinkError?: (error: unknown, recording: { id: string; call_recording_path: string }) => void;
+  onPcapUnlinkError?: (error: unknown, capture: { call_id: string; file_path: string }) => void;
 };
 
 function isMissingFileError(error: unknown): boolean {

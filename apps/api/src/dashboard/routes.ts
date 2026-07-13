@@ -118,6 +118,7 @@ import { findSuppression } from "./suppression.js";
 import { runRetention } from "./retention.js";
 import { runRetentionWithAdvisoryLock } from "./retention-scheduler.js";
 import { recordRetentionFailure, recordRetentionSuccess } from "../metrics.js";
+import { callPcapPath } from "../pcap-capture.js";
 
 const manualDialValidationSchema = z.object({
   phoneNumber: z.string().min(3),
@@ -478,6 +479,38 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
     }
   );
 
+  app.get("/admin/calls/:callId/pcap", async (request, reply): Promise<FastifyReply | void> => {
+    const user = await requireAdmin(request, reply, config, pool);
+    if (!user) {
+      return;
+    }
+    const params = z.object({ callId: z.string().uuid() }).parse(request.params);
+    const capture = await pool.query<{ file_path: string | null; file_size_bytes: string | number | null }>(
+      `
+        select file_path, file_size_bytes
+        from call_pcaps
+        where call_id = $1
+          and status = 'available'
+          and file_path is not null
+      `,
+      [params.callId]
+    );
+    const row = capture.rows[0];
+    if (!row?.file_path || row.file_path !== callPcapPath(config.PCAP_STORAGE_DIR, params.callId)) {
+      return reply.code(404).send({ message: "PCAP capture is not available" });
+    }
+    let fileSize = Number(row.file_size_bytes ?? 0);
+    try {
+      fileSize = (await stat(row.file_path)).size;
+    } catch (error) {
+      if (isMissingFileError(error)) {
+        return reply.code(404).send({ message: "PCAP capture file is missing" });
+      }
+      throw error;
+    }
+    return sendDownloadFile(reply, row.file_path, `${params.callId}.pcap`, fileSize);
+  });
+
   app.get(
     "/admin/freeswitch/diagnostics",
     async (request, reply): Promise<FreeSwitchDiagnosticsResponse | void> => {
@@ -512,14 +545,16 @@ export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig,
       return runRetention(pool, {
         dryRun: true,
         callRetentionDays: config.CALL_LOG_RETENTION_DAYS,
-        recordingRetentionDays: config.CALL_RECORDING_RETENTION_DAYS
+        recordingRetentionDays: config.CALL_RECORDING_RETENTION_DAYS,
+        pcapRetentionDays: config.PCAP_RETENTION_DAYS
       });
     }
 
     try {
       const result = await runRetentionWithAdvisoryLock(pool, {
         callRetentionDays: config.CALL_LOG_RETENTION_DAYS,
-        recordingRetentionDays: config.CALL_RECORDING_RETENTION_DAYS
+        recordingRetentionDays: config.CALL_RECORDING_RETENTION_DAYS,
+        pcapRetentionDays: config.PCAP_RETENTION_DAYS
       });
       if (result.status === "locked") {
         return reply.code(409).send({ message: "A retention run is already in progress" });
@@ -1600,6 +1635,20 @@ function sendAudioFile(
   return reply.header("Content-Length", size).send(createReadStream(filePath));
 }
 
+function sendDownloadFile(
+  reply: FastifyReply,
+  filePath: string,
+  filename: string,
+  size: number
+): FastifyReply {
+  return reply
+    .header("Content-Type", "application/vnd.tcpdump.pcap")
+    .header("Content-Length", size)
+    .header("Cache-Control", "private, no-store")
+    .header("Content-Disposition", `attachment; filename="${filename.replace(/["\r\n]/g, "")}"`)
+    .send(createReadStream(filePath));
+}
+
 function csvCell(value: string): string {
   const spreadsheetSafe = /^[=+\-@]/.test(value.trimStart()) ? `'${value}` : value;
   return `"${spreadsheetSafe.replaceAll('"', '""')}"`;
@@ -2035,6 +2084,7 @@ export const __testing = {
   normalizePhoneNumber,
   parseCsv,
   sendAudioFile,
+  sendDownloadFile,
   syncFreeSwitchOriginate,
   validateDialableNumber
 };

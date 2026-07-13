@@ -78,6 +78,28 @@ describe("dashboard route helpers", () => {
     }
   });
 
+  it("streams a PCAP as a protected attachment", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "outbound-dialer-pcap-download-"));
+    const filePath = join(directory, "capture.pcap");
+    const capture = Buffer.alloc(64, 7);
+    await writeFile(filePath, capture);
+    const app = Fastify();
+    app.get("/pcap", async (_request, reply) =>
+      __testing.sendDownloadFile(reply, filePath, "capture.pcap", capture.length)
+    );
+
+    try {
+      const response = await app.inject({ method: "GET", url: "/pcap" });
+      assert.equal(response.statusCode, 200);
+      assert.equal(response.headers["content-type"], "application/vnd.tcpdump.pcap");
+      assert.equal(response.headers["content-disposition"], 'attachment; filename="capture.pcap"');
+      assert.deepEqual(response.rawPayload, capture);
+    } finally {
+      await app.close();
+      await rm(directory, { force: true, recursive: true });
+    }
+  });
+
   it("parses quoted CSV fields and escaped quotes", () => {
     const parsed = parseCsv('Name,Phone,Company\n"Doe, Jane","+1 415 555 0100","Acme ""Labs"""');
 

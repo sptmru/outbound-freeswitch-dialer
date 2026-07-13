@@ -15,6 +15,7 @@ import { startFreeSwitchEventListener } from "./esl-events.js";
 import { provisionAllAgentDirectories, startAgentDirectoryReconciler } from "./freeswitch/provisioning.js";
 import { registerHealthRoutes } from "./health.js";
 import { registerMetrics } from "./metrics.js";
+import { startPcapCaptureFinalizer } from "./pcap-capture.js";
 import {
   createLiveEventHub,
   registerLiveEventRoutes,
@@ -54,6 +55,7 @@ let stopDatabaseLiveEventListener: (() => void) | null = null;
 let stopRetentionScheduler: (() => void) | null = null;
 let stopAgentDirectoryReconciler: (() => void) | null = null;
 let stopCallRecordingFinalizer: (() => void) | null = null;
+let stopPcapCaptureFinalizer: (() => void) | null = null;
 
 app.setErrorHandler((error, _request, reply) => {
   if (error instanceof ZodError) {
@@ -143,6 +145,7 @@ async function start() {
   stopDatabaseLiveEventListener = startDatabaseLiveEventListener(pool, liveEventHub, app.log);
   stopRetentionScheduler = startRetentionScheduler(pool, config, app.log).stop;
   stopCallRecordingFinalizer = startCallRecordingFinalizer(pool, config.FFPROBE_PATH, app.log).stop;
+  stopPcapCaptureFinalizer = startPcapCaptureFinalizer(pool, config, app.log).stop;
   stopFreeSwitchEventListener = startFreeSwitchEventListener(config, pool, app.log);
   stopAgentRegistrationReconciler = startAgentRegistrationReconciler(config, pool, app.log);
   stopAgentDirectoryReconciler = startAgentDirectoryReconciler(pool, config, app.log);
@@ -154,6 +157,7 @@ const shutdown = async () => {
   stopAgentDirectoryReconciler?.();
   stopFreeSwitchEventListener?.();
   stopCallRecordingFinalizer?.();
+  stopPcapCaptureFinalizer?.();
   stopRetentionScheduler?.();
   stopDatabaseLiveEventListener?.();
   await app.close();

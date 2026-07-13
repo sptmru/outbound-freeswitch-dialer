@@ -12,20 +12,24 @@ describe("retention", () => {
       if (sql.includes("select id, call_recording_path")) {
         return rows([]);
       }
+      if (sql.includes("select call_id, file_path")) {
+        return rows([]);
+      }
       return rows([{ count: "4" }]);
     });
 
     const result = await runRetention(pool, {
       dryRun: true,
       callRetentionDays: 7,
-      recordingRetentionDays: 30
+      recordingRetentionDays: 30,
+      pcapRetentionDays: 7
     });
 
     assert.equal(result.calls, 4);
-    const countQuery = queries[1];
+    const countQuery = queries[2];
     assert.match(countQuery.sql, /call_recording_path is null/);
     assert.match(countQuery.sql, /\$2::text/);
-    assert.deepEqual(countQuery.params, [7, 30]);
+    assert.deepEqual(countQuery.params, [7, 30, 7]);
   });
 
   it("clears recording metadata only for files that were actually unlinked", async () => {
@@ -34,11 +38,13 @@ describe("retention", () => {
     const clientQueries: Array<{ sql: string; params: readonly unknown[] }> = [];
     const failures: string[] = [];
     const pool = transactionalPool(
-      () =>
-        rows([
-          { id: successfulId, call_recording_path: "/recordings/success.wav" },
-          { id: failedId, call_recording_path: "/recordings/failure.wav" }
-        ]),
+      (sql) =>
+        sql.includes("from call_pcaps")
+          ? rows([])
+          : rows([
+              { id: successfulId, call_recording_path: "/recordings/success.wav" },
+              { id: failedId, call_recording_path: "/recordings/failure.wav" }
+            ]),
       (sql, params) => {
         clientQueries.push({ sql, params });
         return sql.includes("delete from calls") ? result([], 1) : rows([]);
@@ -47,7 +53,7 @@ describe("retention", () => {
 
     const retention = await runRetention(
       pool,
-      { dryRun: false, callRetentionDays: 7, recordingRetentionDays: 30 },
+      { dryRun: false, callRetentionDays: 7, recordingRetentionDays: 30, pcapRetentionDays: 7 },
       {
         unlinkFile: async (path) => {
           if (path.includes("failure")) throw new Error("disk unavailable");
@@ -71,10 +77,15 @@ describe("retention", () => {
   it("does not clear any recording metadata when every unlink fails", async () => {
     const clientQueries: string[] = [];
     const pool = transactionalPool(
-      () =>
-        rows([
-          { id: "11111111-1111-4111-8111-111111111111", call_recording_path: "/recordings/failure.wav" }
-        ]),
+      (sql) =>
+        sql.includes("from call_pcaps")
+          ? rows([])
+          : rows([
+              {
+                id: "11111111-1111-4111-8111-111111111111",
+                call_recording_path: "/recordings/failure.wav"
+              }
+            ]),
       (sql) => {
         clientQueries.push(sql);
         return rows([]);
@@ -83,7 +94,7 @@ describe("retention", () => {
 
     const retention = await runRetention(
       pool,
-      { dryRun: false, callRetentionDays: 7, recordingRetentionDays: 30 },
+      { dryRun: false, callRetentionDays: 7, recordingRetentionDays: 30, pcapRetentionDays: 7 },
       {
         unlinkFile: async () => {
           throw new Error("permission denied");
@@ -102,7 +113,10 @@ describe("retention", () => {
     const recordingId = "11111111-1111-4111-8111-111111111111";
     const clientQueries: Array<{ sql: string; params: readonly unknown[] }> = [];
     const pool = transactionalPool(
-      () => rows([{ id: recordingId, call_recording_path: "/recordings/missing.wav" }]),
+      (sql) =>
+        sql.includes("from call_pcaps")
+          ? rows([])
+          : rows([{ id: recordingId, call_recording_path: "/recordings/missing.wav" }]),
       (sql, params) => {
         clientQueries.push({ sql, params });
         return rows([]);
@@ -112,7 +126,7 @@ describe("retention", () => {
 
     const retention = await runRetention(
       pool,
-      { dryRun: false, callRetentionDays: 7, recordingRetentionDays: 30 },
+      { dryRun: false, callRetentionDays: 7, recordingRetentionDays: 30, pcapRetentionDays: 7 },
       {
         unlinkFile: async () => {
           throw missing;
@@ -124,6 +138,32 @@ describe("retention", () => {
       [recordingId]
     ]);
     assert.equal(retention.recordingFiles, 1);
+  });
+
+  it("expires PCAP metadata only after the capture file is removed", async () => {
+    const captureCallId = "33333333-3333-4333-8333-333333333333";
+    const clientQueries: Array<{ sql: string; params: readonly unknown[] }> = [];
+    const pool = transactionalPool(
+      (sql) =>
+        sql.includes("select call_id, file_path")
+          ? rows([{ call_id: captureCallId, file_path: "/pcaps/call.pcap" }])
+          : rows([]),
+      (sql, params) => {
+        clientQueries.push({ sql, params });
+        return rows([]);
+      }
+    );
+
+    const retention = await runRetention(
+      pool,
+      { dryRun: false, callRetentionDays: 7, recordingRetentionDays: 30, pcapRetentionDays: 7 },
+      { unlinkFile: async () => undefined }
+    );
+
+    const metadataUpdate = clientQueries.find((query) => query.sql.includes("update call_pcaps"));
+    assert.deepEqual(metadataUpdate?.params, [[captureCallId]]);
+    assert.match(metadataUpdate?.sql ?? "", /status = 'expired'/);
+    assert.equal(retention.pcapFiles, 1);
   });
 });
 
@@ -137,7 +177,7 @@ describe("retention advisory lock", () => {
 
     const result = await runRetentionWithAdvisoryLock(
       pool,
-      { callRetentionDays: 7, recordingRetentionDays: 30 },
+      { callRetentionDays: 7, recordingRetentionDays: 30, pcapRetentionDays: 7 },
       {
         runner: async () => {
           runnerCalls += 1;
@@ -164,7 +204,7 @@ describe("retention advisory lock", () => {
 
     const locked = await runRetentionWithAdvisoryLock(
       pool,
-      { callRetentionDays: 7, recordingRetentionDays: 30 },
+      { callRetentionDays: 7, recordingRetentionDays: 30, pcapRetentionDays: 7 },
       { runner: async (_pool, input) => ({ ...retentionResult(), ...input }) }
     );
 
@@ -182,8 +222,10 @@ function retentionResult() {
     dryRun: false as const,
     callRetentionDays: 7,
     recordingRetentionDays: 30,
+    pcapRetentionDays: 7,
     calls: 0,
-    recordingFiles: 0
+    recordingFiles: 0,
+    pcapFiles: 0
   };
 }
 

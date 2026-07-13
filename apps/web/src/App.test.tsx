@@ -424,6 +424,12 @@ describe("App Agent Desk empty states", () => {
         recordingFileSizeBytes: 128_000,
         recordingIntegrityCheckedAt: call.createdAt,
         recordingFailureReason: null,
+        pcapFileSizeBytes: null,
+        pcapStartedAt: call.createdAt,
+        pcapEndedAt: call.createdAt,
+        pcapFailureReason: null,
+        pcapStatus: "available",
+        pcapAvailable: true,
         lastReasonCode: null,
         hangupCause: null
       },
@@ -447,6 +453,7 @@ describe("App Agent Desk empty states", () => {
     expect(screen.getByText("Recording length")).toBeInTheDocument();
     expect(screen.getByText("Recording size")).toBeInTheDocument();
     expect(screen.getByText("Integrity checked")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Download PCAP" })).toBeInTheDocument();
     expect(player).toHaveAttribute("src", "/api/media/ticketed-recording");
     expect(screen.queryByText("Customer connected")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Show technical details" }));
@@ -594,6 +601,8 @@ function callHistoryRow(
     createdAt: "2026-07-10T08:00:00.000Z",
     durationSeconds: 72,
     recordingAvailable: false,
+    pcapStatus: null,
+    pcapAvailable: false,
     voicemailSignal: null,
     ...overrides
   };

@@ -2,6 +2,7 @@ import type pg from "pg";
 import type { CallOutcome, CallState } from "@outbound-dialer/shared";
 import type { AppConfig } from "../config.js";
 import { finishAgentCall } from "../agent-availability.js";
+import { startCallPcapCapture } from "../pcap-capture.js";
 import {
   canOriginateCustomerLeg,
   createFreeSwitchUuid,
@@ -320,6 +321,10 @@ export async function createDialerCall(
     );
     callId = call.rows[0].id;
 
+    if (config.PCAP_CAPTURE_ENABLED) {
+      await client.query("insert into call_pcaps (call_id, status) values ($1, 'pending')", [callId]);
+    }
+
     await client.query(
       `
         insert into call_legs (call_id, type, state, started_at, sip_uri)
@@ -376,6 +381,8 @@ export async function createDialerCall(
   if (!callId || !committedContext) {
     throw new Error("Dialer call transaction completed without a call");
   }
+
+  await startCallPcapCapture(pool, config, callId);
 
   await syncFreeSwitchOriginate(pool, config, {
     agentId: input.agentId,

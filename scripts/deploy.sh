@@ -61,7 +61,7 @@ if [[ "${SKIP_PRE_DEPLOY_BACKUP:-false}" != "true" ]]; then
 fi
 
 compose pull --ignore-buildable
-compose build api freeswitch web proxy
+compose build api freeswitch pcap-capture web proxy
 compose run --rm monitoring-config
 ENV_FILE="${ENV_FILE}" "${ROOT_DIR}/scripts/validate-monitoring-config.sh"
 

@@ -7,6 +7,7 @@ import type {
   CallHistoryItem,
   CallHistoryResponse,
   CallOutcome,
+  CallPcapStatus,
   CallRecordingStatus,
   CallState,
   LeadSummary,
@@ -543,6 +544,8 @@ export async function getCallHistoryPage(
     created_at: Date;
     duration_seconds: number | null;
     recording_available: boolean;
+    pcap_status: CallPcapStatus | null;
+    pcap_available: boolean;
     voicemail_signal_status: string | null;
     total_count: string;
   }>(
@@ -559,6 +562,8 @@ export async function getCallHistoryPage(
       calls.outcome,
       calls.created_at,
       calls.call_recording_status = 'available' and calls.call_recording_path is not null as recording_available,
+      call_pcaps.status as pcap_status,
+      call_pcaps.status = 'available' and call_pcaps.file_path is not null as pcap_available,
       calls.voicemail_signal_status,
       count(*) over() as total_count,
       extract(epoch from (coalesce(calls.ended_at, now()) - coalesce(calls.answered_at, calls.started_at, calls.created_at)))::int as duration_seconds
@@ -567,6 +572,7 @@ export async function getCallHistoryPage(
     left join agents on agents.id = calls.agent_id
     left join users on users.id = agents.user_id
     left join campaigns on campaigns.id = calls.campaign_id
+    left join call_pcaps on call_pcaps.call_id = calls.id
     where ($1::text is null or concat_ws(' ', contacts.display_name, calls.destination_number, users.name, campaigns.name) ilike '%' || $1 || '%')
       and ($2::uuid is null or calls.campaign_id = $2)
       and ($3::uuid is null or users.id = $3)
@@ -613,6 +619,8 @@ export async function getCallHistoryPage(
     createdAt: row.created_at.toISOString(),
     durationSeconds: row.duration_seconds ?? 0,
     recordingAvailable: row.recording_available,
+    pcapStatus: row.pcap_status,
+    pcapAvailable: row.pcap_available,
     voicemailSignal: row.voicemail_signal_status
   }));
   const total = Number(result.rows[0]?.total_count ?? 0);
@@ -649,6 +657,12 @@ export async function getCallDetail(pool: pg.Pool, callId: string): Promise<Call
     call_recording_file_size_bytes: string | number | null;
     call_recording_integrity_checked_at: Date | null;
     call_recording_failure_reason: string | null;
+    pcap_status: CallPcapStatus | null;
+    pcap_file_size_bytes: string | number | null;
+    pcap_started_at: Date | null;
+    pcap_ended_at: Date | null;
+    pcap_failure_reason: string | null;
+    pcap_file_path: string | null;
     voicemail_signal_status: string | null;
     voicemail_confidence: number | null;
   }>(
@@ -675,6 +689,12 @@ export async function getCallDetail(pool: pg.Pool, callId: string): Promise<Call
         calls.call_recording_file_size_bytes,
         calls.call_recording_integrity_checked_at,
         calls.call_recording_failure_reason,
+        call_pcaps.status as pcap_status,
+        call_pcaps.file_size_bytes as pcap_file_size_bytes,
+        call_pcaps.started_at as pcap_started_at,
+        call_pcaps.ended_at as pcap_ended_at,
+        call_pcaps.failure_reason as pcap_failure_reason,
+        call_pcaps.file_path as pcap_file_path,
         calls.voicemail_signal_status,
         voicemail.confidence as voicemail_confidence,
         extract(epoch from (coalesce(calls.ended_at, now()) - coalesce(calls.answered_at, calls.started_at, calls.created_at)))::int as duration_seconds
@@ -683,6 +703,7 @@ export async function getCallDetail(pool: pg.Pool, callId: string): Promise<Call
       left join agents on agents.id = calls.agent_id
       left join users on users.id = agents.user_id
       left join campaigns on campaigns.id = calls.campaign_id
+      left join call_pcaps on call_pcaps.call_id = calls.id
       left join lateral (
         select voicemail_detection_events.confidence
         from voicemail_detection_events
@@ -785,6 +806,15 @@ export async function getCallDetail(pool: pg.Pool, callId: string): Promise<Call
           : Number(row.call_recording_file_size_bytes),
       recordingIntegrityCheckedAt: row.call_recording_integrity_checked_at?.toISOString() ?? null,
       recordingFailureReason: row.call_recording_failure_reason ?? null,
+      pcapStatus: row.pcap_status,
+      pcapFileSizeBytes:
+        row.pcap_file_size_bytes === null || row.pcap_file_size_bytes === undefined
+          ? null
+          : Number(row.pcap_file_size_bytes),
+      pcapStartedAt: row.pcap_started_at?.toISOString() ?? null,
+      pcapEndedAt: row.pcap_ended_at?.toISOString() ?? null,
+      pcapFailureReason: row.pcap_failure_reason,
+      pcapAvailable: row.pcap_status === "available" && Boolean(row.pcap_file_path),
       lastReasonCode,
       hangupCause,
       durationSeconds: row.duration_seconds ?? 0,

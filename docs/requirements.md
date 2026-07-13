@@ -131,6 +131,7 @@ This document is the current product and operational contract. Items described a
 ## Monitoring And Operations
 
 - Structured application logs, health/readiness endpoints, Prometheus metrics, Grafana dashboards, Alertmanager rules, and Loki collection are included.
+- Optional environment-controlled packet capture saves one protected PCAP per call, exposes capture health through Prometheus, and makes files available only to admins through Call History with bounded retention.
 - The production owner must configure a real alert destination and an off-host uptime probe.
 - SIP/RTP incidents must be correlatable by call ID, leg UUIDs, timestamps, event records, and deployed SHA.
 - Firewall policy and host-port changes are explicitly outside this implementation pass. The deployment owner must assess and approve the existing network exposure separately.

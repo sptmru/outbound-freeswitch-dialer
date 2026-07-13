@@ -1478,6 +1478,31 @@ button.table-row {
   font-size: 12px;
 }
 
+.pcap-download-card {
+  align-items: center;
+  background: #ffffff;
+  border: 1px solid #dfe7f0;
+  border-radius: 8px;
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+  padding: 10px 12px;
+}
+
+.pcap-download-card div {
+  display: grid;
+  gap: 3px;
+}
+
+.pcap-download-card strong {
+  color: #17202a;
+  font-size: 13px;
+}
+
+.pcap-download-card small {
+  color: #607086;
+}
+
 .technical-details {
   display: grid;
   gap: 8px;
@@ -1717,6 +1742,7 @@ button.table-row {
   .history-row,
   .call-detail-summary,
   .call-recording-player,
+  .pcap-download-card,
   .import-row,
   .failure-row,
   .contact-row,
@@ -1726,6 +1752,11 @@ button.table-row {
   .contact-toolbar,
   .inline-fields {
     grid-template-columns: 1fr;
+  }
+
+  .pcap-download-card {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .history-head {
