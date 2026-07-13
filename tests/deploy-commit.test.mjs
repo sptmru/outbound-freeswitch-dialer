@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,8 +23,29 @@ test("remote deploy checks out and deploys the requested main-branch commit", as
   const source = join(directory, "source");
   const target = join(directory, "target");
   const deployedShaFile = join(directory, "deployed-sha");
+  const toolPath = join(directory, "tools");
+  const nvmDirectory = join(directory, "nvm");
+  const nvmBin = join(directory, "nvm-bin");
 
   try {
+    await mkdir(toolPath);
+    await mkdir(nvmDirectory);
+    await mkdir(nvmBin);
+    for (const command of ["bash", "dirname", "env", "flock", "git", "mkdir"]) {
+      await symlink(`/usr/bin/${command}`, join(toolPath, command));
+    }
+    await writeFile(
+      join(nvmDirectory, "nvm.sh"),
+      'nvm() {\n  [ "$1" = "use" ] || return 1\n  export PATH="$NVM_FAKE_BIN:$PATH"\n}\n'
+    );
+    await writeFile(
+      join(nvmBin, "node"),
+      '#!/bin/sh\ncase "$1" in\n  -p) echo 22 ;;\n  --version) echo v22.13.0 ;;\nesac\n'
+    );
+    await writeFile(join(nvmBin, "npm"), "#!/bin/sh\necho 10.9.2\n");
+    await chmod(join(nvmBin, "node"), 0o755);
+    await chmod(join(nvmBin, "npm"), 0o755);
+
     assert.equal(spawnSync("git", ["init", "--bare", remote]).status, 0);
     assert.equal(spawnSync("git", ["init", "-b", "main", source]).status, 0);
     git(source, "config", "user.name", "Deploy Test");
@@ -54,13 +75,17 @@ test("remote deploy checks out and deploys the requested main-branch commit", as
       env: {
         ...process.env,
         DEPLOYED_SHA_FILE: deployedShaFile,
-        DEPLOY_ROOT_DIR: target
+        DEPLOY_ROOT_DIR: target,
+        NVM_DIR: nvmDirectory,
+        NVM_FAKE_BIN: nvmBin,
+        PATH: toolPath
       }
     });
 
     assert.equal(result.status, 0, result.stderr || result.stdout);
     assert.equal(await readFile(deployedShaFile, "utf8"), `${firstSha}\n`);
     assert.equal(git(target, "rev-parse", "HEAD"), firstSha);
+    assert.match(result.stdout, /Using v22\.13\.0 and npm 10\.9\.2/);
   } finally {
     await rm(directory, { force: true, recursive: true });
   }
