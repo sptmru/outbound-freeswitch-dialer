@@ -37,6 +37,26 @@ describe("softphone runtime helpers", () => {
       registered: true
     });
   });
+
+  it("sends SIP unregister before stopping the user-agent transport", async () => {
+    const actions: string[] = [];
+    await __testing.stopSoftphoneRegistration(
+      {
+        unregister: async () => {
+          actions.push("unregister-started");
+          await Promise.resolve();
+          actions.push("unregister-finished");
+        }
+      },
+      {
+        stop: async () => {
+          actions.push("transport-stopped");
+        }
+      }
+    );
+
+    expect(actions).toEqual(["unregister-started", "unregister-finished", "transport-stopped"]);
+  });
 });
 
 function runtime(overrides: Partial<SoftphoneRuntime> = {}): SoftphoneRuntime {

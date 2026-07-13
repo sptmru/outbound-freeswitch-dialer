@@ -9,7 +9,7 @@ interface Logger {
 
 type FreeSwitchApiCommandSender = typeof sendFreeSwitchApiCommand;
 
-const REGISTRATION_RECONCILE_INTERVAL_MS = 30_000;
+const REGISTRATION_RECONCILE_INTERVAL_MS = 5_000;
 const AGENT_SIP_PROFILE = "internal-webrtc";
 
 export function startAgentRegistrationReconciler(

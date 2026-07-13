@@ -16,6 +16,8 @@ scrape_configs:
       - targets: ["prometheus:9090"]
 
   - job_name: outbound-dialer-api
+    scrape_interval: 3s
+    scrape_timeout: 2s
     metrics_path: /metrics
     static_configs:
       - targets: ["api:3000"]

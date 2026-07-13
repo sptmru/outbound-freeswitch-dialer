@@ -67,6 +67,18 @@ function formatRegisterRejectError(statusCode?: number, reasonPhrase?: string): 
   return `REGISTER rejected${statusCode ? ` ${statusCode}` : ""}${reasonPhrase ? ` ${reasonPhrase}` : ""}`;
 }
 
+async function stopSoftphoneRegistration(
+  registerer: { unregister: () => Promise<unknown> } | null,
+  userAgent: { stop: () => Promise<unknown> } | null
+): Promise<void> {
+  try {
+    await registerer?.unregister();
+  } catch {
+    // Closing the transport still guarantees local cleanup if unregister fails.
+  }
+  await userAgent?.stop().catch(() => undefined);
+}
+
 export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRuntime {
   const invitationRef = useRef<Invitation | null>(null);
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -396,8 +408,9 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
       invitationRef.current = null;
       mediaStream?.getTracks().forEach((track) => track.stop());
       clearRemoteAudio();
-      void registerer?.unregister().catch(() => undefined);
-      void userAgent?.stop().catch(() => undefined);
+      const currentRegisterer = registerer;
+      const currentUserAgent = userAgent;
+      void stopSoftphoneRegistration(currentRegisterer, currentUserAgent);
     };
   }, [user?.id]);
 
@@ -444,6 +457,7 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
 
 export const __testing = {
   formatRegisterRejectError,
+  stopSoftphoneRegistration,
   toCallIdleRuntime,
   toRegistrationFailureRuntime
 };

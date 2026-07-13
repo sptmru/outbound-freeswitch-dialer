@@ -52,7 +52,7 @@
       "gridPos": { "h": 4, "w": 4, "x": 12, "y": 0 },
       "id": 4,
       "options": { "colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto", "wideLayout": true },
-      "targets": [{ "editorMode": "code", "expr": "outbound_dialer_active_calls", "legendFormat": "Active", "range": true, "refId": "A" }],
+      "targets": [{ "editorMode": "code", "expr": "outbound_dialer_active_calls", "instant": true, "legendFormat": "Active", "range": false, "refId": "A" }],
       "title": "Active calls",
       "type": "stat"
     },
@@ -62,7 +62,7 @@
       "gridPos": { "h": 4, "w": 4, "x": 16, "y": 0 },
       "id": 5,
       "options": { "colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto", "wideLayout": true },
-      "targets": [{ "editorMode": "code", "expr": "outbound_dialer_registered_agents", "legendFormat": "Registered", "range": true, "refId": "A" }],
+      "targets": [{ "editorMode": "code", "expr": "outbound_dialer_registered_agents", "instant": true, "legendFormat": "Registered", "range": false, "refId": "A" }],
       "title": "Registered agents",
       "type": "stat"
     },
@@ -133,7 +133,7 @@
       "type": "logs"
     }
   ],
-  "refresh": "10s",
+  "refresh": "3s",
   "schemaVersion": 41,
   "tags": ["outbound-dialer", "telephony", "operations"],
   "templating": { "list": [] },
