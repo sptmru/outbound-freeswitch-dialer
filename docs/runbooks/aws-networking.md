@@ -16,6 +16,16 @@ TURN_RELAY_IP=10.0.1.10
 
 `FREESWITCH_EXTERNAL_*` must be the Elastic IP, and `TURN_RELAY_IP` must be the primary private IPv4 shown on the EC2 network interface. Do not use `auto-nat`: FreeSWITCH is started with NAT discovery disabled, and AWS does not expose a UPnP/NAT-PMP gateway.
 
+For a server whose public address is assigned directly to its network interface and which is not behind NAT, use that same public address for all three settings:
+
+```dotenv
+FREESWITCH_EXTERNAL_SIP_IP=198.51.100.20
+FREESWITCH_EXTERNAL_RTP_IP=198.51.100.20
+TURN_RELAY_IP=198.51.100.20
+```
+
+Coturn adds an explicit `public/private` address mapping only when `FREESWITCH_EXTERNAL_RTP_IP` and `TURN_RELAY_IP` differ. When they are equal, it binds and advertises the directly assigned address without a NAT mapping.
+
 ## Browser ICE And Coturn
 
 The authenticated softphone provisioning response contains:

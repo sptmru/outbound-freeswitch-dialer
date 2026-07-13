@@ -61,16 +61,6 @@ public_ipv4() {
   (( first != 192 || second != 168 )) || return 1
 }
 
-private_ipv4() {
-  local value="$1"
-  local first second _
-  ipv4 "${value}" || return 1
-  IFS=. read -r first second _ <<< "${value}"
-  first=$((10#${first}))
-  second=$((10#${second}))
-  (( first == 10 || (first == 172 && second >= 16 && second <= 31) || (first == 192 && second == 168) ))
-}
-
 for command in awk crontab curl docker find git grep mktemp node npm openssl stat tar; do
   command -v "${command}" >/dev/null || fail "missing required command: ${command}"
 done
@@ -106,10 +96,9 @@ public_ipv4 "${FREESWITCH_EXTERNAL_SIP_IP}" \
 public_ipv4 "${FREESWITCH_EXTERNAL_RTP_IP}" \
   || fail "FREESWITCH_EXTERNAL_RTP_IP must be the literal public/Elastic IPv4 address (not auto-nat or STUN)"
 [[ "${FREESWITCH_EXTERNAL_SIP_IP}" == "${FREESWITCH_EXTERNAL_RTP_IP}" ]] \
-  || fail "the current single-EC2 topology requires matching FreeSWITCH SIP and RTP public IPs"
-private_ipv4 "${TURN_RELAY_IP}" || fail "TURN_RELAY_IP must be the EC2 instance's literal RFC1918 private IPv4 address"
-[[ "${TURN_RELAY_IP}" != "${FREESWITCH_EXTERNAL_RTP_IP}" ]] \
-  || fail "TURN_RELAY_IP must be the EC2 private address, not its Elastic IP"
+  || fail "the current single-host topology requires matching FreeSWITCH SIP and RTP public IPs"
+ipv4 "${TURN_RELAY_IP}" \
+  || fail "TURN_RELAY_IP must be the literal IPv4 address assigned to the host interface used by Coturn"
 [[ "${TURN_URLS}" == *"${LETSENCRYPT_DOMAIN}"* ]] \
   || fail "TURN_URLS must use the primary LETSENCRYPT_DOMAIN hostname"
 [[ "${COTURN_IMAGE}" =~ @sha256:[0-9a-f]{64}$ ]] \

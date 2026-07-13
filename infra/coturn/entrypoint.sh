@@ -33,7 +33,9 @@ umask 077
   echo "tls-listening-port=${TURN_TLS_PORT:-5349}"
   echo "listening-ip=${TURN_RELAY_IP}"
   echo "relay-ip=${TURN_RELAY_IP}"
-  echo "external-ip=${TURN_EXTERNAL_IP}/${TURN_RELAY_IP}"
+  if [ "${TURN_EXTERNAL_IP}" != "${TURN_RELAY_IP}" ]; then
+    echo "external-ip=${TURN_EXTERNAL_IP}/${TURN_RELAY_IP}"
+  fi
   echo "min-port=${TURN_MIN_PORT}"
   echo "max-port=${TURN_MAX_PORT}"
   echo "realm=${TURN_REALM}"
