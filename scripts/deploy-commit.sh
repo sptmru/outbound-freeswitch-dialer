@@ -13,6 +13,32 @@ fail() {
   exit 1
 }
 
+ensure_node_runtime() {
+  local node_major=""
+  if command -v node >/dev/null && command -v npm >/dev/null; then
+    node_major="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || true)"
+    if [[ "${node_major}" =~ ^[0-9]+$ ]] && (( node_major >= 22 )); then
+      return
+    fi
+  fi
+
+  export NVM_DIR="${NVM_DIR:-${HOME}/.nvm}"
+  [[ -s "${NVM_DIR}/nvm.sh" ]] \
+    || fail "Node.js 22+ is not in PATH and NVM was not found at ${NVM_DIR}/nvm.sh"
+  # NVM is intentionally loaded here because GitHub SSH commands are
+  # non-interactive and do not reliably source the deployment user's shell rc.
+  # shellcheck disable=SC1090
+  source "${NVM_DIR}/nvm.sh"
+  nvm use --silent "${DEPLOY_NODE_VERSION:-22}" >/dev/null \
+    || fail "NVM could not activate Node.js ${DEPLOY_NODE_VERSION:-22}"
+
+  command -v node >/dev/null || fail "node is unavailable after loading NVM"
+  command -v npm >/dev/null || fail "npm is unavailable after loading NVM"
+  node_major="$(node -p 'process.versions.node.split(".")[0]')"
+  [[ "${node_major}" =~ ^[0-9]+$ ]] && (( node_major >= 22 )) \
+    || fail "deployment requires Node.js 22 or newer"
+}
+
 [[ "${TARGET_SHA}" =~ ^[0-9a-f]{40}$ ]] || fail "expected a full 40-character lowercase Git commit SHA"
 [[ -d "${ROOT_DIR}/.git" ]] || fail "${ROOT_DIR} is not a Git checkout"
 
@@ -42,6 +68,8 @@ git -C "${ROOT_DIR}" checkout --detach "${TARGET_SHA}"
 [[ "$(git -C "${ROOT_DIR}" rev-parse HEAD)" == "${TARGET_SHA}" ]] \
   || fail "checked-out commit does not match ${TARGET_SHA}"
 
+ensure_node_runtime
+echo "Using $(node --version) and npm $(npm --version)"
 echo "Starting guarded deployment for ${TARGET_SHA}"
 cd "${ROOT_DIR}"
 exec env ENV_FILE="${ENV_FILE:-${ROOT_DIR}/.env}" "${ROOT_DIR}/scripts/deploy.sh"

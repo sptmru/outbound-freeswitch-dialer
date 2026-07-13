@@ -56,7 +56,7 @@ The script performs these steps:
 
 Pushes to `main` deploy to the client production host only after both GitHub Actions quality and browser jobs pass and the repository variable `CLIENT_DEPLOY_ENABLED` is exactly `true`. The `deploy-client` job connects over SSH and asks the persistent `/opt/outbound-dialer` checkout to deploy the exact `${{ github.sha }}` through `scripts/deploy-commit.sh`.
 
-The target host keeps its production `.env` at `/opt/outbound-dialer/.env` with mode `0600`; no application or provider secrets are copied into GitHub. The wrapper takes a non-blocking deployment lock, refuses a dirty checkout, fetches `origin/main`, verifies the requested full SHA belongs to that branch, checks it out detached, and delegates all release gates to `scripts/deploy.sh`.
+The target host keeps its production `.env` at `/opt/outbound-dialer/.env` with mode `0600`; no application or provider secrets are copied into GitHub. The wrapper takes a non-blocking deployment lock, refuses a dirty checkout, fetches `origin/main`, verifies the requested full SHA belongs to that branch, checks it out detached, loads Node.js 22 through `$HOME/.nvm/nvm.sh` when a suitable system runtime is not already in `PATH`, and delegates all release gates to `scripts/deploy.sh`. Set `DEPLOY_NODE_VERSION` only when the target intentionally uses a different installed NVM version compatible with the repository's Node.js requirement.
 
 Create a GitHub Environment named `client-production` with these secrets:
 
