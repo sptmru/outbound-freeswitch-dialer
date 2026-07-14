@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import type { AdminOverviewResponse, AgentDeskResponse, PublicUser } from "./types";
@@ -159,6 +159,69 @@ describe("App Agent Desk empty states", () => {
     window.history.pushState({}, "", "/settings?campaignId=11111111-1111-4111-8111-111111111111");
     window.dispatchEvent(new PopStateEvent("popstate"));
     expect(await screen.findByRole("heading", { level: 1, name: "Settings" })).toBeInTheDocument();
+  });
+
+  it("preselects the active Agent Desk campaign in Add lead and CSV import", async () => {
+    const admin = userRow({ role: "admin" });
+    const selectedCampaignId = "77777777-7777-4777-8777-777777777777";
+    const selectedDeskCampaign = {
+      id: selectedCampaignId,
+      name: "Selected second campaign",
+      status: "active" as const,
+      callableLeads: 4,
+      manualDialingEnabled: true,
+      callRecordingEnabled: false,
+      earlyMediaAvmdEnabled: false
+    };
+    const adminCampaigns: AdminOverviewResponse["campaigns"] = [
+      {
+        id: "11111111-1111-4111-8111-111111111111",
+        name: "First campaign",
+        status: "active",
+        loaded: 10,
+        callable: 8,
+        attempted: 2,
+        outcomeDistribution: [],
+        manualDialingEnabled: true,
+        callRecordingEnabled: false,
+        earlyMediaAvmdEnabled: false
+      },
+      {
+        id: selectedCampaignId,
+        name: selectedDeskCampaign.name,
+        status: "active",
+        loaded: 5,
+        callable: 4,
+        attempted: 1,
+        outcomeDistribution: [],
+        manualDialingEnabled: true,
+        callRecordingEnabled: false,
+        earlyMediaAvmdEnabled: false
+      }
+    ];
+    apiMocks.fetchMe.mockResolvedValue({ user: admin });
+    apiMocks.fetchAgentDesk.mockResolvedValue(
+      deskResponse({
+        user: admin,
+        campaign: selectedDeskCampaign,
+        availableCampaigns: [selectedDeskCampaign]
+      })
+    );
+    apiMocks.fetchAdminOverview.mockResolvedValue(adminResponse({ campaigns: adminCampaigns }));
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Campaigns" }));
+
+    const addLeadPanel = screen.getByRole("heading", { name: "Add lead" }).closest("article");
+    const csvImportPanel = screen.getByRole("heading", { name: "CSV import" }).closest("article");
+    expect(addLeadPanel).not.toBeNull();
+    expect(csvImportPanel).not.toBeNull();
+    expect(within(addLeadPanel!).getByRole("combobox", { name: "Campaign" })).toHaveValue(
+      selectedCampaignId
+    );
+    expect(within(csvImportPanel!).getByRole("combobox", { name: "Campaign" })).toHaveValue(
+      selectedCampaignId
+    );
   });
 
   it("hydrates the cookie session without a browser-stored bearer token", async () => {

@@ -484,6 +484,7 @@ export function App() {
                 setManualDialNumber(phoneNumber);
                 navigateToView("desk");
               }}
+              selectedCampaignId={selectedCampaignId}
               view={activeView}
               user={user}
             />
@@ -1519,6 +1520,7 @@ function AdminView({
   csvImports,
   onChanged,
   onManualDial,
+  selectedCampaignId,
   user,
   view
 }: {
@@ -1526,6 +1528,7 @@ function AdminView({
   csvImports: CsvImportSummary[];
   onChanged: () => Promise<void>;
   onManualDial: (phoneNumber: string) => void;
+  selectedCampaignId: string | null;
   user: PublicUser;
   view: View;
 }) {
@@ -1544,7 +1547,13 @@ function AdminView({
 
   const content = {
     campaigns: (
-      <Campaigns admin={admin} csvImports={csvImports} onChanged={onChanged} onManualDial={onManualDial} />
+      <Campaigns
+        admin={admin}
+        csvImports={csvImports}
+        onChanged={onChanged}
+        onManualDial={onManualDial}
+        selectedCampaignId={selectedCampaignId}
+      />
     ),
     recordings: <Recordings admin={admin} onChanged={onChanged} />,
     history: <HistoryView admin={admin} />,
@@ -1560,12 +1569,14 @@ function Campaigns({
   admin,
   csvImports,
   onChanged,
-  onManualDial
+  onManualDial,
+  selectedCampaignId
 }: {
   admin: AdminOverviewResponse;
   csvImports: CsvImportSummary[];
   onChanged: () => Promise<void>;
   onManualDial: (phoneNumber: string) => void;
+  selectedCampaignId: string | null;
 }) {
   const [query, setQuery] = useState("");
   const [page, setPage] = useState(1);
@@ -1605,10 +1616,18 @@ function Campaigns({
     <>
       <div className="operations-grid two">
         <CreateCampaignForm onChanged={onChanged} />
-        <CreateContactForm campaigns={admin.campaigns} onChanged={onChanged} />
+        <CreateContactForm
+          campaigns={admin.campaigns}
+          onChanged={onChanged}
+          selectedCampaignId={selectedCampaignId}
+        />
       </div>
       <div className="operations-grid two">
-        <CsvImportForm campaigns={admin.campaigns} onChanged={onChanged} />
+        <CsvImportForm
+          campaigns={admin.campaigns}
+          onChanged={onChanged}
+          selectedCampaignId={selectedCampaignId}
+        />
         <CsvImportHistory imports={csvImports} />
       </div>
       <article className="panel admin-library-toolbar">
@@ -2002,12 +2021,16 @@ function CampaignContacts({
 
 function CsvImportForm({
   campaigns,
-  onChanged
+  onChanged,
+  selectedCampaignId
 }: {
   campaigns: AdminOverviewResponse["campaigns"];
   onChanged: () => Promise<void>;
+  selectedCampaignId: string | null;
 }) {
-  const [campaignId, setCampaignId] = useState(campaigns[0]?.id ?? "");
+  const [campaignId, setCampaignId] = useState(
+    getValidCampaignId(selectedCampaignId ?? "", campaigns)
+  );
   const [file, setFile] = useState<File | null>(null);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -2319,12 +2342,16 @@ function CreateCampaignForm({ onChanged }: { onChanged: () => Promise<void> }) {
 
 function CreateContactForm({
   campaigns,
-  onChanged
+  onChanged,
+  selectedCampaignId
 }: {
   campaigns: AdminOverviewResponse["campaigns"];
   onChanged: () => Promise<void>;
+  selectedCampaignId: string | null;
 }) {
-  const [campaignId, setCampaignId] = useState(campaigns[0]?.id ?? "");
+  const [campaignId, setCampaignId] = useState(
+    getValidCampaignId(selectedCampaignId ?? "", campaigns)
+  );
   const [name, setName] = useState("");
   const [company, setCompany] = useState("");
   const [phoneNumber, setPhoneNumber] = useState("");
