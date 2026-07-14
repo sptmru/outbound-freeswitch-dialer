@@ -80,7 +80,7 @@ Only nginx is intended as the public HTTP entrypoint. Grafana is routed by hostn
 - Prometheus, Grafana, Alertmanager, Loki, Alloy, exporters, and blackbox checks.
 - PostgreSQL metrics use the independent `outbound_dialer_exporter` login with `pg_monitor`, read-only transactions, and no application-table grants; deploy/restore rotate it from `POSTGRES_EXPORTER_PASSWORD` after database changes.
 - Monitoring files are release-gated with the validators embedded in the exact Prometheus, Alertmanager, Blackbox Exporter, Loki, and Alloy images before services are changed.
-- Alloy discovers only containers from `COMPOSE_PROJECT_NAME`, reads FreeSWITCH and deployment logs, and sends them to Loki through the private Compose network. It reaches Docker metadata through a read-only, verb-disabled socket proxy rather than mounting the Docker socket directly.
+- Alloy discovers only containers from `COMPOSE_PROJECT_NAME`, reads FreeSWITCH and deployment logs, and sends them to Loki through the private Compose network. It reaches read-only container and network metadata through a verb-disabled socket proxy rather than mounting the Docker socket directly; network metadata is required for Docker discovery even though Alloy does not use it to mutate Docker networking.
 - Authenticated backup/verification/restore scripts and SHA-tagged deploy/rollback scripts.
 
 ### Compose service inventory

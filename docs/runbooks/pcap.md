@@ -16,9 +16,13 @@ PCAP_RETENTION_DAYS=7
 
 The `pcap-capture` service starts `tcpdump` before the API sends the FreeSWITCH originate command and stops it after the call reaches a terminal state. The broad in-progress file is temporary. On finalization, the API derives the call's SIP `Call-ID` values and local RTP/RTCP ports from persisted FreeSWITCH events, and the capture service uses `tshark` to write a filtered `<call-id>.pcap`. The broad temporary file is then deleted. Admins can inspect capture status, size, and failures and download an available file from **Call history**. Capture or isolation failures are recorded without blocking the call.
 
+The API's immediate start path and the pending-capture finalizer can observe the same newly committed call. The supervisor coalesces concurrent `start` operations by call ID before checking or creating `<call-id>.capture.pcap`; do not remove this coordination or replace it with only a filesystem existence check, because two `tcpdump` processes can race on ownership of the same savefile.
+
 The initial capture filter is generated from the configured internal/external SIP, TLS/WSS, and RTP ports. It is not accepted as free-form UI or environment input. The final file keeps unencrypted SIP packets matching the call's SIP `Call-ID` values and UDP packets on the call's exact local media ports. Shared encrypted TLS/WSS signaling is intentionally omitted because it cannot be safely attributed from packet contents. If no persisted media ports or SIP `Call-ID` values are available, the broad capture is deleted and the PCAP is marked failed instead of exposing traffic from overlapping calls. Treat every final capture as production-sensitive even though it is isolated to one call as far as the available signaling and media identifiers allow.
 
 Prometheus exposes `outbound_dialer_pcap_capture_enabled`, `outbound_dialer_pcap_captures_active`, `outbound_dialer_pcap_capture_failures_window`, `outbound_dialer_pcap_storage_bytes`, and the PCAP retention counter. Grafana shows capture state, active captures, failures, storage, and recent capture lifecycle logs. Its dashboard link opens the application; **Call history** remains the authenticated file catalogue and download surface. Do not add `call_id` labels to Prometheus metrics because per-call labels create unbounded cardinality.
+
+If **Recent PCAP capture events** shows `No data`, verify that Loki has a `service="api"` label and inspect Alloy for Docker discovery errors. The read-only `docker-socket-proxy` must permit both container and network metadata (`CONTAINERS=1`, `NETWORKS=1`) because Alloy computes network labels while discovering container log streams. Keep `POST=0`.
 
 ## SIP ladder
 

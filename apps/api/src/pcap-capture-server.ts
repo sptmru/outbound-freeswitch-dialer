@@ -3,6 +3,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { access, chmod, chown, mkdir, rename, rm, stat } from "node:fs/promises";
 import { dirname, resolve, sep } from "node:path";
 import { buildPcapDisplayFilter, type PcapFilterSelection } from "./pcap-filter.js";
+import { PcapOperationCoordinator } from "./pcap-operation-coordinator.js";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const socketPath = process.env.PCAP_CAPTURE_SOCKET || "/run/outbound-dialer-pcap/capture.sock";
@@ -11,6 +12,12 @@ const captureEnabled = process.env.PCAP_CAPTURE_ENABLED === "true";
 const captureInterface = safeInterface(process.env.PCAP_CAPTURE_INTERFACE || "any");
 const captureFilter = buildCaptureFilter(process.env);
 const captures = new Map<string, { child: ChildProcess; filePath: string; stderr: string }>();
+const operations = new PcapOperationCoordinator();
+
+type SupervisorResult = {
+  body: Record<string, unknown>;
+  status: number;
+};
 
 await mkdir(dirname(socketPath), { recursive: true });
 await mkdir(storageDir, { recursive: true });
@@ -36,54 +43,11 @@ const server = http.createServer(async (request, response) => {
   }
 
   try {
-    if (action === "start") {
-      const current = captures.get(callId);
-      if (current) {
-        send(response, 200, { callId, running: true });
-        return;
-      }
-      const filePath = rawCapturePath(callId);
-      if ((await exists(filePath)) || (await exists(capturePath(callId)))) {
-        throw new Error("A PCAP file already exists for this call");
-      }
-      let capture: Awaited<ReturnType<typeof startCapture>>;
-      try {
-        capture = await startCapture(filePath);
-      } catch (error) {
-        await rm(filePath, { force: true });
-        throw error;
-      }
-      captures.set(callId, capture);
-      capture.child.once("exit", () => captures.delete(callId));
-      send(response, 201, { callId, running: true });
-      return;
-    }
-
-    const capture = captures.get(callId);
-    if (capture) {
-      await stopCapture(capture.child);
-      captures.delete(callId);
-    }
-    const requestBody = await readJsonBody(request);
-    const selection = parseSelection(requestBody.selection);
-    const rawFilePath = rawCapturePath(callId);
-    const filePath = capturePath(callId);
-    if (!(await exists(rawFilePath)) && (await exists(filePath))) {
-      await chown(filePath, 0, 0);
-      await chmod(filePath, 0o600);
-      const file = await stat(filePath);
-      send(response, 200, { callId, running: false, fileSizeBytes: file.size });
-      return;
-    }
-    try {
-      await isolateCapture(rawFilePath, filePath, selection);
-      await chown(filePath, 0, 0);
-      await chmod(filePath, 0o600);
-    } finally {
-      await rm(rawFilePath, { force: true });
-    }
-    const file = await stat(filePath);
-    send(response, 200, { callId, running: false, fileSizeBytes: file.size });
+    const requestBody = action === "stop" ? await readJsonBody(request) : {};
+    const result = await operations.run(callId, action, () =>
+      action === "start" ? startCallCapture(callId) : stopCallCapture(callId, requestBody)
+    );
+    send(response, result.status, result.body);
   } catch (error) {
     send(response, 500, {
       callId,
@@ -92,6 +56,59 @@ const server = http.createServer(async (request, response) => {
     });
   }
 });
+
+async function startCallCapture(callId: string): Promise<SupervisorResult> {
+  const current = captures.get(callId);
+  if (current) {
+    return { status: 200, body: { callId, running: true } };
+  }
+  const filePath = rawCapturePath(callId);
+  if ((await exists(filePath)) || (await exists(capturePath(callId)))) {
+    throw new Error("A PCAP file already exists for this call");
+  }
+  let capture: Awaited<ReturnType<typeof startCapture>>;
+  try {
+    capture = await startCapture(filePath);
+  } catch (error) {
+    await rm(filePath, { force: true });
+    throw error;
+  }
+  captures.set(callId, capture);
+  capture.child.once("exit", () => captures.delete(callId));
+  return { status: 201, body: { callId, running: true } };
+}
+
+async function stopCallCapture(
+  callId: string,
+  requestBody: Record<string, unknown>
+): Promise<SupervisorResult> {
+  const capture = captures.get(callId);
+  if (capture) {
+    await stopCapture(capture.child);
+    captures.delete(callId);
+  }
+  const selection = parseSelection(requestBody.selection);
+  const rawFilePath = rawCapturePath(callId);
+  const filePath = capturePath(callId);
+  if (!(await exists(rawFilePath)) && (await exists(filePath))) {
+    await secureCapture(filePath);
+    const file = await stat(filePath);
+    return { status: 200, body: { callId, running: false, fileSizeBytes: file.size } };
+  }
+  try {
+    await isolateCapture(rawFilePath, filePath, selection);
+    await secureCapture(filePath);
+  } finally {
+    await rm(rawFilePath, { force: true });
+  }
+  const file = await stat(filePath);
+  return { status: 200, body: { callId, running: false, fileSizeBytes: file.size } };
+}
+
+async function secureCapture(filePath: string): Promise<void> {
+  await chown(filePath, 0, 0);
+  await chmod(filePath, 0o600);
+}
 
 server.listen(socketPath, () => {
   void chmod(socketPath, 0o660);

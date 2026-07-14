@@ -59,6 +59,7 @@ test("monitoring cannot mutate the Docker daemon through a raw socket", async ()
   ]);
   assert.match(compose, /docker-socket-proxy:/);
   assert.match(compose, /POST: "0"/);
+  assert.match(compose, /NETWORKS: "1"/);
   assert.doesNotMatch(compose.match(/ {2}alloy:[\s\S]*?(?=\nvolumes:)/)?.[0] ?? "", /docker\.sock/);
   assert.match(alloy, /tcp:\/\/docker-socket-proxy:2375/);
 });

@@ -34,7 +34,7 @@ export async function startCallPcapCapture(
   const filePath = callPcapPath(config.PCAP_STORAGE_DIR, callId);
   try {
     await (dependencies.requestCapture ?? requestCapture)(config.PCAP_CAPTURE_SOCKET, callId, "start");
-    await pool.query(
+    const activated = await pool.query<{ call_id: string }>(
       `
         update call_pcaps
         set status = 'capturing',
@@ -43,17 +43,22 @@ export async function startCallPcapCapture(
             failure_reason = null,
             updated_at = now()
         where call_id = $1
-          and status in ('pending', 'capturing')
+          and status = 'pending'
+        returning call_id
       `,
       [callId, filePath]
     );
+    if (!activated.rowCount) {
+      return;
+    }
     await insertPcapEvent(pool, callId, "pcap_capture_started", { filePath });
     logger?.info({ callId }, "Per-call PCAP capture started");
   } catch (error) {
     const message = errorMessage(error);
-    await markPcapFailed(pool, callId, message);
-    await insertPcapEvent(pool, callId, "pcap_capture_failed", { message });
-    logger?.error({ callId, error }, "Per-call PCAP capture failed to start; the call will continue");
+    if (await markPcapFailed(pool, callId, message)) {
+      await insertPcapEvent(pool, callId, "pcap_capture_failed", { message });
+      logger?.error({ callId, error }, "Per-call PCAP capture failed to start; the call will continue");
+    }
   }
 }
 
@@ -160,14 +165,15 @@ async function finalizeCallPcapCapture(
     logger.info({ callId: capture.call_id, fileSizeBytes }, "Per-call PCAP capture finalized");
   } catch (error) {
     const message = errorMessage(error);
-    await markPcapFailed(pool, capture.call_id, message);
-    await insertPcapEvent(pool, capture.call_id, "pcap_capture_failed", { message });
-    logger.error({ callId: capture.call_id, error }, "Per-call PCAP capture failed to finalize");
+    if (await markPcapFailed(pool, capture.call_id, message)) {
+      await insertPcapEvent(pool, capture.call_id, "pcap_capture_failed", { message });
+      logger.error({ callId: capture.call_id, error }, "Per-call PCAP capture failed to finalize");
+    }
   }
 }
 
-async function markPcapFailed(pool: pg.Pool, callId: string, message: string): Promise<void> {
-  await pool.query(
+async function markPcapFailed(pool: pg.Pool, callId: string, message: string): Promise<boolean> {
+  const result = await pool.query<{ call_id: string }>(
     `
       update call_pcaps
       set status = 'failed',
@@ -176,9 +182,11 @@ async function markPcapFailed(pool: pg.Pool, callId: string, message: string): P
           updated_at = now()
       where call_id = $1
         and status in ('pending', 'capturing')
+      returning call_id
     `,
     [callId, message]
   );
+  return Boolean(result.rowCount);
 }
 
 async function insertPcapEvent(

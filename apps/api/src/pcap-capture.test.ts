@@ -17,6 +17,9 @@ describe("per-call PCAP capture control", () => {
     const queries: Array<{ sql: string; params: readonly unknown[] }> = [];
     const pool = queryPool((sql, params) => {
       queries.push({ sql, params });
+      if (sql.includes("status = 'capturing'") && sql.includes("returning call_id")) {
+        return rows([{ call_id: callId }]);
+      }
       return rows([]);
     });
 
@@ -91,6 +94,35 @@ describe("per-call PCAP capture control", () => {
 
   it("rejects non-UUID file names", () => {
     assert.throws(() => callPcapPath("/tmp/pcaps", "../../secrets"), /Invalid call ID/);
+  });
+
+  it("records only one lifecycle event when concurrent callers activate the same capture", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "outbound-dialer-pcap-"));
+    const config = captureConfig(directory);
+    let pending = true;
+    const events: string[] = [];
+    const pool = queryPool((sql, params) => {
+      if (sql.includes("status = 'capturing'") && sql.includes("returning call_id")) {
+        if (!pending) return rows([]);
+        pending = false;
+        return rows([{ call_id: callId }]);
+      }
+      if (sql.includes("insert into call_events")) {
+        events.push(String(params[1]));
+      }
+      return rows([]);
+    });
+    const requestCapture = async () => ({ callId, running: true });
+
+    try {
+      await Promise.all([
+        startCallPcapCapture(pool, config, callId, undefined, { requestCapture }),
+        startCallPcapCapture(pool, config, callId, undefined, { requestCapture })
+      ]);
+      assert.deepEqual(events, ["pcap_capture_started"]);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 
   it("loads isolation inputs only from persisted FreeSWITCH events", async () => {
