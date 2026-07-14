@@ -101,14 +101,14 @@ Set `COMPOSE_PROJECT_NAME` when deploying under a non-default project name. Allo
 
 ### Backups, retention, and media
 
-| Variable group                                                          | Purpose                                                                                                              |
-| ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `BACKUP_*`                                                              | Encrypted backup destination, retention, quiescing, and cron schedule. Production normally requires `BACKUP_S3_URI`. |
-| `CALL_LOG_RETENTION_DAYS`, `CALL_RECORDING_RETENTION_DAYS`              | Database call/event and recording retention windows.                                                                 |
-| `RETENTION_ENABLED`, `RETENTION_RUN_INTERVAL_SECONDS`                   | API retention scheduler control.                                                                                     |
-| `VOICEMAIL_UPLOAD_MAX_BYTES`, `PROXY_MAX_REQUEST_BODY_SIZE`             | Application upload limit and slightly larger nginx request limit.                                                    |
-| `PCAP_CAPTURE_ENABLED`, `PCAP_CAPTURE_INTERFACE`, `PCAP_RETENTION_DAYS` | Per-call SIP/RTP capture. Leave disabled unless approved; captures contain customer traffic.                         |
-| `MEDIA_TICKET_TTL_SECONDS`, `MEDIA_TICKET_MAX_LIFETIME_SECONDS`         | Short-lived scoped browser access to recordings/captures.                                                            |
+| Variable group                                                          | Purpose                                                                                                                        |
+| ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `BACKUP_*`                                                              | Encrypted backup destination, retention, quiescing, and cron schedule. Production normally requires `BACKUP_S3_URI`.           |
+| `CALL_LOG_RETENTION_DAYS`, `CALL_RECORDING_RETENTION_DAYS`              | Database call/event and recording retention windows.                                                                           |
+| `RETENTION_ENABLED`, `RETENTION_RUN_INTERVAL_SECONDS`                   | API retention scheduler control.                                                                                               |
+| `VOICEMAIL_UPLOAD_MAX_BYTES`, `PROXY_MAX_REQUEST_BODY_SIZE`             | Application upload limit and slightly larger nginx request limit.                                                              |
+| `PCAP_CAPTURE_ENABLED`, `PCAP_CAPTURE_INTERFACE`, `PCAP_RETENTION_DAYS` | Per-call SIP/RTP capture with terminal SIP/media isolation. Leave disabled unless approved; captures contain customer traffic. |
+| `MEDIA_TICKET_TTL_SECONDS`, `MEDIA_TICKET_MAX_LIFETIME_SECONDS`         | Short-lived scoped browser access to recordings/captures.                                                                      |
 
 `ALLOW_LOCAL_ONLY_BACKUPS=true` and `ALLOW_NON_QUIESCED_BACKUP=true` are risk acknowledgements, not evidence of an accepted recovery design. Follow the [backup and restore runbook](runbooks/backup-restore.md).
 

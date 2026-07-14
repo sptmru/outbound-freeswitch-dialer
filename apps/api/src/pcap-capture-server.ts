@@ -1,7 +1,8 @@
 import http from "node:http";
 import { spawn, type ChildProcess } from "node:child_process";
-import { access, chmod, chown, mkdir, rm, stat } from "node:fs/promises";
+import { access, chmod, chown, mkdir, rename, rm, stat } from "node:fs/promises";
 import { dirname, resolve, sep } from "node:path";
+import { buildPcapDisplayFilter, type PcapFilterSelection } from "./pcap-filter.js";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const socketPath = process.env.PCAP_CAPTURE_SOCKET || "/run/outbound-dialer-pcap/capture.sock";
@@ -41,8 +42,8 @@ const server = http.createServer(async (request, response) => {
         send(response, 200, { callId, running: true });
         return;
       }
-      const filePath = capturePath(callId);
-      if (await exists(filePath)) {
+      const filePath = rawCapturePath(callId);
+      if ((await exists(filePath)) || (await exists(capturePath(callId)))) {
         throw new Error("A PCAP file already exists for this call");
       }
       let capture: Awaited<ReturnType<typeof startCapture>>;
@@ -63,9 +64,24 @@ const server = http.createServer(async (request, response) => {
       await stopCapture(capture.child);
       captures.delete(callId);
     }
+    const requestBody = await readJsonBody(request);
+    const selection = parseSelection(requestBody.selection);
+    const rawFilePath = rawCapturePath(callId);
     const filePath = capturePath(callId);
-    await chown(filePath, 0, 0);
-    await chmod(filePath, 0o600);
+    if (!(await exists(rawFilePath)) && (await exists(filePath))) {
+      await chown(filePath, 0, 0);
+      await chmod(filePath, 0o600);
+      const file = await stat(filePath);
+      send(response, 200, { callId, running: false, fileSizeBytes: file.size });
+      return;
+    }
+    try {
+      await isolateCapture(rawFilePath, filePath, selection);
+      await chown(filePath, 0, 0);
+      await chmod(filePath, 0o600);
+    } finally {
+      await rm(rawFilePath, { force: true });
+    }
     const file = await stat(filePath);
     send(response, 200, { callId, running: false, fileSizeBytes: file.size });
   } catch (error) {
@@ -141,6 +157,90 @@ function capturePath(callId: string): string {
     throw new Error("PCAP path escaped the configured storage directory");
   }
   return filePath;
+}
+
+function rawCapturePath(callId: string): string {
+  const filePath = resolve(storageDir, `${callId}.capture.pcap`);
+  if (!filePath.startsWith(`${storageDir}${sep}`)) {
+    throw new Error("Raw PCAP path escaped the configured storage directory");
+  }
+  return filePath;
+}
+
+async function isolateCapture(
+  rawFilePath: string,
+  filePath: string,
+  selection: PcapFilterSelection
+): Promise<void> {
+  const displayFilter = buildPcapDisplayFilter(selection);
+  const temporaryPath = `${filePath}.tmp`;
+  await rm(temporaryPath, { force: true });
+  try {
+    await runProcess("tshark", [
+      "-n",
+      "-r",
+      rawFilePath,
+      "-Y",
+      displayFilter,
+      "-F",
+      "pcap",
+      "-w",
+      temporaryPath
+    ]);
+    const file = await stat(temporaryPath);
+    if (file.size <= 24) {
+      throw new Error("PCAP isolation completed without packets for this call");
+    }
+    await rename(temporaryPath, filePath);
+  } finally {
+    await rm(temporaryPath, { force: true });
+  }
+}
+
+async function runProcess(command: string, args: string[]): Promise<void> {
+  await new Promise<void>((resolveProcess, rejectProcess) => {
+    const child = spawn(command, args, { stdio: ["ignore", "ignore", "pipe"] });
+    let stderr = "";
+    child.stderr?.on("data", (chunk: Buffer) => {
+      stderr = `${stderr}${chunk.toString("utf8")}`.slice(-4_000);
+    });
+    child.once("error", rejectProcess);
+    child.once("exit", (code) => {
+      if (code === 0) resolveProcess();
+      else rejectProcess(new Error(stderr.trim() || `${command} exited with code ${code}`));
+    });
+  });
+}
+
+async function readJsonBody(request: http.IncomingMessage): Promise<Record<string, unknown>> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of request) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    size += buffer.length;
+    if (size > 65_536) throw new Error("PCAP supervisor request body is too large");
+    chunks.push(buffer);
+  }
+  if (!chunks.length) return {};
+  const parsed = JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("PCAP supervisor request body must be an object");
+  }
+  return parsed as Record<string, unknown>;
+}
+
+function parseSelection(value: unknown): PcapFilterSelection {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("PCAP isolation selection is required");
+  }
+  const selection = value as Record<string, unknown>;
+  if (!Array.isArray(selection.mediaPorts) || !Array.isArray(selection.sipCallIds)) {
+    throw new Error("PCAP isolation selection is invalid");
+  }
+  return {
+    mediaPorts: selection.mediaPorts.map(Number),
+    sipCallIds: selection.sipCallIds.filter((item): item is string => typeof item === "string")
+  };
 }
 
 export function buildCaptureFilter(env: NodeJS.ProcessEnv): string {

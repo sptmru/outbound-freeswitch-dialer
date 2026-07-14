@@ -3,6 +3,7 @@ import { stat } from "node:fs/promises";
 import { resolve, sep } from "node:path";
 import type pg from "pg";
 import type { AppConfig } from "./config.js";
+import { extractPcapFilterSelection, type PcapFilterSelection } from "./pcap-filter.js";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -129,10 +130,12 @@ async function finalizeCallPcapCapture(
   dependencies: { requestCapture?: typeof requestCapture } = {}
 ): Promise<void> {
   try {
+    const selection = await loadPcapFilterSelection(pool, capture.call_id);
     const response = await (dependencies.requestCapture ?? requestCapture)(
       config.PCAP_CAPTURE_SOCKET,
       capture.call_id,
-      "stop"
+      "stop",
+      selection
     );
     const filePath = capture.file_path ?? callPcapPath(config.PCAP_STORAGE_DIR, capture.call_id);
     const fileSizeBytes = response.fileSizeBytes ?? (await stat(filePath)).size;
@@ -198,19 +201,24 @@ async function insertPcapEvent(
 async function requestCapture(
   socketPath: string,
   callId: string,
-  action: "start" | "stop"
+  action: "start" | "stop",
+  selection?: PcapFilterSelection
 ): Promise<CaptureResponse> {
   if (!UUID_PATTERN.test(callId)) {
     throw new Error("Invalid call ID for PCAP capture");
   }
+  const body = action === "stop" ? JSON.stringify({ selection }) : "";
   return new Promise<CaptureResponse>((resolveRequest, rejectRequest) => {
     const request = http.request(
       {
         method: "POST",
         path: `/captures/${encodeURIComponent(callId)}/${action}`,
         socketPath,
-        timeout: 3_000,
-        headers: { "Content-Length": "0" }
+        timeout: action === "stop" ? 30_000 : 3_000,
+        headers: {
+          "Content-Length": Buffer.byteLength(body),
+          ...(body ? { "Content-Type": "application/json" } : {})
+        }
       },
       (response) => {
         const chunks: Buffer[] = [];
@@ -234,8 +242,22 @@ async function requestCapture(
     );
     request.on("timeout", () => request.destroy(new Error("PCAP supervisor request timed out")));
     request.on("error", rejectRequest);
-    request.end();
+    request.end(body);
   });
+}
+
+async function loadPcapFilterSelection(pool: pg.Pool, callId: string): Promise<PcapFilterSelection> {
+  const result = await pool.query<{ raw_json: unknown }>(
+    `
+      select raw_json
+      from call_events
+      where call_id = $1
+        and freeswitch_event_name is not null
+      order by created_at
+    `,
+    [callId]
+  );
+  return extractPcapFilterSelection(result.rows.map((row) => row.raw_json));
 }
 
 export function callPcapPath(storageDir: string, callId: string): string {
@@ -254,4 +276,4 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-export const __testing = { finalizeCallPcapCapture, requestCapture };
+export const __testing = { finalizeCallPcapCapture, loadPcapFilterSelection, requestCapture };

@@ -23,6 +23,14 @@ const prometheus = prometheusTemplate
   .replaceAll("__GRAFANA_HEALTH_URL__", `https://${grafanaDomain}/api/health`);
 
 await writeFile(resolve(outputDirectory, "prometheus.yml"), prometheus, { mode: 0o644 });
+const grafanaDashboardTemplate = await readFile(
+  resolve("monitoring/grafana/dashboards/outbound-dialer-overview.json"),
+  "utf8"
+);
+const grafanaDashboard = grafanaDashboardTemplate.replaceAll("__APP_DOMAIN__", appDomain);
+await writeFile(resolve(outputDirectory, "outbound-dialer-overview.json"), grafanaDashboard, {
+  mode: 0o644
+});
 const alertmanagerPath = resolve(outputDirectory, "alertmanager.yml");
 await writeFile(alertmanagerPath, renderAlertmanager(), { mode: 0o640 });
 await chmod(alertmanagerPath, 0o640);

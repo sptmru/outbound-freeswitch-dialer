@@ -477,6 +477,7 @@ describe("App Agent Desk empty states", () => {
     expect(screen.getByText("Recording size")).toBeInTheDocument();
     expect(screen.getByText("Integrity checked")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Download PCAP" })).toBeInTheDocument();
+    expect(screen.getByText("Filtered to this call's SIP signaling and media ports.")).toBeInTheDocument();
     expect(player).toHaveAttribute("src", "/api/media/ticketed-recording");
     expect(screen.queryByText("Customer connected")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Show technical details" }));

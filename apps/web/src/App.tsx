@@ -3421,7 +3421,7 @@ function HistoryView({ admin }: { admin: AdminOverviewResponse }) {
                       <div className="pcap-download-card">
                         <div>
                           <strong>Packet capture</strong>
-                          <small>May include traffic from overlapping calls on the same SIP/RTP ports.</small>
+                          <small>Filtered to this call's SIP signaling and media ports.</small>
                         </div>
                         <button
                           className="secondary-action compact-action"

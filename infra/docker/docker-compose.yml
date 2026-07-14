@@ -399,7 +399,7 @@ services:
     volumes:
       - grafana_data:/var/lib/grafana
       - ../../monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
-      - ../../monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - ../../monitoring/generated/outbound-dialer-overview.json:/var/lib/grafana/dashboards/outbound-dialer-overview.json:ro
     depends_on:
       - prometheus
       - loki

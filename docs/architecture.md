@@ -75,7 +75,7 @@ Only nginx is intended as the public HTTP entrypoint. Grafana is routed by hostn
 
 - nginx proxy and automated Let's Encrypt certificate jobs.
 - Coturn on host networking, using short-lived HMAC credentials issued by the API. It binds TURN/TURNS plus a dedicated relay range and supports both directly addressed hosts and public/private NAT mappings.
-- A capability-scoped `pcap-capture` sidecar receives per-call capture commands through a Unix socket shared with the API. Capture is disabled by default, stored in a private named volume, retention-bound, and exposed to administrators only through scoped media tickets.
+- A capability-scoped `pcap-capture` sidecar receives per-call capture commands through a Unix socket shared with the API. It starts a broad temporary capture before originate, then filters it at the terminal transition using SIP `Call-ID` and exact local media ports derived from persisted ESL events. The broad temporary file is deleted even when isolation fails. Capture is disabled by default, stored in a private named volume, retention-bound, and exposed to administrators only through scoped media tickets.
 - fail2ban tails the shared FreeSWITCH log volume and installs host firewall bans for the repository-defined SIP scanner filter.
 - Prometheus, Grafana, Alertmanager, Loki, Alloy, exporters, and blackbox checks.
 - PostgreSQL metrics use the independent `outbound_dialer_exporter` login with `pg_monitor`, read-only transactions, and no application-table grants; deploy/restore rotate it from `POSTGRES_EXPORTER_PASSWORD` after database changes.

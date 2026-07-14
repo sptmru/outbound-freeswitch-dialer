@@ -48,6 +48,18 @@ describe("per-call PCAP capture control", () => {
     const queries: Array<{ sql: string; params: readonly unknown[] }> = [];
     const pool = queryPool((sql, params) => {
       queries.push({ sql, params });
+      if (sql.includes("from call_events")) {
+        return rows([
+          {
+            raw_json: {
+              headers: {
+                variable_local_media_port: "16420",
+                variable_sip_call_id: "call@example.net"
+              }
+            }
+          }
+        ]);
+      }
       return rows([]);
     });
     const logger = { info() {}, warn() {}, error() {} };
@@ -59,8 +71,12 @@ describe("per-call PCAP capture control", () => {
         { call_id: callId, file_path: filePath },
         logger,
         {
-          requestCapture: async (_socketPath, requestedCallId, action) => {
+          requestCapture: async (_socketPath, requestedCallId, action, selection) => {
             requests.push(`${requestedCallId}:${action}`);
+            assert.deepEqual(selection, {
+              mediaPorts: [16420, 16421],
+              sipCallIds: ["call@example.net"]
+            });
             return { callId: requestedCallId, running: false, fileSizeBytes: 64 };
           }
         }
@@ -75,6 +91,21 @@ describe("per-call PCAP capture control", () => {
 
   it("rejects non-UUID file names", () => {
     assert.throws(() => callPcapPath("/tmp/pcaps", "../../secrets"), /Invalid call ID/);
+  });
+
+  it("loads isolation inputs only from persisted FreeSWITCH events", async () => {
+    const pool = queryPool((sql) => {
+      assert.match(sql, /freeswitch_event_name is not null/);
+      return rows([
+        { raw_json: { headers: { variable_local_media_port: "16460" } } },
+        { raw_json: { not_headers: { variable_local_media_port: "16480" } } }
+      ]);
+    });
+
+    assert.deepEqual(await __testing.loadPcapFilterSelection(pool, callId), {
+      mediaPorts: [16460, 16461],
+      sipCallIds: []
+    });
   });
 });
 
