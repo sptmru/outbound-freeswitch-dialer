@@ -14,6 +14,7 @@ const apiMocks = vi.hoisted(() => ({
   fetchMe: vi.fn(),
   getCallRecordingAudioUrl: vi.fn(),
   logout: vi.fn(),
+  startManualCall: vi.fn(),
   subscribeAgentEvents: vi.fn(),
   updateAgentAvailability: vi.fn(),
   useSoftphoneRegistration: vi.fn()
@@ -33,6 +34,7 @@ vi.mock("./api", async () => {
     fetchMe: apiMocks.fetchMe,
     getCallRecordingAudioUrl: apiMocks.getCallRecordingAudioUrl,
     logout: apiMocks.logout,
+    startManualCall: apiMocks.startManualCall,
     subscribeAgentEvents: apiMocks.subscribeAgentEvents,
     updateAgentAvailability: apiMocks.updateAgentAvailability
   };
@@ -71,6 +73,7 @@ describe("App Agent Desk empty states", () => {
     });
     apiMocks.getCallRecordingAudioUrl.mockResolvedValue("/api/media/ticketed-recording");
     apiMocks.logout.mockResolvedValue(undefined);
+    apiMocks.startManualCall.mockResolvedValue(deskResponse());
     apiMocks.subscribeAgentEvents.mockReturnValue(() => undefined);
     apiMocks.updateAgentAvailability.mockResolvedValue(
       deskResponse({ availability: { status: "paused", wrapUpUntil: null } })
@@ -149,6 +152,26 @@ describe("App Agent Desk empty states", () => {
     expect(await screen.findByText("No leads are queued for this campaign.")).toBeInTheDocument();
     expect(screen.getByText("Callable leads")).toBeInTheDocument();
     expect(screen.queryByText(/Recommended next:/)).not.toBeInTheDocument();
+  });
+
+  it("starts a manual call directly from Agent status", async () => {
+    apiMocks.useSoftphoneRegistration.mockReturnValue({ ...softphoneRuntime, registered: true });
+    apiMocks.fetchAgentDesk.mockResolvedValue(deskResponse());
+
+    render(<App />);
+
+    const phoneNumber = await screen.findByLabelText("Manual call");
+    fireEvent.change(phoneNumber, { target: { value: "+1 415 555 0000" } });
+    fireEvent.click(screen.getByRole("button", { name: "Call" }));
+
+    await waitFor(() => {
+      expect(apiMocks.startManualCall).toHaveBeenCalledWith({
+        campaignId: "11111111-1111-4111-8111-111111111111",
+        phoneNumber: "+1 415 555 0000"
+      });
+    });
+    expect(screen.queryByText("Pre-call checks")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Check number" })).not.toBeInTheDocument();
   });
 
   it("lets an agent pause and resume calling from the status panel", async () => {

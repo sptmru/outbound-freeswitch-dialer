@@ -77,8 +77,7 @@ import {
   updateAgentAvailability,
   updateCampaign,
   updateUser,
-  uploadRecording,
-  validateManualDial
+  uploadRecording
 } from "./api";
 import { useSoftphoneRegistration } from "./softphone";
 import type { SoftphoneRuntime } from "./softphone";
@@ -100,7 +99,6 @@ import type {
   FreeSwitchSafeTestResponse,
   ImportCsvResponse,
   LeadSummary,
-  ManualDialValidationResponse,
   PublicUser,
   SuppressionListResponse
 } from "./types";
@@ -561,7 +559,6 @@ function AgentDesk({
   onManualDialNumberChange: (phoneNumber: string) => void;
   softphone: SoftphoneRuntime;
 }) {
-  const [deskMode, setDeskMode] = useState<"ready" | "manual">("ready");
   const [callNextPending, setCallNextPending] = useState(false);
   const [callNextError, setCallNextError] = useState<string | null>(null);
   const [endCallPending, setEndCallPending] = useState(false);
@@ -571,12 +568,6 @@ function AgentDesk({
   const campaign = desk.campaign;
   const availabilityStatus = useEffectiveAvailability(desk.availability);
   const canStartCalls = softphone.registered && availabilityStatus === "available";
-
-  useEffect(() => {
-    if (manualDialNumber && !desk.activeCall && campaign?.manualDialingEnabled) {
-      setDeskMode("manual");
-    }
-  }, [campaign?.manualDialingEnabled, desk.activeCall, manualDialNumber]);
 
   async function callNext() {
     if (!campaign) {
@@ -706,20 +697,6 @@ function AgentDesk({
     );
   }
 
-  if (deskMode === "manual" && campaign.manualDialingEnabled) {
-    return (
-      <ManualDialSurface
-        canStartCalls={canStartCalls}
-        desk={campaignDesk}
-        onDeskChanged={onDeskChanged}
-        onOpenQueue={() => setDeskMode("ready")}
-        onPhoneNumberChange={onManualDialNumberChange}
-        phoneNumber={manualDialNumber}
-        softphone={softphone}
-      />
-    );
-  }
-
   return (
     <section className="ready-desk-grid">
       <LeadQueue
@@ -731,11 +708,13 @@ function AgentDesk({
         pending={callNextPending}
       />
       <AgentStatusPanel
+        canStartCalls={canStartCalls}
         desk={campaignDesk}
+        manualDialNumber={manualDialNumber}
         mode="ready"
         onCampaignChange={onCampaignChange}
         onDeskChanged={onDeskChanged}
-        onOpenManual={() => setDeskMode("manual")}
+        onManualDialNumberChange={onManualDialNumberChange}
         softphone={softphone}
       />
       <VoicemailJobs jobs={desk.voicemailJobs} />
@@ -1056,22 +1035,28 @@ function AvailabilityControl({
 }
 
 function AgentStatusPanel({
+  canStartCalls,
   desk,
+  manualDialNumber,
   mode,
   onCampaignChange,
   onDeskChanged,
-  onOpenManual,
+  onManualDialNumberChange,
   softphone
 }: {
+  canStartCalls: boolean;
   desk: AgentDeskWithCampaign;
+  manualDialNumber: string;
   mode: "ready" | "active";
   onCampaignChange: (campaignId: string) => Promise<void>;
   onDeskChanged: (desk: AgentDeskResponse) => void;
-  onOpenManual: () => void;
+  onManualDialNumberChange: (phoneNumber: string) => void;
   softphone: SoftphoneRuntime;
 }) {
   const [campaignPending, setCampaignPending] = useState(false);
   const [campaignError, setCampaignError] = useState<string | null>(null);
+  const [manualDialPending, setManualDialPending] = useState(false);
+  const [manualDialError, setManualDialError] = useState<string | null>(null);
   const phoneStatus = getPhoneStatusCopy(softphone);
 
   async function changeCampaign(campaignId: string) {
@@ -1083,6 +1068,29 @@ function AgentStatusPanel({
       setCampaignError(error instanceof Error ? error.message : "Could not switch campaign");
     } finally {
       setCampaignPending(false);
+    }
+  }
+
+  async function startManualDial(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!canStartCalls) {
+      setManualDialError(callStartBlockedMessage(desk, softphone));
+      return;
+    }
+
+    setManualDialPending(true);
+    setManualDialError(null);
+    try {
+      const nextDesk = await startManualCall({
+        campaignId: desk.campaign.id,
+        phoneNumber: manualDialNumber
+      });
+      onManualDialNumberChange("");
+      onDeskChanged(nextDesk);
+    } catch (error) {
+      setManualDialError(error instanceof Error ? error.message : "Could not start call");
+    } finally {
+      setManualDialPending(false);
     }
   }
 
@@ -1108,10 +1116,6 @@ function AgentStatusPanel({
       {campaignError && <p className="form-error">{campaignError}</p>}
       <div className="status-stack">
         <AvailabilityControl desk={desk} disabled={mode === "active"} onDeskChanged={onDeskChanged} />
-        <StatusBadge
-          label={desk.campaign.manualDialingEnabled ? "Manual dialing enabled" : "Manual dialing disabled"}
-          tone={desk.campaign.manualDialingEnabled ? "good" : "neutral"}
-        />
       </div>
       <div className="softphone-runtime-card">
         <div className="softphone-runtime-icon">
@@ -1135,10 +1139,32 @@ function AgentStatusPanel({
         )}
       </div>
       {desk.campaign.manualDialingEnabled && (
-        <button className="secondary-action manual-open-action" onClick={onOpenManual} type="button">
-          <Phone size={17} />
-          Manual dialing
-        </button>
+        <form className="inline-manual-dial" onSubmit={startManualDial}>
+          <label htmlFor="manual-dial-number">Manual call</label>
+          <div className="inline-manual-dial-controls">
+            <input
+              autoComplete="tel"
+              id="manual-dial-number"
+              inputMode="tel"
+              onChange={(event) => {
+                onManualDialNumberChange(event.target.value);
+                setManualDialError(null);
+              }}
+              placeholder="+1 415 555 0000"
+              type="tel"
+              value={manualDialNumber}
+            />
+            <button
+              className="primary-action teal-action"
+              disabled={manualDialPending || !manualDialNumber.trim() || !canStartCalls}
+              type="submit"
+            >
+              <PhoneCall size={17} />
+              {manualDialPending ? "Starting" : "Call"}
+            </button>
+          </div>
+          {manualDialError && <p className="form-error">{manualDialError}</p>}
+        </form>
       )}
       <div className="status-metric-list">
         <Metric label="Callable leads" value={desk.campaign.callableLeads} icon={Users} />
@@ -1187,187 +1213,6 @@ function AgentNoCampaignStatus({
         <Metric label="Blocked numbers" value={desk.metrics.suppressed} icon={Ban} />
       </div>
     </article>
-  );
-}
-
-function ManualDialSurface({
-  canStartCalls,
-  desk,
-  onDeskChanged,
-  onOpenQueue,
-  onPhoneNumberChange,
-  phoneNumber,
-  softphone
-}: {
-  canStartCalls: boolean;
-  desk: AgentDeskWithCampaign;
-  onDeskChanged: (desk: AgentDeskResponse) => void;
-  onOpenQueue: () => void;
-  onPhoneNumberChange: (phoneNumber: string) => void;
-  phoneNumber: string;
-  softphone: SoftphoneRuntime;
-}) {
-  const [result, setResult] = useState<ManualDialValidationResponse | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [pending, setPending] = useState(false);
-  const [startPending, setStartPending] = useState(false);
-
-  useEffect(() => {
-    setResult(null);
-    setError(null);
-  }, [phoneNumber]);
-
-  async function validate(event?: FormEvent<HTMLFormElement>) {
-    event?.preventDefault();
-    setPending(true);
-    setError(null);
-    try {
-      setResult(await validateManualDial(phoneNumber, desk.campaign.id));
-    } catch (validateError) {
-      setError(validateError instanceof Error ? validateError.message : "Could not validate number");
-    } finally {
-      setPending(false);
-    }
-  }
-
-  async function startCall() {
-    if (!canStartCalls) {
-      setError(callStartBlockedMessage(desk, softphone));
-      return;
-    }
-    setStartPending(true);
-    setError(null);
-    try {
-      onDeskChanged(await startManualCall({ campaignId: desk.campaign.id, phoneNumber }));
-    } catch (startError) {
-      setError(startError instanceof Error ? startError.message : "Could not start call");
-    } finally {
-      setStartPending(false);
-    }
-  }
-
-  function pressKey(key: string) {
-    onPhoneNumberChange(`${phoneNumber}${key}`);
-  }
-
-  const checks = result?.checks ?? [
-    { label: "Number format", status: "warn" as const, detail: "Check number before dialing" },
-    { label: "Blocked list", status: "warn" as const, detail: "Not checked yet" },
-    {
-      label: "Campaign permission",
-      status: desk.campaign.manualDialingEnabled ? ("pass" as const) : ("fail" as const),
-      detail: desk.campaign.manualDialingEnabled ? "Manual dialing allowed" : "Manual dialing disabled"
-    }
-  ];
-
-  return (
-    <section className="manual-dial-grid">
-      <article className="panel manual-dial-panel">
-        <div className="surface-heading">
-          <h2>Manual dialing</h2>
-          <p>Use this only when campaign rules allow it. The app checks blocked numbers before dialing.</p>
-        </div>
-        <form className="manual-dial-form" onSubmit={validate}>
-          <label>
-            Phone number
-            <input
-              onChange={(event) => onPhoneNumberChange(event.target.value)}
-              placeholder="+1 415 555 0000"
-              value={phoneNumber}
-            />
-          </label>
-          <div className="large-keypad" aria-label="Dial pad">
-            {["1", "2", "3", "4", "5", "6", "7", "8", "9", "*", "0", "#"].map((key) => (
-              <button key={key} onClick={() => pressKey(key)} type="button">
-                {key}
-              </button>
-            ))}
-          </div>
-          <div className="manual-dial-actions">
-            <button className="secondary-action" disabled={pending || !phoneNumber.trim()} type="submit">
-              <CheckCircle2 size={17} />
-              {pending ? "Checking" : "Check number"}
-            </button>
-            <button
-              className="primary-action teal-action"
-              disabled={
-                startPending ||
-                !phoneNumber.trim() ||
-                !canStartCalls ||
-                !desk.campaign.manualDialingEnabled ||
-                result?.allowed === false
-              }
-              onClick={startCall}
-              type="button"
-            >
-              <PhoneCall size={17} />
-              {startPending ? "Starting" : "Start call"}
-            </button>
-            <button className="icon-button" onClick={onOpenQueue} title="Back to queue" type="button">
-              <Users size={17} />
-            </button>
-          </div>
-        </form>
-      </article>
-      <article className="panel pre-call-panel">
-        <div className="surface-heading">
-          <h2>Pre-call checks</h2>
-        </div>
-        <AvailabilityControl desk={desk} onDeskChanged={onDeskChanged} />
-        {error && <p className="form-error">{error}</p>}
-        <div className="check-list">
-          {checks.map((check) => (
-            <CheckRow detail={check.detail} key={check.label} label={check.label} status={check.status} />
-          ))}
-          <CheckRow
-            detail={
-              desk.recordings[0] ? "Selected by the campaign" : "Upload a voicemail recording to enable drop"
-            }
-            label="Voicemail recording"
-            status={desk.recordings[0] ? "pass" : "warn"}
-            value={desk.recordings[0]?.name}
-          />
-          <CheckRow
-            detail={desk.campaign.callRecordingEnabled ? "On for this campaign" : "Off for this campaign"}
-            label="Call recording"
-            status={desk.campaign.callRecordingEnabled ? "pass" : "warn"}
-          />
-        </div>
-        <div className="manual-warning">
-          <AlertTriangle size={18} />
-          <div>
-            <strong>Admin-controlled feature</strong>
-            <p>
-              If manual dialing is disabled, this screen is hidden and agents can only call imported campaign
-              leads.
-            </p>
-          </div>
-        </div>
-      </article>
-    </section>
-  );
-}
-
-function CheckRow({
-  detail,
-  label,
-  status,
-  value
-}: {
-  detail: string;
-  label: string;
-  status: "pass" | "warn" | "fail";
-  value?: string;
-}) {
-  const badgeLabel = value ?? (status === "pass" ? "Valid" : status === "warn" ? "Review" : "Blocked");
-  return (
-    <div className="check-row">
-      <span className={`check-badge ${status}`}>{badgeLabel}</span>
-      <div>
-        <strong>{label}</strong>
-        <small>{detail}</small>
-      </div>
-    </div>
   );
 }
 
