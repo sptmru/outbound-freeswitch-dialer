@@ -62,6 +62,7 @@ describe("App Agent Desk empty states", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     window.history.replaceState({}, "", "/");
+    window.localStorage.removeItem("outbound_dialer_selected_campaign_id");
     apiMocks.fetchMe.mockResolvedValue({ user: userRow() });
     apiMocks.fetchCsvImports.mockResolvedValue({ imports: [] });
     apiMocks.fetchAdminOverview.mockResolvedValue(adminResponse());
@@ -94,6 +95,10 @@ describe("App Agent Desk empty states", () => {
       callRecordingEnabled: false,
       earlyMediaAvmdEnabled: false
     };
+    window.localStorage.setItem(
+      "outbound_dialer_selected_campaign_id",
+      "88888888-8888-4888-8888-888888888888"
+    );
     window.history.replaceState({}, "", `/call-history?campaignId=${campaignId}`);
     apiMocks.fetchMe.mockResolvedValue({ user: admin });
     apiMocks.fetchAgentDesk.mockResolvedValue(
@@ -109,6 +114,32 @@ describe("App Agent Desk empty states", () => {
     expect(await screen.findByRole("heading", { level: 1, name: "Call history" })).toBeInTheDocument();
     expect(apiMocks.fetchAgentDesk).toHaveBeenCalledWith(campaignId);
     expect(window.location.pathname).toBe("/call-history");
+    expect(new URLSearchParams(window.location.search).get("campaignId")).toBe(campaignId);
+  });
+
+  it("restores the last selected campaign in a new tab without a campaign URL", async () => {
+    const campaignId = "77777777-7777-4777-8777-777777777777";
+    const campaign = {
+      id: campaignId,
+      name: "Remembered campaign",
+      status: "active" as const,
+      callableLeads: 4,
+      manualDialingEnabled: true,
+      callRecordingEnabled: false,
+      earlyMediaAvmdEnabled: false
+    };
+    window.localStorage.setItem("outbound_dialer_selected_campaign_id", campaignId);
+    apiMocks.fetchAgentDesk.mockResolvedValue(
+      deskResponse({
+        campaign,
+        availableCampaigns: [campaign]
+      })
+    );
+
+    render(<App />);
+
+    expect(await screen.findByDisplayValue("Remembered campaign (4)")).toBeInTheDocument();
+    expect(apiMocks.fetchAgentDesk).toHaveBeenCalledWith(campaignId);
     expect(new URLSearchParams(window.location.search).get("campaignId")).toBe(campaignId);
   });
 

@@ -81,7 +81,7 @@ Firewall and host-published-port changes were excluded by instruction. They are 
 - User create/edit/deactivate/reactivate/role/password lifecycle with preserved attribution and FreeSWITCH cleanup.
 - Suppression add/update/search/pagination/import/removal and durable change/blocked-dial events.
 - Paginated/filterable call history, detailed event timeline, bounded CSV export, and media playback.
-- Stable per-section application URLs with browser back/forward support and URL-persisted Agent Desk campaign selection.
+- Stable per-section application URLs with browser back/forward support plus URL- and browser-persisted Agent Desk campaign selection.
 - Successful mutating admin requests recorded with actor/request/route/status/source metadata and bounded route parameters; paginated audit endpoint with actor/method/date filters.
 
 ### 7. Retention, Monitoring, And Operations

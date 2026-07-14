@@ -105,6 +105,7 @@ import type {
 
 type View = "desk" | "campaigns" | "recordings" | "history" | "suppression" | "settings";
 type AgentDeskWithCampaign = AgentDeskResponse & { campaign: NonNullable<AgentDeskResponse["campaign"]> };
+const selectedCampaignStorageKey = "outbound_dialer_selected_campaign_id";
 
 const viewPaths: Record<View, string> = {
   desk: "/",
@@ -121,9 +122,30 @@ function readNavigationState(): { campaignId: string | null; view: View } {
     (Object.entries(viewPaths).find(([, path]) => path === normalizedPath)?.[0] as View | undefined) ??
     "desk";
   return {
-    campaignId: new URLSearchParams(window.location.search).get("campaignId"),
+    campaignId:
+      new URLSearchParams(window.location.search).get("campaignId") ?? readStoredCampaignId(),
     view
   };
+}
+
+function readStoredCampaignId(): string | null {
+  try {
+    return window.localStorage.getItem(selectedCampaignStorageKey);
+  } catch {
+    return null;
+  }
+}
+
+function storeSelectedCampaignId(campaignId: string | null) {
+  try {
+    if (campaignId) {
+      window.localStorage.setItem(selectedCampaignStorageKey, campaignId);
+    } else {
+      window.localStorage.removeItem(selectedCampaignStorageKey);
+    }
+  } catch {
+    // URL persistence remains available when browser storage is disabled.
+  }
 }
 
 function writeNavigationState(view: View, campaignId: string | null, replace = false) {
@@ -134,6 +156,7 @@ function writeNavigationState(view: View, campaignId: string | null, replace = f
   } else {
     url.searchParams.delete("campaignId");
   }
+  storeSelectedCampaignId(campaignId);
   window.history[replace ? "replaceState" : "pushState"]({}, "", `${url.pathname}${url.search}${url.hash}`);
 }
 
