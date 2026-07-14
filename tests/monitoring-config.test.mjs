@@ -25,3 +25,12 @@ test("monitoring dashboard provisions the application link and PCAP panels", () 
     ]
   );
 });
+
+test("only Prometheus receives the lifecycle feature flag", () => {
+  const compose = readFileSync(join(root, "infra/docker/docker-compose.yml"), "utf8");
+  const prometheus = compose.slice(compose.indexOf("  prometheus:"), compose.indexOf("  alertmanager:"));
+  const alertmanager = compose.slice(compose.indexOf("  alertmanager:"), compose.indexOf("  grafana:"));
+
+  assert.match(prometheus, /--web\.enable-lifecycle/);
+  assert.doesNotMatch(alertmanager, /--web\.enable-lifecycle/);
+});

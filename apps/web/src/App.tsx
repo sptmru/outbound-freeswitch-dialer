@@ -3750,15 +3750,38 @@ function SettingsView({
   );
 }
 
+type NumericSystemSetting =
+  | "contactMaxAttempts"
+  | "contactRetryDelaySeconds"
+  | "callHistoryExportMaxRows"
+  | "callLogRetentionDays"
+  | "callRecordingRetentionDays"
+  | "pcapRetentionDays";
+
+function systemSettingNumberDrafts(settings: AdminSystemSettings): Record<NumericSystemSetting, string> {
+  return {
+    contactMaxAttempts: String(settings.contactMaxAttempts),
+    contactRetryDelaySeconds: String(settings.contactRetryDelaySeconds),
+    callHistoryExportMaxRows: String(settings.callHistoryExportMaxRows),
+    callLogRetentionDays: String(settings.callLogRetentionDays),
+    callRecordingRetentionDays: String(settings.callRecordingRetentionDays),
+    pcapRetentionDays: String(settings.pcapRetentionDays)
+  };
+}
+
 function SystemSettingsPanel() {
   const [settings, setSettings] = useState<AdminSystemSettings | null>(null);
+  const [numberDrafts, setNumberDrafts] = useState<Record<NumericSystemSetting, string> | null>(null);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
 
   useEffect(() => {
     void fetchSystemSettings()
-      .then(setSettings)
+      .then((next) => {
+        setSettings(next);
+        setNumberDrafts(systemSettingNumberDrafts(next));
+      })
       .catch((loadError) => setError(getErrorMessage(loadError, "Could not load system settings")));
   }, []);
 
@@ -3773,16 +3796,30 @@ function SystemSettingsPanel() {
 
   const set = <K extends keyof AdminSystemSettings>(key: K, value: AdminSystemSettings[K]) =>
     setSettings((current) => (current ? { ...current, [key]: value } : current));
-  const number = (key: keyof AdminSystemSettings) => (event: ChangeEvent<HTMLInputElement>) =>
-    set(key, Number(event.target.value) as never);
+  const number = (key: NumericSystemSetting) => (event: ChangeEvent<HTMLInputElement>) => {
+    const value = event.target.value;
+    if (!/^\d*$/.test(value)) return;
+    setNumberDrafts((current) => ({ ...(current ?? systemSettingNumberDrafts(settings)), [key]: value }));
+  };
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setPending(true);
     setError(null);
     setMessage(null);
-    const { availableAlertChannels: _available, updatedAt: _updatedAt, ...input } = settings;
+    if (!numberDrafts || Object.values(numberDrafts).some((value) => value === "")) {
+      setError("Fill in all numeric settings");
+      setPending(false);
+      return;
+    }
+    const parsedSettings = {
+      ...settings,
+      ...Object.fromEntries(Object.entries(numberDrafts).map(([key, value]) => [key, Number(value)]))
+    } as AdminSystemSettings;
+    const { availableAlertChannels: _available, updatedAt: _updatedAt, ...input } = parsedSettings;
     try {
-      setSettings(await updateSystemSettings(input as UpdateAdminSystemSettingsRequest));
+      const updated = await updateSystemSettings(input as UpdateAdminSystemSettingsRequest);
+      setSettings(updated);
+      setNumberDrafts(systemSettingNumberDrafts(updated));
       setMessage("Settings applied");
     } catch (saveError) {
       setError(getErrorMessage(saveError, "Could not save system settings"));
@@ -3809,8 +3846,9 @@ function SystemSettingsPanel() {
             <input
               min={100}
               max={250000}
-              type="number"
-              value={settings.callHistoryExportMaxRows}
+              inputMode="numeric"
+              type="text"
+              value={numberDrafts?.callHistoryExportMaxRows ?? ""}
               onChange={number("callHistoryExportMaxRows")}
             />
           </label>
@@ -3821,8 +3859,9 @@ function SystemSettingsPanel() {
             <input
               min={1}
               max={100}
-              type="number"
-              value={settings.contactMaxAttempts}
+              inputMode="numeric"
+              type="text"
+              value={numberDrafts?.contactMaxAttempts ?? ""}
               onChange={number("contactMaxAttempts")}
             />
           </label>
@@ -3831,8 +3870,9 @@ function SystemSettingsPanel() {
             <input
               min={0}
               max={604800}
-              type="number"
-              value={settings.contactRetryDelaySeconds}
+              inputMode="numeric"
+              type="text"
+              value={numberDrafts?.contactRetryDelaySeconds ?? ""}
               onChange={number("contactRetryDelaySeconds")}
             />
           </label>
@@ -3843,8 +3883,9 @@ function SystemSettingsPanel() {
             <input
               min={1}
               max={3650}
-              type="number"
-              value={settings.callLogRetentionDays}
+              inputMode="numeric"
+              type="text"
+              value={numberDrafts?.callLogRetentionDays ?? ""}
               onChange={number("callLogRetentionDays")}
             />
           </label>
@@ -3853,8 +3894,9 @@ function SystemSettingsPanel() {
             <input
               min={1}
               max={3650}
-              type="number"
-              value={settings.callRecordingRetentionDays}
+              inputMode="numeric"
+              type="text"
+              value={numberDrafts?.callRecordingRetentionDays ?? ""}
               onChange={number("callRecordingRetentionDays")}
             />
           </label>
@@ -3863,8 +3905,9 @@ function SystemSettingsPanel() {
             <input
               min={1}
               max={365}
-              type="number"
-              value={settings.pcapRetentionDays}
+              inputMode="numeric"
+              type="text"
+              value={numberDrafts?.pcapRetentionDays ?? ""}
               onChange={number("pcapRetentionDays")}
             />
           </label>

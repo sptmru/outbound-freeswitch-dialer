@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, it } from "node:test";
 import type pg from "pg";
 import type { AppConfig } from "./config.js";
@@ -33,6 +36,28 @@ describe("RuntimeSettingsService", () => {
       service.update(settings({ alertmanagerWebhookEnabled: true })),
       /Configure ALERTMANAGER_WEBHOOK_URL/
     );
+  });
+
+  it("persists settings even while Alertmanager is temporarily unavailable", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "outbound-dialer-settings-"));
+    const configPath = join(directory, "alertmanager.yml");
+    const updatedAt = new Date("2026-07-14T12:30:00.000Z");
+    const pool = {
+      query: async () => ({ rows: [{ updated_at: updatedAt }], rowCount: 1 })
+    } as unknown as pg.Pool;
+    const config = Object.assign(baseConfig(), {
+      ALERTMANAGER_CONFIG_PATH: configPath,
+      ALERTMANAGER_URL: "http://127.0.0.1:1"
+    });
+    const service = new RuntimeSettingsService(pool, config);
+
+    try {
+      const updated = await service.update(settings({ contactMaxAttempts: 50 }));
+      assert.equal(updated.contactMaxAttempts, 50);
+      assert.match(await readFile(configPath, "utf8"), /repeat_interval: 4h/);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 });
 

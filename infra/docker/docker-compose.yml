@@ -380,7 +380,6 @@ services:
       - --config.file=/etc/alertmanager/alertmanager.yml
       - --storage.path=/alertmanager
       - --data.retention=${ALERTMANAGER_RETENTION:-120h}
-      - --web.enable-lifecycle
     volumes:
       - ../../monitoring/generated/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
       - alertmanager_data:/alertmanager

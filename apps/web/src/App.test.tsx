@@ -175,12 +175,15 @@ describe("App Agent Desk empty states", () => {
 
     render(<App />);
     const attempts = await screen.findByLabelText("Contact attempts");
-    fireEvent.change(attempts, { target: { value: "5" } });
+    fireEvent.change(attempts, { target: { value: "" } });
+    expect(attempts).toHaveValue("");
+    fireEvent.change(attempts, { target: { value: "50" } });
+    expect(attempts).toHaveValue("50");
     fireEvent.click(screen.getByRole("button", { name: "Save settings" }));
 
     await waitFor(() => expect(apiMocks.updateSystemSettings).toHaveBeenCalled());
     expect(apiMocks.updateSystemSettings.mock.calls[0]?.[0]).toMatchObject({
-      contactMaxAttempts: 5,
+      contactMaxAttempts: 50,
       defaultPhoneCountryCode: "US",
       pcapCaptureEnabled: false
     });

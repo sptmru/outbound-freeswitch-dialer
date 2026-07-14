@@ -44,7 +44,7 @@ export class RuntimeSettingsService {
       this.apply(updateSystemSettingsSchema.parse(result.rows[0].value_json));
       this.updatedAt = result.rows[0].updated_at.toISOString();
     }
-    await this.syncAlertmanager(false);
+    await this.writeAlertmanagerConfig();
     if (this.config.ALERTMANAGER_CONFIG_PATH) void this.reloadAlertmanagerEventually();
   }
 
@@ -89,7 +89,7 @@ export class RuntimeSettingsService {
     }
     this.apply(value);
     try {
-      await this.syncAlertmanager(true);
+      await this.writeAlertmanagerConfig();
       const result = await this.pool.query<{ updated_at: Date }>(
         `insert into system_settings (key, value_json, updated_at)
          values ($1, $2::jsonb, now())
@@ -98,11 +98,12 @@ export class RuntimeSettingsService {
         [SETTINGS_KEY, JSON.stringify(value)]
       );
       this.updatedAt = result.rows[0]?.updated_at.toISOString() ?? new Date().toISOString();
+      if (this.config.ALERTMANAGER_CONFIG_PATH) void this.reloadAlertmanagerEventually();
       return this.get();
     } catch (error) {
       const { availableAlertChannels: _available, updatedAt: _updatedAt, ...rollback } = previous;
       this.apply(rollback);
-      await this.syncAlertmanager(false).catch(() => undefined);
+      await this.writeAlertmanagerConfig().catch(() => undefined);
       throw error;
     }
   }
@@ -128,17 +129,10 @@ export class RuntimeSettingsService {
     });
   }
 
-  private async syncAlertmanager(reload: boolean): Promise<void> {
+  private async writeAlertmanagerConfig(): Promise<void> {
     if (!this.config.ALERTMANAGER_CONFIG_PATH) return;
     await writeFile(this.config.ALERTMANAGER_CONFIG_PATH, renderAlertmanager(this.config), "utf8");
     await chmod(this.config.ALERTMANAGER_CONFIG_PATH, 0o640);
-    if (!reload) return;
-    const response = await this.reloadAlertmanager();
-    if (!response.ok) {
-      throw Object.assign(new Error(`Alertmanager reload failed with ${response.status}`), {
-        statusCode: 502
-      });
-    }
   }
 
   private reloadAlertmanager(): Promise<Response> {
@@ -152,7 +146,10 @@ export class RuntimeSettingsService {
       } catch {
         // Alertmanager may start in parallel with the API during a deployment.
       }
-      await new Promise((resolve) => setTimeout(resolve, 1_000));
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, 1_000);
+        timer.unref();
+      });
     }
   }
 }
