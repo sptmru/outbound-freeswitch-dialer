@@ -90,6 +90,15 @@ required FREESWITCH_EXTERNAL_RTP_IP
 required TURN_URLS
 required TURN_RELAY_IP
 required COTURN_IMAGE
+required FAIL2BAN_IGNORE_IPS
+
+[[ "${FAIL2BAN_IGNORE_IPS}" != *$'\n'* && "${FAIL2BAN_IGNORE_IPS}" != *$'\r'* \
+  && "${FAIL2BAN_IGNORE_IPS}" =~ ^[A-Za-z0-9_.,:/\ -]+$ ]] \
+  || fail "FAIL2BAN_IGNORE_IPS contains unsupported characters"
+[[ "${FAIL2BAN_IGNORE_IPS}" != *"0.0.0.0/0"* && "${FAIL2BAN_IGNORE_IPS}" != *"::/0"* ]] \
+  || fail "FAIL2BAN_IGNORE_IPS must not trust every address"
+[[ " ${FAIL2BAN_IGNORE_IPS//,/ } " == *" 127.0.0.1/8 "* && " ${FAIL2BAN_IGNORE_IPS//,/ } " == *" ::1 "* ]] \
+  || fail "FAIL2BAN_IGNORE_IPS must include 127.0.0.1/8 and ::1"
 
 public_ipv4 "${FREESWITCH_EXTERNAL_SIP_IP}" \
   || fail "FREESWITCH_EXTERNAL_SIP_IP must be the literal public/Elastic IPv4 address (not auto-nat or STUN)"

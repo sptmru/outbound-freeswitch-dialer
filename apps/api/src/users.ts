@@ -4,7 +4,7 @@ import type { UserRole } from "@outbound-dialer/shared";
 import type { AppConfig } from "./config.js";
 import { decryptSecret, encryptSecret, secretNeedsReencryption } from "./auth/crypto.js";
 import { generateSecret, hashSecret } from "./auth/passwords.js";
-import { provisionAgentDirectory } from "./freeswitch/provisioning.js";
+import { provisionAgentDirectory, reloadAgentDirectories } from "./freeswitch/provisioning.js";
 
 export interface UserRecord {
   id: string;
@@ -247,6 +247,7 @@ export async function getSoftphoneProvisioningForUser(
     sipPassword,
     displayName
   });
+  await reloadAgentDirectories(config);
 
   return {
     sipUri: `sip:${agent.sip_username}@${config.FREESWITCH_DOMAIN}`,

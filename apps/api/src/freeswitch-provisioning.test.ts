@@ -11,6 +11,7 @@ import {
   ensureAgentDirectory,
   provisionAgentDirectory,
   reconcileAgentDirectories,
+  reloadAgentDirectories,
   refreshDeletedAgentRegistrations
 } from "./freeswitch/provisioning.js";
 
@@ -84,6 +85,26 @@ describe("FreeSWITCH provisioning helpers", () => {
       "sofia profile internal-webrtc flush_inbound_reg agent.remove@dialer.local"
     ]);
     assert.deepEqual(result, { commands, errors: [], skipped: false });
+  });
+
+  it("reloads provisioned agent directory XML through ESL", async () => {
+    const commands: string[] = [];
+    const config = createConfig("/tmp/outbound-dialer-test", { FREESWITCH_ESL_ENABLED: true });
+
+    const reloaded = await reloadAgentDirectories(config, async (_config, command) => {
+      commands.push(command);
+    });
+
+    assert.equal(reloaded, true);
+    assert.deepEqual(commands, ["reloadxml"]);
+  });
+
+  it("skips agent directory XML reload when ESL is disabled", async () => {
+    const reloaded = await reloadAgentDirectories(createConfig("/tmp/outbound-dialer-test"), async () => {
+      throw new Error("ESL should not be called");
+    });
+
+    assert.equal(reloaded, false);
   });
 
   it("skips deleted registration refresh when ESL is disabled", async () => {

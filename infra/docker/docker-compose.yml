@@ -321,16 +321,19 @@ services:
     cap_add:
       - NET_ADMIN
       - NET_RAW
+    entrypoint: ["/usr/local/bin/outbound-dialer-fail2ban-entrypoint.sh"]
     environment:
       TZ: ${TZ:-UTC}
       F2B_LOG_LEVEL: ${FAIL2BAN_LOG_LEVEL:-INFO}
       F2B_DB_PURGE_AGE: ${FAIL2BAN_DB_PURGE_AGE:-7d}
+      FAIL2BAN_IGNORE_IPS: ${FAIL2BAN_IGNORE_IPS:?set FAIL2BAN_IGNORE_IPS to loopback and the trusted Compose network CIDR}
     depends_on:
       freeswitch:
         condition: service_started
     volumes:
       - fail2ban_data:/data
-      - ../fail2ban/jail.d/freeswitch.conf:/data/jail.d/freeswitch.conf:ro
+      - ../fail2ban/entrypoint.sh:/usr/local/bin/outbound-dialer-fail2ban-entrypoint.sh:ro
+      - ../fail2ban/jail.d/freeswitch.conf:/etc/outbound-dialer/fail2ban/freeswitch.conf.template:ro
       - ../fail2ban/filter.d/freeswitch-sip-scan.conf:/data/filter.d/freeswitch-sip-scan.conf:ro
       - freeswitch_logs:/var/log/freeswitch:ro
 

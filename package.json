@@ -20,6 +20,7 @@
     "test:e2e": "playwright test",
     "test:freeswitch": "bash scripts/test-freeswitch-scenarios.sh",
     "test:load:desk": "node scripts/load-agent-desk.mjs",
+    "test:load:sip-rtp": "node scripts/load-sip-rtp.mjs",
     "test:load:suite": "bash scripts/run-load-suite.sh",
     "test:load:tokens": "node scripts/collect-load-agent-tokens.mjs",
     "typecheck": "npm --workspace @outbound-dialer/shared run build && npm --workspace @outbound-dialer/api run typecheck && npm --workspace @outbound-dialer/web run typecheck"

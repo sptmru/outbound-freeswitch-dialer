@@ -99,6 +99,19 @@ Monitoring is part of the main Compose deployment. `scripts/deploy.sh` renders `
 
 Set `COMPOSE_PROJECT_NAME` when deploying under a non-default project name. Alloy maps it to `MONITORING_COMPOSE_PROJECT` and uses it to avoid collecting logs from unrelated Compose projects on the host.
 
+### Fail2ban trusted proxy path
+
+`FAIL2BAN_IGNORE_IPS` must contain `127.0.0.1/8`, `::1`, and the exact CIDR of the deployment's Compose default network. nginx proxies browser WSS registrations to the host-network FreeSWITCH listener, so FreeSWITCH sees the proxy container address rather than the browser address. Without this exemption, failed browser SIP authentication can make the SIP scanner jail ban nginx with `iptables-allports` and turn `/freeswitch-ws` into a `502` for every agent.
+
+Find the current subnet before deployment:
+
+```bash
+docker network inspect "${COMPOSE_PROJECT_NAME:-docker}_default" \
+  --format '{{(index .IPAM.Config 0).Subnet}}'
+```
+
+Trust only that deployment subnet; do not use `0.0.0.0/0`, `::/0`, or all private IPv4 ranges. Recreating the fail2ban service applies the rendered jail configuration, but an already installed ban still requires an explicit operator `unbanip` after the trusted path is verified.
+
 ### Backups, retention, and media
 
 | Variable group                                                          | Purpose                                                                                                                        |

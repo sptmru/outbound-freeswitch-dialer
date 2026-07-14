@@ -179,6 +179,67 @@ Run one race/recovery drill at a time after steady-state capacity is known: SSE
 network interruption, browser reconnect, API restart, ESL reconnect, and
 FreeSWITCH restart. Restart drills are disruptive and require separate approval.
 
+## Local SIP/WebRTC/RTP Load
+
+Before involving the provider, the repository can load the actual browser media
+path without dialing any phone number. `test:load:sip-rtp` launches one real
+headless Chromium context per test agent, opens the deployed Agent Desk, obtains
+microphone media from Chromium's fake device, and registers the existing SIP.js
+client through public WSS. The controller then uses ESL to originate only:
+
+```text
+user/<validated-test-agent>@<validated-domain> &echo()
+```
+
+The customer trunk is never referenced. Each browser automatically answers, sends
+fake audio through ICE/DTLS/SRTP, receives the FreeSWITCH echo, and reports RTP
+packets, bytes, loss, jitter, and peer-connection state from WebRTC `getStats()`.
+
+Run Chromium on the separate load-generator host. ESL must remain private. If the
+generator cannot reach the target's loopback ESL, create an SSH tunnel rather
+than publishing port 8021:
+
+```bash
+ssh -N -L 18021:127.0.0.1:8021 root@dialer-server
+```
+
+In another terminal on the generator:
+
+```bash
+npx playwright install chromium
+
+export LOAD_BASE_URL="https://dialer.example.com/api"
+export LOAD_APPROVED_TARGET="$LOAD_BASE_URL"
+export LOAD_AUTH_TOKENS_FILE=/tmp/outbound-dialer-load-tokens
+export SIP_RTP_ESL_HOST=127.0.0.1
+export SIP_RTP_ESL_PORT=18021
+read -r -s -p "ESL password: " SIP_RTP_ESL_PASSWORD; echo
+export SIP_RTP_ESL_PASSWORD
+export SIP_RTP_RUN_CONFIRM=local-freeswitch-echo
+
+SIP_RTP_CONCURRENCY=5 \
+SIP_RTP_CALLS_PER_SECOND=1 \
+SIP_RTP_MEDIA_DURATION_SECONDS=30 \
+SIP_RTP_REPORT_PATH=logs/load-tests/sip-rtp-5.json \
+npm run test:load:sip-rtp
+
+unset SIP_RTP_ESL_PASSWORD
+```
+
+The defaults require packet loss <= 1% and maximum reported jitter <= 50 ms.
+Override them only through an agreed acceptance target with
+`SIP_RTP_MAX_PACKET_LOSS_RATE` and `SIP_RTP_MAX_JITTER_SECONDS`. The runner also
+requires every browser to register, every local call to establish, and two-way
+RTP packets for every call. It refuses agents with an existing product call,
+limits concurrency to 50 and CPS to 10, kills every test UUID during cleanup,
+and never writes tokens or SIP passwords to its report.
+
+This phase proves the deployed proxy WSS path, SIP REGISTER/INVITE/answer,
+ICE/DTLS/SRTP negotiation, FreeSWITCH media handling, and browser RTP flow. It
+does not prove the provider-facing SIP leg, carrier RTP, PSTN audio, DTMF, or
+provider CPS/channel capacity; those remain part of the separately approved live
+telephony phase using controlled destinations.
+
 ## Post-run Integrity Checks
 
 After allowing watchdogs and terminal events to settle, verify the dashboard and

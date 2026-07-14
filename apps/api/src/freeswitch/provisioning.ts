@@ -57,6 +57,17 @@ export async function deleteAgentDirectory(config: AppConfig, sipUsername: strin
   await rm(agentDirectoryXmlPath(config, sipUsername), { force: true });
 }
 
+export async function reloadAgentDirectories(
+  config: AppConfig,
+  sendApiCommand: FreeSwitchApiSender = sendFreeSwitchApiCommand
+): Promise<boolean> {
+  if (!config.FREESWITCH_ESL_ENABLED) {
+    return false;
+  }
+  await sendApiCommand(config, "reloadxml");
+  return true;
+}
+
 export async function refreshDeletedAgentRegistrations(
   config: AppConfig,
   sipUsernames: string[],
