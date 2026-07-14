@@ -63,10 +63,7 @@ export async function setAgentAvailability(
   return result.rows[0] ? mapAgentAvailability(result.rows[0]) : null;
 }
 
-export async function finishAgentCall(
-  queryable: Queryable,
-  agentId: string
-): Promise<void> {
+export async function finishAgentCall(queryable: Queryable, agentId: string): Promise<void> {
   await queryable.query(
     `
       update agents

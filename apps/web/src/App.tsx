@@ -370,8 +370,8 @@ export function App() {
               {desk.availability.status === "paused"
                 ? `● Paused · ${softphoneRuntime.registered ? "Phone connected" : "Phone connecting"}`
                 : softphoneRuntime.registered
-                    ? "● Ready · Phone connected"
-                    : "● Phone connecting"}
+                  ? "● Ready · Phone connected"
+                  : "● Phone connecting"}
             </strong>
             <small>
               {desk.metrics.todayCalls} calls · {desk.metrics.voicemailsDropped} VM drops

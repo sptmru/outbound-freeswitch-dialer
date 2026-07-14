@@ -147,11 +147,7 @@ async function getDefaultRecordingId(client: pg.Pool | pg.PoolClient): Promise<s
 }
 
 type CreateDialerCallFailureReason =
-  | "active_call"
-  | "agent_paused"
-  | "agent_not_registered"
-  | "lead_not_callable"
-  | "no_callable_contacts";
+  "active_call" | "agent_paused" | "agent_not_registered" | "lead_not_callable" | "no_callable_contacts";
 
 type CreateDialerCallResult =
   { ok: true; callId: string; campaignId: string } | { ok: false; reason: CreateDialerCallFailureReason };
