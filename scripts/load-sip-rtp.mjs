@@ -29,30 +29,55 @@ try {
   const registrations = await sendEslCommand(config, "api sofia status profile internal-webrtc reg").catch(
     () => null
   );
-  for (const agent of agents) {
-    agent.freeswitchRegistrationSeen = Boolean(registrations?.body.includes(agent.sipUsername));
-  }
+  await Promise.all(
+    agents.map(async (agent) => {
+      agent.freeswitchRegistrationSeen = Boolean(registrations?.body.includes(agent.sipUsername));
+      if (!agent.registered) return;
+      const [directoryDialString, registeredContact] = await Promise.all([
+        sendEslCommand(config, `api user_data ${agent.sipUsername}@${agent.domain} param dial-string`).catch(
+          () => null
+        ),
+        sendEslCommand(config, `api sofia_contact */${agent.sipUsername}@${agent.domain}`).catch(() => null)
+      ]);
+      agent.directoryDialStringPresent = Boolean(
+        directoryDialString?.body && !directoryDialString.body.startsWith("-ERR")
+      );
+      agent.registeredContactRoute = summarizeRegisteredContact(registeredContact?.body);
+      agent.registeredContactResolved = agent.registeredContactRoute.startsWith("sofia/");
+    })
+  );
 
-  for (const agent of agents) {
-    if (!agent.registered) continue;
-    agent.callUuid = randomUUID();
-    activeUuids.add(agent.callUuid);
-    const variables = [
-      `origination_uuid=${agent.callUuid}`,
-      "originate_timeout=20",
-      "ignore_early_media=true",
-      "origination_caller_id_name=Local RTP Load Test",
-      "origination_caller_id_number=0000"
-    ].join(",");
-    const command = `api bgapi originate {${variables}}user/${agent.sipUsername}@${agent.domain} &echo()`;
-    try {
-      const response = await sendEslCommand(config, command);
-      agent.originateQueued = /\+OK|Job-UUID/i.test(response.body || response.raw);
-    } catch (error) {
-      agent.error = messageOf(error);
-    }
-    await sleep(Math.ceil(1000 / config.callsPerSecond));
-  }
+  await Promise.all(
+    agents.map(async (agent, index) => {
+      if (!agent.registered) return;
+      await sleep(Math.ceil((index * 1000) / config.callsPerSecond));
+      if (!agent.registeredContactResolved) {
+        agent.error = `Registered contact is not dialable: ${agent.registeredContactRoute}`;
+        agent.browserDiagnostics = await collectBrowserDiagnostics(agent.page, agent.diagnosticEvents);
+        return;
+      }
+      agent.callUuid = randomUUID();
+      activeUuids.add(agent.callUuid);
+      const variables = [
+        `origination_uuid=${agent.callUuid}`,
+        "originate_timeout=20",
+        "ignore_early_media=true",
+        "origination_caller_id_name=RTP_Load_Test",
+        "origination_caller_id_number=0000"
+      ].join(",");
+      const command = `api originate {${variables}}user/${agent.sipUsername}@${agent.domain} &echo()`;
+      try {
+        const response = await sendEslCommand(config, command, config.callSetupTimeoutMilliseconds + 5_000);
+        agent.originateQueued = /\+OK/i.test(response.body || response.raw);
+        if (!agent.originateQueued) {
+          agent.error = `Originate returned: ${sanitizeDiagnostic(response.body || response.raw)}`;
+        }
+      } catch (error) {
+        agent.error = `Originate failed: ${messageOf(error)}`;
+        agent.browserDiagnostics = await collectBrowserDiagnostics(agent.page, agent.diagnosticEvents);
+      }
+    })
+  );
 
   await Promise.all(
     agents.map(async (agent) => {
@@ -69,6 +94,7 @@ try {
         agent.callEstablished = true;
       } catch (error) {
         agent.error = agent.error ?? `Call did not establish: ${messageOf(error)}`;
+        agent.browserDiagnostics = await collectBrowserDiagnostics(agent.page, agent.diagnosticEvents);
       }
     })
   );
@@ -99,6 +125,9 @@ const results = agents.map((agent) => ({
   sipUsername: agent.sipUsername,
   registered: agent.registered,
   freeswitchRegistrationSeen: agent.freeswitchRegistrationSeen,
+  directoryDialStringPresent: agent.directoryDialStringPresent,
+  registeredContactResolved: agent.registeredContactResolved,
+  registeredContactRoute: agent.registeredContactRoute,
   originateQueued: agent.originateQueued,
   callEstablished: agent.callEstablished,
   rtp: agent.rtp,
@@ -199,13 +228,17 @@ async function preflightAgent(token, index, currentConfig) {
     callUuid: null,
     rtp: null,
     freeswitchRegistrationSeen: false,
+    directoryDialStringPresent: false,
+    registeredContactResolved: false,
+    registeredContactRoute: "not checked",
     browserDiagnostics: null,
+    diagnosticEvents: { console: [], pageErrors: [], requestFailures: [], webSockets: [] },
     error: null
   };
 }
 
 async function registerBrowserAgent(browserInstance, agent, currentConfig) {
-  const events = { console: [], pageErrors: [], requestFailures: [], webSockets: [] };
+  const events = agent.diagnosticEvents;
   try {
     const context = await browserInstance.newContext({ permissions: ["microphone"] });
     agent.context = context;
@@ -312,6 +345,12 @@ async function collectBrowserDiagnostics(page, events) {
         "● Mic allowed",
         "● Mic blocked"
       ].filter((label) => bodyText.includes(label));
+      const peerConnections = (globalThis.__outboundDialerLoadPeerConnections ?? []).map((connection) => ({
+        connectionState: connection.connectionState,
+        iceConnectionState: connection.iceConnectionState,
+        iceGatheringState: connection.iceGatheringState,
+        signalingState: connection.signalingState
+      }));
       return {
         url: globalThis.location?.href,
         title: globalThis.document.title,
@@ -321,7 +360,8 @@ async function collectBrowserDiagnostics(page, events) {
         authStatus: await requestStatus("/api/auth/me"),
         provisioningStatus: await requestStatus("/api/agent/softphone/provisioning"),
         loginScreenVisible: bodyText.includes("Outbound calling workspace"),
-        phoneStates
+        phoneStates,
+        peerConnections
       };
     });
   } catch (error) {
@@ -482,12 +522,12 @@ function deriveAppUrl(apiUrl) {
   return apiUrl.toString().replace(/\/$/, "");
 }
 
-async function sendEslCommand(currentConfig, command) {
+async function sendEslCommand(currentConfig, command, timeoutMilliseconds = 5_000) {
   return new Promise((resolvePromise, rejectPromise) => {
     const socket = net.createConnection({
       host: currentConfig.eslHost,
       port: currentConfig.eslPort,
-      timeout: 5_000
+      timeout: timeoutMilliseconds
     });
     let stage = "auth";
     let buffer = "";
@@ -594,6 +634,15 @@ function sanitizeDiagnostic(value) {
     .replace(/Bearer\s+\S+/gi, "Bearer [redacted]")
     .replace(/([?&](?:token|access_token)=)[^&\s]+/gi, "$1[redacted]")
     .slice(0, 500);
+}
+
+function summarizeRegisteredContact(value) {
+  const contact = String(value ?? "").trim();
+  if (!contact) return "empty response";
+  if (/^(?:error\/|-ERR)/i.test(contact)) return sanitizeDiagnostic(contact);
+  const route = contact.match(/sofia\/[^/\s,]+/i)?.[0];
+  if (!route) return `unexpected response: ${sanitizeDiagnostic(contact)}`;
+  return `${route.toLowerCase()} (fs_path=${/\bfs_path=/i.test(contact) ? "yes" : "no"})`;
 }
 
 function pushDiagnostic(target, value) {

@@ -12,6 +12,12 @@ const scriptPath = join(rootDirectory, "scripts", "load-sip-rtp.mjs");
 test("SIP/RTP load script is hard-wired to local FreeSWITCH echo", async () => {
   const source = await readFile(scriptPath, "utf8");
   assert.match(source, /user\/\$\{agent\.sipUsername\}@\$\{agent\.domain\} &echo\(\)/);
+  assert.match(source, /api originate \{\$\{variables\}\}user\//);
+  assert.doesNotMatch(source, /api bgapi originate/);
+  assert.match(source, /origination_caller_id_name=RTP_Load_Test/);
+  assert.doesNotMatch(source, /origination_caller_id_name=Local RTP Load Test/);
+  assert.match(source, /api sofia_contact \*\/\$\{agent\.sipUsername\}@\$\{agent\.domain\}/);
+  assert.match(source, /registeredContactResolved/);
   assert.doesNotMatch(source, /sofia\/(?:external|gateway)/);
   assert.match(source, /SIP_RTP_RUN_CONFIRM/);
 });
