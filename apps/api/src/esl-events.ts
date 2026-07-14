@@ -507,6 +507,17 @@ async function persistFreeSwitchEvent(config: AppConfig, pool: pg.Pool, frame: E
       return;
     }
     if (isVoicemailDropActiveState(current.state)) {
+      const normalHangup = ["NORMAL_CLEARING", "ORIGINATOR_CANCEL"].includes(
+        frame.headers["hangup-cause"]?.toUpperCase() ?? ""
+      );
+      if (normalHangup) {
+        await finalizeCompletedVoicemailPlayback(config, pool, callId, legUuid, {
+          headers: frame.headers,
+          body: frame.body,
+          source: "freeswitch_terminal_event"
+        });
+        return;
+      }
       await finalizeIncompleteVoicemailPlayback(config, pool, {
         agentId: current.agent_id,
         agentReleased: current.state === "agent_released",
@@ -543,7 +554,7 @@ async function persistFreeSwitchEvent(config: AppConfig, pool: pg.Pool, frame: E
     }
     const agentId = updated.rows[0]?.agent_id as string | null | undefined;
     if (agentId) {
-      await finishAgentCall(pool, agentId, config.AGENT_WRAP_UP_SECONDS);
+      await finishAgentCall(pool, agentId);
     }
     await pool.query(
       `
@@ -1016,7 +1027,7 @@ async function releaseAgentAfterVoicemailPlaybackStarts(
     [input.callId]
   );
   if (input.agentId) {
-    await finishAgentCall(pool, input.agentId, config.AGENT_WRAP_UP_SECONDS, { skipWrapUp: true });
+    await finishAgentCall(pool, input.agentId);
   }
 }
 
@@ -1092,7 +1103,7 @@ async function finalizeCompletedVoicemailPlayback(
       );
     }
     if (call.agent_id && !call.agent_released_at) {
-      await finishAgentCall(client, call.agent_id, config.AGENT_WRAP_UP_SECONDS);
+      await finishAgentCall(client, call.agent_id);
     }
     await client.query("commit");
   } catch (error) {
@@ -1190,7 +1201,7 @@ async function finalizeIncompleteVoicemailPlayback(
       );
     }
     if (input.agentId && !input.agentReleased) {
-      await finishAgentCall(client, input.agentId, config.AGENT_WRAP_UP_SECONDS);
+      await finishAgentCall(client, input.agentId);
     }
     await client.query("commit");
   } catch (error) {
@@ -1384,7 +1395,7 @@ async function persistBackgroundJobEvent(config: AppConfig, pool: pg.Pool, frame
     [row.call_id]
   );
   if (row.agent_id) {
-    await finishAgentCall(pool, row.agent_id, config.AGENT_WRAP_UP_SECONDS);
+    await finishAgentCall(pool, row.agent_id);
   }
   await pool.query(
     `
@@ -1634,7 +1645,7 @@ async function finalizeMissingActiveCall(
     );
   }
   if (call.agent_id) {
-    await finishAgentCall(pool, call.agent_id, config.AGENT_WRAP_UP_SECONDS);
+    await finishAgentCall(pool, call.agent_id);
   }
 }
 

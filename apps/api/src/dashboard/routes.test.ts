@@ -388,17 +388,10 @@ describe("dashboard route helpers", () => {
       "The browser phone must be connected before starting a call"
     );
     assert.equal(createDialerCallFailureMessage("agent_paused"), "Resume calling before starting a call");
-    assert.equal(
-      createDialerCallFailureMessage("agent_wrap_up"),
-      "Finish wrap-up or mark yourself ready before starting a call"
-    );
     assert.equal(createDialerCallFailureMessage("lead_not_callable"), "Lead is not callable");
   });
 
-  for (const [availabilityStatus, reason] of [
-    ["paused", "agent_paused"],
-    ["wrap_up", "agent_wrap_up"]
-  ] as const) {
+  for (const [availabilityStatus, reason] of [["paused", "agent_paused"]] as const) {
     it(`refuses to reserve a call while the agent is ${availabilityStatus}`, async () => {
       const queries: string[] = [];
       const pool = createTransactionalPool({

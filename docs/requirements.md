@@ -30,10 +30,9 @@ This document is the current product and operational contract. Items described a
 
 ## Agent Availability
 
-- Agent availability is independent from browser-phone registration and has three server-owned states: `available`, `paused`, and `wrap_up`.
+- Agent availability is independent from browser-phone registration. Agents use `available` and `paused`; legacy `wrap_up` rows are normalized to `available`.
 - Agents and admins using Agent Desk can pause or resume themselves through `PATCH /agent/availability`; availability cannot be changed during an active interactive call.
-- Paused agents cannot start campaign, lead, or manual calls. A completed wrap-up expires automatically on the backend, and the operator may select **Ready now** to end it early.
-- Ordinary call completion/failure starts `AGENT_WRAP_UP_SECONDS` of wrap-up (30 seconds by default, `0` to disable) when the phone remains registered.
+- Paused agents cannot start campaign, lead, or manual calls. Ending a call or launching a voicemail drop returns the agent to `available` immediately; calls are always started manually.
 - Confirmed voicemail agent release is immediately available for the next interactive call. A pause selected while background voicemail continues must remain paused when that background job later completes.
 
 ## Telephony

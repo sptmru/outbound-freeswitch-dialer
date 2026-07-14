@@ -22,7 +22,6 @@ export async function getAgentAvailability(queryable: Queryable, userId: string)
           updated_at = now()
       where user_id = $1
         and availability_status = 'wrap_up'
-        and wrap_up_until <= now()
     `,
     [userId]
   );
@@ -66,25 +65,17 @@ export async function setAgentAvailability(
 
 export async function finishAgentCall(
   queryable: Queryable,
-  agentId: string,
-  wrapUpSeconds: number | undefined,
-  options: { skipWrapUp?: boolean } = {}
+  agentId: string
 ): Promise<void> {
-  const seconds = Math.max(0, wrapUpSeconds ?? 0);
   await queryable.query(
     `
       update agents
       set status = case when registered then 'ready' else 'offline' end,
           availability_status = case
             when availability_status = 'paused' then 'paused'
-            when $2::boolean then 'available'
-            when registered and $3::integer > 0 then 'wrap_up'
             else 'available'
           end,
-          wrap_up_until = case
-            when $2::boolean or availability_status = 'paused' or not registered or $3::integer = 0 then null
-            else now() + make_interval(secs => $3::integer)
-          end,
+          wrap_up_until = null,
           updated_at = now()
       where id = $1
         and not exists (
@@ -95,7 +86,7 @@ export async function finishAgentCall(
             and active_call.state not in ('completed', 'failed', 'canceled', 'agent_released')
         )
     `,
-    [agentId, Boolean(options.skipWrapUp), seconds]
+    [agentId]
   );
 }
 

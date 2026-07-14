@@ -167,7 +167,7 @@ describe("App Agent Desk empty states", () => {
     expect(screen.getAllByText("Paused").length).toBeGreaterThan(0);
   });
 
-  it("shows wrap-up as finishing notes and keeps the next call disabled", async () => {
+  it("treats legacy wrap-up state as ready for the next call", async () => {
     apiMocks.useSoftphoneRegistration.mockReturnValue({ ...softphoneRuntime, registered: true });
     apiMocks.fetchAgentDesk.mockResolvedValue(
       deskResponse({
@@ -187,9 +187,9 @@ describe("App Agent Desk empty states", () => {
 
     render(<App />);
 
-    expect(await screen.findByText("Finishing notes")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Ready now" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Start next call/ })).toBeDisabled();
+    expect((await screen.findAllByText("Ready")).length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: "Pause" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Start next call/ })).toBeEnabled();
   });
 
   it("renders the simplified next lead recommendation", async () => {

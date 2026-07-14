@@ -5,7 +5,6 @@ import type { AppConfig } from "./config.js";
 import { __testing, reconcileActiveCalls } from "./esl-events.js";
 
 const config = {
-  AGENT_WRAP_UP_SECONDS: 30,
   FREESWITCH_DOMAIN: "dialer.local",
   CALL_RECORDINGS_STORAGE_DIR: "/tmp"
 } as AppConfig;
@@ -412,6 +411,52 @@ describe("FreeSWITCH event helpers", () => {
     assert.ok(queries.some((query) => /update\s+agents/.test(query.sql)));
   });
 
+  it("keeps a normally ended voicemail drop as voicemail dropped", async () => {
+    const queries: Array<{ params: readonly unknown[]; sql: string }> = [];
+    const pool = createTransactionalQueryPool((sql, params) => {
+      queries.push({ sql, params });
+      if (sql.includes("select agent_id, answered_at, contact_id, state, voicemail_signal_status")) {
+        return rows([
+          {
+            agent_id: "agent-1",
+            answered_at: new Date(),
+            contact_id: "contact-1",
+            state: "agent_released",
+            voicemail_signal_status: "detected"
+          }
+        ]);
+      }
+      if (sql.includes("update calls") && sql.includes("outcome = 'voicemail_dropped'")) {
+        return rows([
+          {
+            agent_id: "agent-1",
+            agent_released_at: new Date(),
+            contact_id: "contact-1"
+          }
+        ]);
+      }
+      return rows([]);
+    });
+
+    await __testing.persistFreeSwitchEvent(config, pool, {
+      body: "",
+      headers: {
+        "event-name": "CHANNEL_HANGUP",
+        "hangup-cause": "NORMAL_CLEARING",
+        "unique-id": "22222222-2222-4222-8222-222222222222",
+        variable_outbound_dialer_leg_type: "customer",
+        variable_outbound_dialer_call_id: "11111111-1111-4111-8111-111111111111"
+      }
+    });
+
+    assert.ok(
+      queries.some(
+        (query) => query.sql.includes("update calls") && query.sql.includes("outcome = 'voicemail_dropped'")
+      )
+    );
+    assert.ok(!queries.some((query) => query.params.includes("customer_hung_up")));
+  });
+
   it("maps agent and customer answer events to the correct call states", () => {
     assert.equal(__testing.mapEventToCallState("CHANNEL_ANSWER", undefined, "agent"), "agent_answered");
     assert.equal(__testing.mapEventToCallState("CHANNEL_ANSWER", undefined, "customer"), "bridged");
@@ -591,7 +636,7 @@ describe("FreeSWITCH event helpers", () => {
     const callUpdate = queries.find((query) => query.sql.includes("update calls"));
     assert.doesNotMatch(callUpdate?.sql ?? "", /ended_at\s*=/);
     const availabilityUpdate = queries.find((query) => query.sql.includes("availability_status = case"));
-    assert.deepEqual(availabilityUpdate?.params, ["agent-1", true, 30]);
+    assert.deepEqual(availabilityUpdate?.params, ["agent-1"]);
   });
 
   it("finalizes a voicemail drop only after the completion event", async () => {

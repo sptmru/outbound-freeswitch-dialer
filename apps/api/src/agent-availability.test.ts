@@ -4,7 +4,7 @@ import type pg from "pg";
 import { finishAgentCall, getAgentAvailability, setAgentAvailability } from "./agent-availability.js";
 
 describe("agent availability", () => {
-  it("expires completed wrap-up before returning desk availability", async () => {
+  it("clears legacy wrap-up before returning desk availability", async () => {
     const queries: Array<{ params: readonly unknown[]; sql: string }> = [];
     const pool = queryPool((sql, params) => {
       queries.push({ sql, params });
@@ -18,7 +18,7 @@ describe("agent availability", () => {
 
     assert.deepEqual(availability, { status: "available", wrapUpUntil: null });
     assert.match(queries[0]?.sql ?? "", /availability_status = 'wrap_up'/);
-    assert.match(queries[0]?.sql ?? "", /wrap_up_until <= now\(\)/);
+    assert.doesNotMatch(queries[0]?.sql ?? "", /wrap_up_until <= now\(\)/);
   });
 
   it("does not change availability while an interactive call is active", async () => {
@@ -31,18 +31,18 @@ describe("agent availability", () => {
     assert.equal(await setAgentAvailability(pool, "agent-1", "paused"), null);
   });
 
-  it("starts configured wrap-up after an ordinary terminal call", async () => {
+  it("returns the agent to available after an ordinary terminal call", async () => {
     const queries: Array<{ params: readonly unknown[]; sql: string }> = [];
     const pool = queryPool((sql, params) => {
       queries.push({ sql, params });
       return rows([]);
     });
 
-    await finishAgentCall(pool, "agent-1", 30);
+    await finishAgentCall(pool, "agent-1");
 
-    assert.deepEqual(queries[0]?.params, ["agent-1", false, 30]);
-    assert.match(queries[0]?.sql ?? "", /then 'wrap_up'/);
-    assert.match(queries[0]?.sql ?? "", /make_interval\(secs => \$3::integer\)/);
+    assert.deepEqual(queries[0]?.params, ["agent-1"]);
+    assert.doesNotMatch(queries[0]?.sql ?? "", /then 'wrap_up'/);
+    assert.match(queries[0]?.sql ?? "", /wrap_up_until = null/);
   });
 
   it("preserves a pause selected while background voicemail is still playing", async () => {
@@ -52,9 +52,9 @@ describe("agent availability", () => {
       return rows([]);
     });
 
-    await finishAgentCall(pool, "agent-1", 30, { skipWrapUp: true });
+    await finishAgentCall(pool, "agent-1");
 
-    assert.ok(sql.indexOf("availability_status = 'paused'") < sql.indexOf("$2::boolean"));
+    assert.match(sql, /when availability_status = 'paused' then 'paused'/);
   });
 });
 

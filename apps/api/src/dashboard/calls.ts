@@ -149,7 +149,6 @@ async function getDefaultRecordingId(client: pg.Pool | pg.PoolClient): Promise<s
 type CreateDialerCallFailureReason =
   | "active_call"
   | "agent_paused"
-  | "agent_wrap_up"
   | "agent_not_registered"
   | "lead_not_callable"
   | "no_callable_contacts";
@@ -197,7 +196,6 @@ export async function createDialerCall(
             updated_at = now()
         where id = $1
           and availability_status = 'wrap_up'
-          and wrap_up_until <= now()
       `,
       [input.agentId]
     );
@@ -213,10 +211,6 @@ export async function createDialerCall(
     if (agentState.availability_status === "paused") {
       await client.query("rollback");
       return { ok: false, reason: "agent_paused" };
-    }
-    if (agentState.availability_status === "wrap_up") {
-      await client.query("rollback");
-      return { ok: false, reason: "agent_wrap_up" };
     }
     const activeCall = await client.query<{ id: string }>(
       `
@@ -403,9 +397,6 @@ export function createDialerCallFailureMessage(reason: CreateDialerCallFailureRe
   if (reason === "agent_paused") {
     return "Resume calling before starting a call";
   }
-  if (reason === "agent_wrap_up") {
-    return "Finish wrap-up or mark yourself ready before starting a call";
-  }
   if (reason === "no_callable_contacts") {
     return "No callable contacts are available";
   }
@@ -515,7 +506,7 @@ export async function syncFreeSwitchOriginate(
       `,
       [input.callId]
     );
-    await finishAgentCall(pool, input.agentId, config.AGENT_WRAP_UP_SECONDS);
+    await finishAgentCall(pool, input.agentId);
     await pool.query(
       `
         update contacts
@@ -687,7 +678,7 @@ async function failDialerCallFromFreeSwitch(
     `,
     [callId]
   );
-  await finishAgentCall(pool, agentId, config.AGENT_WRAP_UP_SECONDS);
+  await finishAgentCall(pool, agentId);
   await pool.query(
     `
       update contacts
@@ -927,6 +918,7 @@ export async function dropVoicemailForCall(
     await sendApiCommand(config, `uuid_setvar ${customerLegUuid} voicemail_drop_call_id ${safeCallId}`);
     await sendApiCommand(config, `uuid_setvar ${customerLegUuid} voicemail_drop_file ${voicemailPath}`);
     await sendApiCommand(config, `uuid_transfer ${customerLegUuid} voicemail_drop XML default`);
+    await releaseAgentAfterVoicemailDropTransfer(pool, config, callId, claimed, sendApiCommand);
   } catch (error) {
     const message = error instanceof Error ? error.message : "FreeSWITCH voicemail drop failed";
     const explicitCommandRejection = message.trimStart().startsWith("-ERR");
@@ -962,6 +954,79 @@ export async function dropVoicemailForCall(
   }
 
   return { ok: true };
+}
+
+async function releaseAgentAfterVoicemailDropTransfer(
+  pool: pg.Pool,
+  config: AppConfig,
+  callId: string,
+  call: Pick<VoicemailDropCallRow, "agent_id" | "agent_leg_uuid" | "customer_leg_uuid">,
+  sendApiCommand: typeof sendFreeSwitchApiCommand
+): Promise<void> {
+  const releaseResult: Record<string, unknown> = {};
+  let releaseConfirmed = false;
+  if (call.agent_leg_uuid) {
+    try {
+      const response = await sendApiCommand(config, `uuid_kill ${call.agent_leg_uuid}`);
+      releaseResult.response = response.body.trim();
+      releaseConfirmed = true;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      releaseResult.message = message;
+      releaseConfirmed = /no such channel/i.test(message);
+    }
+  } else {
+    releaseResult.message = "Agent leg UUID was not persisted";
+  }
+
+  if (!releaseConfirmed) {
+    await insertCallEvent(pool, {
+      agentId: call.agent_id,
+      callId,
+      eventType: "agent_release_failed",
+      state: "voicemail_drop_requested",
+      apiCommandName: "uuid_kill",
+      agentLegUuid: call.agent_leg_uuid ?? undefined,
+      customerLegUuid: call.customer_leg_uuid ?? undefined,
+      raw: releaseResult
+    });
+    return;
+  }
+
+  await pool.query(
+    `
+      insert into call_events (
+        call_id, agent_id, event_type, state, api_command_name,
+        agent_leg_uuid, customer_leg_uuid, raw_json
+      )
+      values ($1, $2, 'agent_released', 'agent_released', 'uuid_kill', $3, $4, $5::jsonb)
+      on conflict do nothing
+    `,
+    [callId, call.agent_id, call.agent_leg_uuid, call.customer_leg_uuid, JSON.stringify(releaseResult)]
+  );
+  await pool.query(
+    `
+      update calls
+      set state = 'agent_released',
+          agent_released_at = coalesce(agent_released_at, now()),
+          updated_at = now()
+      where id = $1
+        and ended_at is null
+        and state in ('voicemail_drop_requested', 'voicemail_playback_started', 'agent_released')
+    `,
+    [callId]
+  );
+  await pool.query(
+    `
+      update call_legs
+      set state = 'ended',
+          ended_at = coalesce(ended_at, now())
+      where call_id = $1
+        and type = 'agent'
+    `,
+    [callId]
+  );
+  await finishAgentCall(pool, call.agent_id);
 }
 
 interface VoicemailDropCallRow {
@@ -1182,7 +1247,7 @@ export async function endDialerCall(
       );
     }
 
-    await finishAgentCall(client, row.agent_id, config.AGENT_WRAP_UP_SECONDS);
+    await finishAgentCall(client, row.agent_id);
     await client.query("commit");
     await killFreeSwitchLeg(pool, config, callId, row.agent_id, { type: "agent", uuid: row.agent_leg_uuid });
     await killFreeSwitchLeg(pool, config, callId, row.agent_id, {

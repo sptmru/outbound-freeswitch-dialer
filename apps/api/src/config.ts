@@ -29,7 +29,6 @@ const envSchema = z.object({
   LOGIN_RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().positive().default(300),
   CONTACT_MAX_ATTEMPTS: z.coerce.number().int().positive().max(100).default(3),
   CONTACT_RETRY_DELAY_SECONDS: z.coerce.number().int().nonnegative().max(604800).default(900),
-  AGENT_WRAP_UP_SECONDS: z.coerce.number().int().nonnegative().max(3600).default(30),
   ORIGINATE_AGENT_WATCHDOG_SECONDS: z.coerce.number().int().min(30).max(120).default(35),
   ORIGINATE_CUSTOMER_WATCHDOG_SECONDS: z.coerce.number().int().min(45).max(180).default(50),
   ORIGINATE_WATCHDOG_RETRY_SECONDS: z.coerce.number().int().min(1).max(60).default(5),

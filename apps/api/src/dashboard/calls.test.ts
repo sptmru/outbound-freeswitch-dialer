@@ -106,7 +106,8 @@ describe("call lifecycle", () => {
     assert.deepEqual(commands, [
       `uuid_setvar ${customerLegUuid} voicemail_drop_call_id ${callId}`,
       `uuid_setvar ${customerLegUuid} voicemail_drop_file /recordings/default.wav`,
-      `uuid_transfer ${customerLegUuid} voicemail_drop XML default`
+      `uuid_transfer ${customerLegUuid} voicemail_drop XML default`,
+      `uuid_kill ${agentLegUuid}`
     ]);
     const claim = clientQueries.find((query) => query.sql.includes("update calls"));
     assert.match(claim?.sql ?? "", /state = 'voicemail_drop_requested'/);
@@ -116,7 +117,8 @@ describe("call lifecycle", () => {
     assert.ok(!clientQueries.some((query) => query.sql.includes("update call_legs")));
     assert.ok(!clientQueries.some((query) => query.sql.includes("update agents")));
     assert.ok(!clientQueries.some((query) => query.sql.includes("update contacts")));
-    assert.ok(!poolQueries.some((query) => query.sql.includes("uuid_kill")));
+    assert.ok(poolQueries.some((query) => query.sql.includes("update call_legs")));
+    assert.ok(poolQueries.some((query) => query.sql.includes("update agents")));
   });
 
   it("treats a repeated voicemail drop request as idempotent", async () => {

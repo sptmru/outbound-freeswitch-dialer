@@ -369,9 +369,7 @@ export function App() {
             <strong>
               {desk.availability.status === "paused"
                 ? `● Paused · ${softphoneRuntime.registered ? "Phone connected" : "Phone connecting"}`
-                : desk.availability.status === "wrap_up"
-                  ? `● Finishing notes · ${softphoneRuntime.registered ? "Phone connected" : "Phone connecting"}`
-                  : softphoneRuntime.registered
+                : softphoneRuntime.registered
                     ? "● Ready · Phone connected"
                     : "● Phone connecting"}
             </strong>
@@ -995,25 +993,7 @@ function leadAvailabilityCopy(status: LeadSummary["status"]): string {
 function useEffectiveAvailability(
   availability: AgentDeskResponse["availability"]
 ): AgentDeskResponse["availability"]["status"] {
-  const [now, setNow] = useState(() => Date.now());
-
-  useEffect(() => {
-    setNow(Date.now());
-    if (availability.status !== "wrap_up" || !availability.wrapUpUntil) {
-      return;
-    }
-    const timer = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(timer);
-  }, [availability.status, availability.wrapUpUntil]);
-
-  if (
-    availability.status === "wrap_up" &&
-    availability.wrapUpUntil &&
-    new Date(availability.wrapUpUntil).getTime() <= now
-  ) {
-    return "available";
-  }
-  return availability.status;
+  return availability.status === "wrap_up" ? "available" : availability.status;
 }
 
 function callStartBlockedMessage(desk: AgentDeskResponse, softphone: SoftphoneRuntime): string {
@@ -1023,7 +1003,7 @@ function callStartBlockedMessage(desk: AgentDeskResponse, softphone: SoftphoneRu
   if (desk.availability.status === "paused") {
     return "Resume calling before starting a call";
   }
-  return "Finish your notes or mark yourself ready before starting a call";
+  return "Calling is not available yet";
 }
 
 function AvailabilityControl({
@@ -1039,9 +1019,8 @@ function AvailabilityControl({
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const paused = status === "paused";
-  const wrappingUp = status === "wrap_up";
-  const statusLabel = paused ? "Paused" : wrappingUp ? "Finishing notes" : "Ready";
-  const actionLabel = status === "available" ? "Pause" : paused ? "Resume calling" : "Ready now";
+  const statusLabel = paused ? "Paused" : "Ready";
+  const actionLabel = paused ? "Resume calling" : "Pause";
 
   async function toggleAvailability() {
     setPending(true);
