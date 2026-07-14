@@ -122,8 +122,7 @@ function readNavigationState(): { campaignId: string | null; view: View } {
     (Object.entries(viewPaths).find(([, path]) => path === normalizedPath)?.[0] as View | undefined) ??
     "desk";
   return {
-    campaignId:
-      new URLSearchParams(window.location.search).get("campaignId") ?? readStoredCampaignId(),
+    campaignId: new URLSearchParams(window.location.search).get("campaignId") ?? readStoredCampaignId(),
     view
   };
 }
