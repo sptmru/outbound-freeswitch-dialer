@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type pg from "pg";
+import type { AppConfig } from "./config.js";
 import {
   __testing,
   configureFreeSwitchEventQueueMetrics,
@@ -50,5 +51,30 @@ describe("application metrics", () => {
     assert.match(metrics, /outbound_dialer_esl_persistence_queue_depth 3/);
     assert.match(metrics, /outbound_dialer_esl_persistence_retries_total [1-9][0-9]*/);
     assert.match(metrics, /outbound_dialer_esl_persistence_overflows_total [1-9][0-9]*/);
+  });
+
+  it("exports FreeSWITCH active channels and registrations", async () => {
+    const commands: string[] = [];
+    const config = { FREESWITCH_ESL_ENABLED: true } as AppConfig;
+
+    await __testing.refreshFreeSwitchRuntimeMetrics(config, async (_config, command) => {
+      commands.push(command);
+      return {
+        body: command === "show channels count" ? "\n5 total.\n" : "\n7 total.\n",
+        headers: {},
+        raw: ""
+      };
+    });
+
+    const metrics = await __testing.metrics();
+    assert.deepEqual(commands, ["show channels count", "show registrations count"]);
+    assert.match(metrics, /outbound_dialer_freeswitch_active_channels 5/);
+    assert.match(metrics, /outbound_dialer_freeswitch_registrations 7/);
+  });
+
+  it("parses FreeSWITCH count responses defensively", () => {
+    assert.equal(__testing.parseFreeSwitchCount("0 total."), 0);
+    assert.equal(__testing.parseFreeSwitchCount("\n123 total.\n"), 123);
+    assert.equal(__testing.parseFreeSwitchCount("-ERR command failed"), 0);
   });
 });

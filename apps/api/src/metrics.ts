@@ -43,6 +43,14 @@ const registeredAgents = gauge(
   "outbound_dialer_registered_agents",
   "Agents currently registered with FreeSWITCH."
 );
+const freeSwitchActiveChannels = gauge(
+  "outbound_dialer_freeswitch_active_channels",
+  "Current channels reported by FreeSWITCH."
+);
+const freeSwitchRegistrations = gauge(
+  "outbound_dialer_freeswitch_registrations",
+  "Current registrations reported by FreeSWITCH."
+);
 const totalAgents = gauge("outbound_dialer_agents", "Agents currently stored in PostgreSQL.");
 const callsAttemptedWindow = gauge(
   "outbound_dialer_calls_attempted_window",
@@ -192,7 +200,8 @@ export function registerMetrics(app: FastifyInstance, config: AppConfig, pool: p
     pcapCaptureEnabled.set(config.PCAP_CAPTURE_ENABLED ? 1 : 0);
     await Promise.all([
       refreshDatabaseMetrics(pool, config.MONITORING_STUCK_CALL_SECONDS),
-      refreshSipTrunkMetrics(config)
+      refreshSipTrunkMetrics(config),
+      refreshFreeSwitchRuntimeMetrics(config)
     ]);
     return reply.header("Content-Type", registry.contentType).send(await registry.metrics());
   });
@@ -332,6 +341,42 @@ async function refreshSipTrunkMetrics(config: AppConfig): Promise<void> {
   }
 }
 
+async function refreshFreeSwitchRuntimeMetrics(
+  config: AppConfig,
+  sendApiCommand: typeof sendFreeSwitchApiCommand = sendFreeSwitchApiCommand
+): Promise<void> {
+  if (!config.FREESWITCH_ESL_ENABLED) {
+    freeSwitchActiveChannels.set(0);
+    freeSwitchRegistrations.set(0);
+    return;
+  }
+
+  const [channels, registrations] = await Promise.all([
+    readFreeSwitchCount(config, "show channels count", sendApiCommand),
+    readFreeSwitchCount(config, "show registrations count", sendApiCommand)
+  ]);
+  freeSwitchActiveChannels.set(channels);
+  freeSwitchRegistrations.set(registrations);
+}
+
+async function readFreeSwitchCount(
+  config: AppConfig,
+  command: string,
+  sendApiCommand: typeof sendFreeSwitchApiCommand
+): Promise<number> {
+  try {
+    const response = await sendApiCommand(config, command);
+    return parseFreeSwitchCount(response.body || response.raw);
+  } catch {
+    return 0;
+  }
+}
+
+function parseFreeSwitchCount(value: string): number {
+  const match = value.match(/(?:^|\n)\s*(\d+)\s+total\.\s*(?:$|\n)/i);
+  return match ? Number(match[1]) : 0;
+}
+
 function gauge(name: string, help: string): Gauge {
   return new Gauge({ name, help, registers: [registry] });
 }
@@ -352,6 +397,8 @@ function toNumber(value: string | undefined): number {
 export const __testing = {
   metrics: () => registry.metrics(),
   normalizeEventName,
+  parseFreeSwitchCount,
   refreshDatabaseMetrics,
+  refreshFreeSwitchRuntimeMetrics,
   toNumber
 };

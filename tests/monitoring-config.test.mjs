@@ -26,6 +26,22 @@ test("monitoring dashboard provisions the application link and PCAP panels", () 
   );
 });
 
+test("monitoring dashboard includes FreeSWITCH runtime counters", () => {
+  const dashboard = JSON.parse(
+    readFileSync(join(root, "monitoring/grafana/dashboards/outbound-dialer-overview.json"), "utf8")
+  );
+  const panels = new Map(dashboard.panels.map((panel) => [panel.title, panel]));
+
+  assert.equal(
+    panels.get("FreeSWITCH active channels")?.targets[0]?.expr,
+    "outbound_dialer_freeswitch_active_channels"
+  );
+  assert.equal(
+    panels.get("FreeSWITCH registrations")?.targets[0]?.expr,
+    "outbound_dialer_freeswitch_registrations"
+  );
+});
+
 test("only Prometheus receives the lifecycle feature flag", () => {
   const compose = readFileSync(join(root, "infra/docker/docker-compose.yml"), "utf8");
   const prometheus = compose.slice(compose.indexOf("  prometheus:"), compose.indexOf("  alertmanager:"));

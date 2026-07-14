@@ -139,8 +139,9 @@ Watch at least:
 - SSE/API errors and PostgreSQL live-event listener reconnects in logs;
 - `outbound_dialer_esl_listener_connected`, queue depth/capacity, retries, and
   overflows (they should remain quiet in the read-only phase);
-- registered agents, active calls, trunk readiness, packet-capture storage, and
-  host disk/inode usage;
+- registered agents, product active calls, FreeSWITCH active channels and
+  registrations, trunk readiness, packet-capture storage, and host disk/inode
+  usage;
 - generator CPU, open files, network errors, and latency, so a weak generator is
   not mistaken for a server limit.
 
@@ -239,6 +240,13 @@ ICE/DTLS/SRTP negotiation, FreeSWITCH media handling, and browser RTP flow. It
 does not prove the provider-facing SIP leg, carrier RTP, PSTN audio, DTMF, or
 provider CPS/channel capacity; those remain part of the separately approved live
 telephony phase using controlled destinations.
+
+During this phase, use the Grafana `FreeSWITCH active channels` and `FreeSWITCH
+registrations` panels for the live PBX counts. The existing `Active calls` panel
+is intentionally database-backed and counts only non-terminal product `calls`
+rows, so direct ESL echo sessions do not appear there. At steady state, the
+FreeSWITCH panels should track the requested test concurrency and return to the
+pre-test baseline after browser and UUID cleanup.
 
 ## Post-run Integrity Checks
 
