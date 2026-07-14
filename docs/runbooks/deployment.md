@@ -9,7 +9,7 @@ This runbook does not configure or change the host firewall or host-published po
 ## Prerequisites
 
 - Docker Engine/Compose plugin, Node.js 22, npm, curl, OpenSSL, Git, cron, and sufficient disk for a backup plus image build. The AWS CLI is required when `BACKUP_S3_URI` is configured.
-- Production `.env` at repository root with mode `0600`.
+- Production `.env` at repository root. The deploy script sets its mode to `0600` before preflight.
 - The environment has been reviewed against [Environment configuration](../environment-configuration.md). In particular, public/private addresses and non-overlapping RTP/TURN ranges must describe the target host rather than the example values.
 - Non-placeholder `JWT_SECRET`, `SIP_SECRET_ENCRYPTION_KEY`, `POSTGRES_PASSWORD`, `POSTGRES_EXPORTER_PASSWORD`, `FREESWITCH_ESL_PASSWORD`, `GRAFANA_ADMIN_PASSWORD`, and `BACKUP_ENCRYPTION_PASSPHRASE` (at least 32 characters where preflight requires it). The exporter password is independent from the application owner and is applied to a dedicated `outbound_dialer_exporter` role with `pg_monitor`, read-only transactions, and no application-schema privileges.
 - Immutable `FREESWITCH_BASE_IMAGE` `@sha256` digest, valid dialer/Grafana domains, and TLS email.
@@ -42,9 +42,9 @@ Deploy the checked-out commit:
 The script performs these steps:
 
 1. optionally runs a fast-forward-only pull when `DEPLOY_PULL=true`, then re-executes the pulled deploy script;
-2. validates a clean working tree, `.env` permissions, required tools/secrets, SIP trunk and SIP-secret gates, immutable FreeSWITCH image digest, alert/backup routing, and the Compose model;
+2. restricts `.env` permissions to `0600`, then validates a clean working tree, required tools/secrets, SIP trunk and SIP-secret gates, immutable FreeSWITCH image digest, alert/backup routing, and the Compose model;
 3. derives a 12-character Git SHA version and reads the previous stable deployment state;
-4. unless explicitly skipped, runs `npm ci` and the complete `npm run quality` gate;
+4. installs exact lockfile dependencies with `npm ci`, then runs the complete `npm run quality` gate unless explicitly skipped;
 5. reads the local API active-call metric and refuses a live deployment by default;
 6. creates and self-verifies an authenticated database/recordings backup unless explicitly skipped;
 7. pulls external images, builds API/FreeSWITCH/packet-capture/web/proxy with the SHA tag, renders monitoring configuration, and validates Prometheus, Alertmanager, Blackbox Exporter, Loki, and Alloy configuration with their pinned runtime binaries;
@@ -53,7 +53,7 @@ The script performs these steps:
 10. ensures/renews certificates, installs certificate/backup cron jobs, and runs the web/API smoke test;
 11. promotes the pending SHA to `CURRENT_VERSION` with `DEPLOYMENT_STATUS=stable`. A failure retains `failed_deploy` plus the unconfirmed target instead of claiming the old state matches runtime.
 
-`SKIP_DEPLOY_CHECKS`, `SKIP_PRE_DEPLOY_BACKUP`, `ALLOW_ACTIVE_CALL_DEPLOY`, `ALLOW_UNVERIFIED_ACTIVE_CALL_STATE`, `ALLOW_UNCONFIGURED_SIP_TRUNK`, `ALLOW_NO_ALERT_RECEIVER`, and `ALLOW_LOCAL_ONLY_BACKUPS` are break-glass/risk-acceptance controls. Do not use them in an ordinary release; record owner, reason, time, and follow-up whenever one is used.
+`SKIP_DEPLOY_CHECKS`, `SKIP_PRE_DEPLOY_BACKUP`, `ALLOW_ACTIVE_CALL_DEPLOY`, `ALLOW_UNVERIFIED_ACTIVE_CALL_STATE`, `ALLOW_UNCONFIGURED_SIP_TRUNK`, `ALLOW_NO_ALERT_RECEIVER`, and `ALLOW_LOCAL_ONLY_BACKUPS` are break-glass/risk-acceptance controls. `SKIP_DEPLOY_CHECKS=true` skips `npm run quality`, but dependency installation still runs. Do not use these controls in an ordinary release; record owner, reason, time, and follow-up whenever one is used.
 
 `scripts/deploy.sh` uses repository-root `.env` by default. To use another protected file, pass `ENV_FILE=/absolute/path/to/file`; the same path is propagated to preflight, backup, Compose, certificate, and cron-install workflows. Set `COMPOSE_PROJECT_NAME` explicitly if the stack is not deployed under the default `docker` project name, because Alloy uses it to exclude containers from unrelated Compose projects.
 

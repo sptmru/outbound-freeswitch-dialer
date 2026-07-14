@@ -63,6 +63,17 @@ test("monitoring cannot mutate the Docker daemon through a raw socket", async ()
   assert.match(alloy, /tcp:\/\/docker-socket-proxy:2375/);
 });
 
+test("deployment secures the environment and always installs locked dependencies", async () => {
+  const deploy = await read("scripts/deploy.sh");
+  const chmodIndex = deploy.indexOf('chmod 600 "${ENV_FILE}"');
+  const preflightIndex = deploy.indexOf('ENV_FILE="${ENV_FILE}" "${ROOT_DIR}/scripts/preflight.sh"');
+  const installIndex = deploy.indexOf('npm --prefix "${ROOT_DIR}" ci');
+  const skipChecksIndex = deploy.indexOf('if [[ "${SKIP_DEPLOY_CHECKS:-false}" != "true" ]]');
+
+  assert.ok(chmodIndex >= 0 && chmodIndex < preflightIndex);
+  assert.ok(installIndex > preflightIndex && installIndex < skipChecksIndex);
+});
+
 function read(relativePath) {
   return readFile(join(rootDirectory, relativePath), "utf8");
 }

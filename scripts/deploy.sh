@@ -14,6 +14,9 @@ if [[ "${DEPLOY_PULL:-false}" == "true" ]]; then
   exec "${BASH_SOURCE[0]}" "$@"
 fi
 
+if [[ -e "${ENV_FILE}" ]]; then
+  chmod 600 "${ENV_FILE}"
+fi
 ENV_FILE="${ENV_FILE}" "${ROOT_DIR}/scripts/preflight.sh"
 
 mkdir -p "${ROOT_DIR}/logs" "${ROOT_DIR}/monitoring/generated"
@@ -32,8 +35,8 @@ compose() {
   APP_ENV_FILE="${ENV_FILE}" APP_VERSION="${new_version}" docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" "$@"
 }
 
+npm --prefix "${ROOT_DIR}" ci
 if [[ "${SKIP_DEPLOY_CHECKS:-false}" != "true" ]]; then
-  npm --prefix "${ROOT_DIR}" ci
   npm --prefix "${ROOT_DIR}" run quality
 fi
 

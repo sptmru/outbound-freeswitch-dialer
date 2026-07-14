@@ -12,6 +12,8 @@ chmod 600 .env
 
 The deployment scripts use repository-root `.env` unless `ENV_FILE` points to another absolute file. They source the file as shell syntax and also pass it to Docker Compose with `--env-file`, so values must be valid in both contexts. Quote values that contain spaces or shell metacharacters, as `BACKUP_CRON_SCHEDULE` does. Never commit the populated file or paste it into logs, tickets, or chat.
 
+`scripts/deploy.sh` enforces mode `0600` on the selected `ENV_FILE` before running preflight. Running `scripts/preflight.sh` directly remains read-only and rejects broader permissions instead of changing them.
+
 The runtime contract has three layers:
 
 1. `scripts/preflight.sh` rejects unsafe production topology, secrets, provider, alert, backup, image, and rollback settings.
