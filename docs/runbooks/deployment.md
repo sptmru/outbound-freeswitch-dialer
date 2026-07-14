@@ -167,3 +167,6 @@ If the previous image is missing, check out/redeploy an explicitly compatible la
 - [ ] Operator, UTC time, commands, exceptions, evidence, and follow-ups are attached to the release record.
 
 These checks are target-environment evidence. The existence of deploy/rollback scripts is not itself production acceptance.
+
+For stepped Agent Desk capacity, soak, and the separately approved live-call phase, follow
+[load-testing.md](load-testing.md). Do not use read-only HTTP load as evidence of SIP/RTP capacity.

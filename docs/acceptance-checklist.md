@@ -54,7 +54,7 @@ Record evidence URL/path, UTC date, environment, operator, and deployed SHA for 
 ## Reliability And Load
 
 - [ ] API restart, ESL disconnect/reconnect, FreeSWITCH restart, provider rejection, orphaned agent leg, missing customer leg, and lost background job are reconciled correctly.
-- [ ] Agreed concurrency/load/soak passes without duplicate calls, reordered terminal state, stuck agents/contacts, unbounded event growth, or unacceptable latency/error rate.
+- [ ] Agreed concurrency/load/soak passes under [the load-testing runbook](runbooks/load-testing.md) without duplicate calls, reordered terminal state, stuck agents/contacts, unbounded event growth, or unacceptable latency/error rate.
 - [ ] SSE reconnect/fallback prevents stale operator state during transient API/DB-listener/network failures.
 - [ ] Retention dry-run matches expected eligibility; execution removes only eligible calls/files and preserves failed-unlink metadata plus all approved audit/legal-hold data.
 
