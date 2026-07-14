@@ -216,9 +216,7 @@ describe("App Agent Desk empty states", () => {
     const csvImportPanel = screen.getByRole("heading", { name: "CSV import" }).closest("article");
     expect(addLeadPanel).not.toBeNull();
     expect(csvImportPanel).not.toBeNull();
-    expect(within(addLeadPanel!).getByRole("combobox", { name: "Campaign" })).toHaveValue(
-      selectedCampaignId
-    );
+    expect(within(addLeadPanel!).getByRole("combobox", { name: "Campaign" })).toHaveValue(selectedCampaignId);
     expect(within(csvImportPanel!).getByRole("combobox", { name: "Campaign" })).toHaveValue(
       selectedCampaignId
     );

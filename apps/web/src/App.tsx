@@ -2028,9 +2028,7 @@ function CsvImportForm({
   onChanged: () => Promise<void>;
   selectedCampaignId: string | null;
 }) {
-  const [campaignId, setCampaignId] = useState(
-    getValidCampaignId(selectedCampaignId ?? "", campaigns)
-  );
+  const [campaignId, setCampaignId] = useState(getValidCampaignId(selectedCampaignId ?? "", campaigns));
   const [file, setFile] = useState<File | null>(null);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -2349,9 +2347,7 @@ function CreateContactForm({
   onChanged: () => Promise<void>;
   selectedCampaignId: string | null;
 }) {
-  const [campaignId, setCampaignId] = useState(
-    getValidCampaignId(selectedCampaignId ?? "", campaigns)
-  );
+  const [campaignId, setCampaignId] = useState(getValidCampaignId(selectedCampaignId ?? "", campaigns));
   const [name, setName] = useState("");
   const [company, setCompany] = useState("");
   const [phoneNumber, setPhoneNumber] = useState("");
