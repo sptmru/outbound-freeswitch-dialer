@@ -322,6 +322,7 @@ services:
       - NET_ADMIN
       - NET_RAW
     entrypoint: ["/usr/local/bin/outbound-dialer-fail2ban-entrypoint.sh"]
+    command: ["fail2ban-server", "-f", "-x", "-v", "start"]
     environment:
       TZ: ${TZ:-UTC}
       F2B_LOG_LEVEL: ${FAIL2BAN_LOG_LEVEL:-INFO}
