@@ -5,20 +5,35 @@
 The implemented system is a backend-controlled, single-tenant outbound dialer. The browser is an authenticated agent media endpoint; it never owns PSTN routing or destination authorization. Fastify and FreeSWITCH coordinate call control through ESL, while PostgreSQL is the durable source of product state and event history.
 
 ```text
-Browser (React + SIP.js)
-  | HTTPS REST, credentialed SSE, WSS SIP
-  v
-nginx proxy --------------------------+
-  |                                   |
-  v                                   v
-Fastify API <---- ESL ------------ FreeSWITCH ---- SIP trunk ---- PSTN
-  |                                   |
-  +---- PostgreSQL                    +---- recordings storage
-  +---- ffmpeg/ffprobe
-  +---- Prometheus metrics/logs
+Internet
+  |
+  +-- HTTPS / REST / SSE -----------------------------+
+  +-- WSS SIP (/freeswitch-ws) -------------------+   |
+  +-- TURN/TURNS ------------------------------+  |   |
+                                               |  |   v
+Browser (React + SIP.js)                       |  +-> nginx proxy
+  |                                            |        |-- web (React/Vite)
+  | short-lived ICE credentials                |        |-- api (Fastify)
+  +---------------------------------------------+        |-- Grafana
+                                               v        +-- FreeSWITCH WSS
+                                             Coturn
+
+Fastify API <---- ESL --------------------> FreeSWITCH ---- SIP trunk ---- PSTN
+  |                                            |
+  +---- PostgreSQL                             +---- recordings storage
+  +---- ffmpeg/ffprobe                         +---- SIP/RTP media
+  +---- pcap-capture control socket                  |
+  +---- /metrics                                     +-- pcap-capture
+
+Prometheus <---- API/exporters/blackbox       Alloy ----> Loki
+    |                                            Docker and FreeSWITCH logs
+    +----> Alertmanager
+    +----> Grafana <---- Loki
 ```
 
-The deployment is a single-host Docker Compose topology. FreeSWITCH uses host networking for media/SIP constraints; application, database, proxy, and monitoring services use the Compose network. Firewall policy and host-port changes are outside the current implementation scope and require a separate deployment review.
+The deployment is a single-host Docker Compose topology. FreeSWITCH, Coturn, the packet-capture service, and fail2ban use host networking because they inspect, advertise, or protect host SIP/RTP/TURN traffic. Application, database, proxy, and monitoring services use the default Compose network. Alloy alone also joins an internal `docker-monitoring` network to reach a read-only Docker socket proxy. Firewall policy and host-port changes are outside the current implementation scope and require a separate deployment review.
+
+Only nginx is intended as the public HTTP entrypoint. Grafana is routed by hostname through the same proxy and certificate flow; Prometheus, Loki, Alertmanager, and exporters have no published ports. The current Compose file also publishes direct API and web ports for operational compatibility, so the deployment owner must restrict those host ports before production acceptance.
 
 ## Components
 
@@ -59,10 +74,24 @@ The deployment is a single-host Docker Compose topology. FreeSWITCH uses host ne
 ### Operational services
 
 - nginx proxy and automated Let's Encrypt certificate jobs.
+- Coturn on host networking, using short-lived HMAC credentials issued by the API. It binds TURN/TURNS plus a dedicated relay range and supports both directly addressed hosts and public/private NAT mappings.
+- A capability-scoped `pcap-capture` sidecar receives per-call capture commands through a Unix socket shared with the API. Capture is disabled by default, stored in a private named volume, retention-bound, and exposed to administrators only through scoped media tickets.
+- fail2ban tails the shared FreeSWITCH log volume and installs host firewall bans for the repository-defined SIP scanner filter.
 - Prometheus, Grafana, Alertmanager, Loki, Alloy, exporters, and blackbox checks.
 - PostgreSQL metrics use the independent `outbound_dialer_exporter` login with `pg_monitor`, read-only transactions, and no application-table grants; deploy/restore rotate it from `POSTGRES_EXPORTER_PASSWORD` after database changes.
 - Monitoring files are release-gated with the validators embedded in the exact Prometheus, Alertmanager, Blackbox Exporter, Loki, and Alloy images before services are changed.
+- Alloy discovers only containers from `COMPOSE_PROJECT_NAME`, reads FreeSWITCH and deployment logs, and sends them to Loki through the private Compose network. It reaches Docker metadata through a read-only, verb-disabled socket proxy rather than mounting the Docker socket directly.
 - Authenticated backup/verification/restore scripts and SHA-tagged deploy/rollback scripts.
+
+### Compose service inventory
+
+| Responsibility  | Services                                                                                                       | Network/storage notes                                                                                   |
+| --------------- | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| Product runtime | `postgres`, `api`, `web`, `proxy`                                                                              | Default Compose network; PostgreSQL and generated FreeSWITCH config use named volumes.                  |
+| Telephony/media | `freeswitch`, `coturn`, `pcap-capture`, `fail2ban`                                                             | Host networking; recordings and FreeSWITCH logs are shared only with the services that need them.       |
+| Metrics/alerts  | `prometheus`, `alertmanager`, `grafana`, `node-exporter`, `cadvisor`, `postgres-exporter`, `blackbox-exporter` | Internal service-to-service access; only Grafana is routed publicly through nginx.                      |
+| Logs            | `alloy`, `loki`, `docker-socket-proxy`                                                                         | The socket proxy is isolated on `docker-monitoring`; Alloy bridges that network to the default network. |
+| One-shot tools  | `certbot`, `monitoring-config`                                                                                 | Compose profile `tools`; started only by certificate/config rendering workflows.                        |
 
 ## Authentication And Request Security
 

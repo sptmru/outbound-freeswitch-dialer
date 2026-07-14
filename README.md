@@ -36,6 +36,7 @@ Firewall policy and changes to host-published ports were intentionally excluded 
 
 - [Requirements](docs/requirements.md)
 - [Architecture](docs/architecture.md)
+- [Environment configuration](docs/environment-configuration.md)
 - [Design plan](docs/design-plan.md)
 - [Agent guide](docs/agent-guide.md)
 - [Administrator guide](docs/admin-guide.md)
@@ -55,6 +56,10 @@ apps/web/                 React/Vite agent and administrator UI
 packages/shared/          Shared TypeScript contracts
 infra/docker/             Compose deployment and container configuration
 infra/freeswitch/         Runtime templates, dialplans, and recordings mount
+infra/coturn/             TURN server runtime entrypoint
+infra/pcap/               Capability-scoped packet-capture sidecar
+infra/proxy/              Public nginx/TLS/WSS gateway
+infra/fail2ban/           Host-network SIP scanner blocking
 monitoring/               Metrics, dashboards, alerts, and log collection
 scripts/                  Quality, deployment, backup, restore, and smoke tooling
 docs/                     Requirements, status, guides, ADRs, and runbooks
