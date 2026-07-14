@@ -28,6 +28,7 @@ import {
   sanitizeRequestUrl
 } from "./security.js";
 import { bootstrapAdmin, migrateAgentSipSecretEncryption } from "./users.js";
+import { RuntimeSettingsService } from "./runtime-settings.js";
 
 const config = loadConfig();
 const app = Fastify({
@@ -48,6 +49,7 @@ const app = Fastify({
   trustProxy: isTrustedProxyAddress
 });
 const pool = createPool(config);
+const runtimeSettings = new RuntimeSettingsService(pool, config);
 const liveEventHub = createLiveEventHub();
 let stopFreeSwitchEventListener: (() => void) | null = null;
 let stopAgentRegistrationReconciler: (() => void) | null = null;
@@ -118,7 +120,7 @@ registerAdminAudit(app, config, pool);
 registerHealthRoutes(app, config, pool);
 registerMetrics(app, config, pool);
 registerAuthRoutes(app, config, pool);
-registerDashboardRoutes(app, config, pool);
+registerDashboardRoutes(app, config, pool, runtimeSettings);
 registerLiveEventRoutes(app, config, pool, liveEventHub);
 
 app.get("/", async () => ({
@@ -128,6 +130,7 @@ app.get("/", async () => ({
 
 async function start() {
   await runMigrations(pool);
+  await runtimeSettings.initialize();
   const migratedSipSecrets = await migrateAgentSipSecretEncryption(pool, config);
   if (migratedSipSecrets) {
     app.log.info({ migratedSipSecrets }, "SIP credentials migrated to the dedicated encryption key");

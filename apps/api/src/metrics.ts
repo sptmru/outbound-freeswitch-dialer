@@ -188,6 +188,8 @@ export function registerMetrics(app: FastifyInstance, config: AppConfig, pool: p
   });
 
   app.get("/metrics", async (_request, reply) => {
+    retentionEnabled.set(config.RETENTION_ENABLED ? 1 : 0);
+    pcapCaptureEnabled.set(config.PCAP_CAPTURE_ENABLED ? 1 : 0);
     await Promise.all([
       refreshDatabaseMetrics(pool, config.MONITORING_STUCK_CALL_SECONDS),
       refreshSipTrunkMetrics(config)

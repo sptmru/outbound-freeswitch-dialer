@@ -72,24 +72,26 @@ export function startPcapCaptureFinalizer(
   let running = false;
 
   const runNow = async (): Promise<void> => {
-    if (stopped || running || !config.PCAP_CAPTURE_ENABLED) {
+    if (stopped || running) {
       return;
     }
     running = true;
     try {
-      const pending = await pool.query<{ call_id: string }>(
-        `
-          select call_pcaps.call_id
-          from call_pcaps
-          join calls on calls.id = call_pcaps.call_id
-          where call_pcaps.status = 'pending'
-            and calls.ended_at is null
-          order by call_pcaps.created_at
-          limit 20
-        `
-      );
-      for (const capture of pending.rows) {
-        await startCallPcapCapture(pool, config, capture.call_id, logger);
+      if (config.PCAP_CAPTURE_ENABLED) {
+        const pending = await pool.query<{ call_id: string }>(
+          `
+            select call_pcaps.call_id
+            from call_pcaps
+            join calls on calls.id = call_pcaps.call_id
+            where call_pcaps.status = 'pending'
+              and calls.ended_at is null
+            order by call_pcaps.created_at
+            limit 20
+          `
+        );
+        for (const capture of pending.rows) {
+          await startCallPcapCapture(pool, config, capture.call_id, logger);
+        }
       }
 
       const completed = await pool.query<{ call_id: string; file_path: string | null }>(

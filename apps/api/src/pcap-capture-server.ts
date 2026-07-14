@@ -8,7 +8,7 @@ import { PcapOperationCoordinator } from "./pcap-operation-coordinator.js";
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const socketPath = process.env.PCAP_CAPTURE_SOCKET || "/run/outbound-dialer-pcap/capture.sock";
 const storageDir = resolve(process.env.PCAP_STORAGE_DIR || "/var/lib/outbound-dialer/pcaps");
-const captureEnabled = process.env.PCAP_CAPTURE_ENABLED === "true";
+const captureEnabled = true;
 const captureInterface = safeInterface(process.env.PCAP_CAPTURE_INTERFACE || "any");
 const captureFilter = buildCaptureFilter(process.env);
 const captures = new Map<string, { child: ChildProcess; filePath: string; stderr: string }>();
@@ -35,10 +35,6 @@ const server = http.createServer(async (request, response) => {
   const action = match?.[2];
   if (request.method !== "POST" || !action || !UUID_PATTERN.test(callId)) {
     send(response, 404, { message: "Not found" });
-    return;
-  }
-  if (!captureEnabled) {
-    send(response, 503, { callId, running: false, message: "PCAP capture is disabled" });
     return;
   }
 

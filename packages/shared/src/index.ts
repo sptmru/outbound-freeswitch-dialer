@@ -572,3 +572,26 @@ export interface FreeSwitchSafeTestResponse {
   jobUuid?: string;
   message: string;
 }
+
+export interface AdminSystemSettings {
+  defaultPhoneCountryCode: string;
+  contactMaxAttempts: number;
+  contactRetryDelaySeconds: number;
+  callHistoryExportMaxRows: number;
+  callLogRetentionDays: number;
+  callRecordingRetentionDays: number;
+  pcapRetentionDays: number;
+  retentionEnabled: boolean;
+  pcapCaptureEnabled: boolean;
+  sipTrunkCallerId: string | null;
+  alertmanagerRepeatInterval: string;
+  alertmanagerWebhookEnabled: boolean;
+  alertmanagerTelegramEnabled: boolean;
+  availableAlertChannels: { webhook: boolean; telegram: boolean };
+  updatedAt: string | null;
+}
+
+export type UpdateAdminSystemSettingsRequest = Omit<
+  AdminSystemSettings,
+  "availableAlertChannels" | "updatedAt"
+>;

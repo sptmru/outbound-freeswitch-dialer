@@ -93,6 +93,12 @@ services:
       SIP_TRUNK_PROXY: ${SIP_TRUNK_PROXY:-}
       SIP_TRUNK_USERNAME: ${SIP_TRUNK_USERNAME:-}
       SIP_TRUNK_CALLER_ID: ${SIP_TRUNK_CALLER_ID:-}
+      ALERTMANAGER_REPEAT_INTERVAL: ${ALERTMANAGER_REPEAT_INTERVAL:-4h}
+      ALERTMANAGER_WEBHOOK_URL: ${ALERTMANAGER_WEBHOOK_URL:-}
+      ALERTMANAGER_TELEGRAM_BOT_TOKEN: ${ALERTMANAGER_TELEGRAM_BOT_TOKEN:-}
+      ALERTMANAGER_TELEGRAM_CHAT_ID: ${ALERTMANAGER_TELEGRAM_CHAT_ID:-}
+      ALERTMANAGER_CONFIG_PATH: /var/lib/outbound-dialer/monitoring/alertmanager.yml
+      ALERTMANAGER_URL: http://alertmanager:9093
     depends_on:
       postgres:
         condition: service_healthy
@@ -109,6 +115,7 @@ services:
       - ../freeswitch/recordings:/var/lib/freeswitch/storage/recordings
       - pcap_storage:/var/lib/outbound-dialer/pcaps
       - pcap_socket:/run/outbound-dialer-pcap
+      - ../../monitoring/generated/alertmanager.yml:/var/lib/outbound-dialer/monitoring/alertmanager.yml
     healthcheck:
       test:
         [
@@ -283,7 +290,6 @@ services:
     security_opt:
       - no-new-privileges:true
     environment:
-      PCAP_CAPTURE_ENABLED: ${PCAP_CAPTURE_ENABLED:-false}
       PCAP_CAPTURE_INTERFACE: ${PCAP_CAPTURE_INTERFACE:-any}
       PCAP_CAPTURE_SOCKET: /run/outbound-dialer-pcap/capture.sock
       PCAP_STORAGE_DIR: /var/lib/outbound-dialer/pcaps
@@ -374,6 +380,7 @@ services:
       - --config.file=/etc/alertmanager/alertmanager.yml
       - --storage.path=/alertmanager
       - --data.retention=${ALERTMANAGER_RETENTION:-120h}
+      - --web.enable-lifecycle
     volumes:
       - ../../monitoring/generated/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
       - alertmanager_data:/alertmanager

@@ -112,10 +112,21 @@ Set `COMPOSE_PROJECT_NAME` when deploying under a non-default project name. Allo
 
 `ALLOW_LOCAL_ONLY_BACKUPS=true` and `ALLOW_NON_QUIESCED_BACKUP=true` are risk acknowledgements, not evidence of an accepted recovery design. Follow the [backup and restore runbook](runbooks/backup-restore.md).
 
+## Admin Runtime Overrides
+
+The Settings UI stores a bounded allowlist of product-policy overrides under `admin.runtime_settings` in PostgreSQL. The corresponding `.env` values remain defaults for a new database and fallback values when no override has been saved. The runtime-managed set is:
+
+- `DEFAULT_PHONE_COUNTRY_CODE`, `CONTACT_MAX_ATTEMPTS`, `CONTACT_RETRY_DELAY_SECONDS`, and `CALL_HISTORY_EXPORT_MAX_ROWS`;
+- `CALL_LOG_RETENTION_DAYS`, `CALL_RECORDING_RETENTION_DAYS`, `PCAP_RETENTION_DAYS`, and `RETENTION_ENABLED`;
+- `PCAP_CAPTURE_ENABLED` and `SIP_TRUNK_CALLER_ID`;
+- `ALERTMANAGER_REPEAT_INTERVAL` plus enablement of already configured webhook/Telegram receivers.
+
+Alert receiver URLs/tokens remain deployment-managed secrets and are never returned by the settings API. Runtime alert changes update `monitoring/generated/alertmanager.yml` through the API's dedicated bind mount and use Alertmanager's lifecycle reload endpoint. Direct edits to generated files remain unsupported.
+
 ## Build-Time, Runtime, and Operator-Only Values
 
 - `VITE_API_BASE_URL` and `VITE_SIP_DIAGNOSTICS` are baked into the web image during `docker compose build`; changing them requires rebuilding `web`.
-- API, FreeSWITCH, Coturn, proxy, monitoring, and retention values are runtime container settings; `scripts/deploy.sh` recreates services as needed.
+- API, FreeSWITCH, Coturn, proxy, monitoring, and retention values are runtime container settings; `scripts/deploy.sh` recreates services as needed. The explicit admin override allowlist above is the exception and applies through the API.
 - `APP_VERSION` is set by deploy/rollback scripts from the Git SHA and should not be maintained in `.env`.
 - `ENV_FILE`, `DEPLOY_PULL`, `DEPLOY_NODE_VERSION`, `SKIP_DEPLOY_CHECKS`, `SKIP_PRE_DEPLOY_BACKUP`, and the `ALLOW_*` release overrides are operator controls. Pass them only for the documented procedure; do not normalize them into an ordinary production `.env`.
 - `HTTP_PORT`, `HTTPS_PORT`, `API_PUBLIC_PORT`, and `WEB_PUBLIC_PORT` are host publications. The public path should use nginx on 80/443; restrict direct API/web ports at the host/network layer until they are removed from the deployment shape.

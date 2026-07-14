@@ -83,6 +83,7 @@ Firewall and host-published-port changes were excluded by instruction. They are 
 - Paginated/filterable call history, detailed event timeline, bounded CSV export, and media playback.
 - Stable per-section application URLs with browser back/forward support plus URL- and browser-persisted Agent Desk campaign selection.
 - Successful mutating admin requests recorded with actor/request/route/status/source metadata and bounded route parameters; paginated audit endpoint with actor/method/date filters.
+- Database-backed admin runtime policies with `.env` fallback for dialing, phone normalization, exports, retention, PCAP, caller ID, and safe Alertmanager channel/repeat controls.
 
 ### 7. Retention, Monitoring, And Operations
 

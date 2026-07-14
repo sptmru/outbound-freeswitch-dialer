@@ -45,12 +45,14 @@ import type {
   StartManualCallRequest,
   SuppressContactRequest,
   UpdateAgentAvailabilityRequest,
-  UpdateCampaignRequest
+  UpdateCampaignRequest,
+  AdminSystemSettings
 } from "@outbound-dialer/shared";
 import { z } from "zod";
 import { requireUser } from "../auth/routes.js";
 import { setAgentAvailability } from "../agent-availability.js";
 import type { AppConfig } from "../config.js";
+import { RuntimeSettingsService, updateSystemSettingsSchema } from "../runtime-settings.js";
 import {
   canOriginateCustomerLeg,
   checkFreeSwitchEsl,
@@ -268,11 +270,49 @@ const updateAgentAvailabilitySchema = z.object({
   campaignId: z.string().uuid().optional()
 }) satisfies z.ZodType<UpdateAgentAvailabilityRequest>;
 
-export function registerDashboardRoutes(app: FastifyInstance, config: AppConfig, pool: pg.Pool): void {
+export function registerDashboardRoutes(
+  app: FastifyInstance,
+  config: AppConfig,
+  pool: pg.Pool,
+  runtimeSettings = new RuntimeSettingsService(pool, config)
+): void {
   const contactRetryPolicy = {
-    maxAttempts: config.CONTACT_MAX_ATTEMPTS,
-    retryDelaySeconds: config.CONTACT_RETRY_DELAY_SECONDS
+    get maxAttempts() {
+      return config.CONTACT_MAX_ATTEMPTS;
+    },
+    get retryDelaySeconds() {
+      return config.CONTACT_RETRY_DELAY_SECONDS;
+    }
   };
+  app.get("/admin/system-settings", async (request, reply): Promise<AdminSystemSettings | void> => {
+    if (!(await requireAdmin(request, reply, config, pool))) return;
+    return runtimeSettings.get();
+  });
+  app.patch("/admin/system-settings", async (request, reply): Promise<AdminSystemSettings | void> => {
+    if (!(await requireAdmin(request, reply, config, pool))) return;
+    const before = runtimeSettings.get();
+    const updated = await runtimeSettings.update(updateSystemSettingsSchema.parse(request.body));
+    const changes = Object.fromEntries(
+      Object.keys(request.body as object)
+        .filter(
+          (key) => before[key as keyof AdminSystemSettings] !== updated[key as keyof AdminSystemSettings]
+        )
+        .map((key) => [
+          key,
+          {
+            from: before[key as keyof AdminSystemSettings],
+            to: updated[key as keyof AdminSystemSettings]
+          }
+        ])
+    );
+    await pool.query(
+      `update admin_audit_events
+       set metadata_json = metadata_json || $2::jsonb
+       where request_id = $1`,
+      [request.id, JSON.stringify({ changes })]
+    );
+    return updated;
+  });
   app.get("/agent/desk", async (request, reply): Promise<AgentDeskResponse | void> => {
     const user = await requireUser(request, config, pool);
     if (!user) {

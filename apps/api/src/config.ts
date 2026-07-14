@@ -81,7 +81,27 @@ const envSchema = z.object({
   SIP_TRUNK_MODE: z.enum(["registration", "ip_auth"]).default("registration"),
   SIP_TRUNK_PROXY: z.string().optional(),
   SIP_TRUNK_USERNAME: z.string().optional(),
-  SIP_TRUNK_CALLER_ID: z.string().optional()
+  SIP_TRUNK_CALLER_ID: z.string().optional(),
+  ALERTMANAGER_REPEAT_INTERVAL: z
+    .string()
+    .regex(/^\d+(?:s|m|h|d)$/)
+    .default("4h"),
+  ALERTMANAGER_WEBHOOK_URL: z.string().url().optional(),
+  ALERTMANAGER_TELEGRAM_BOT_TOKEN: z.string().optional(),
+  ALERTMANAGER_TELEGRAM_CHAT_ID: z
+    .string()
+    .regex(/^-?\d+$/)
+    .optional(),
+  ALERTMANAGER_WEBHOOK_ENABLED: z
+    .string()
+    .optional()
+    .transform((value) => value !== "false"),
+  ALERTMANAGER_TELEGRAM_ENABLED: z
+    .string()
+    .optional()
+    .transform((value) => value !== "false"),
+  ALERTMANAGER_CONFIG_PATH: z.string().optional(),
+  ALERTMANAGER_URL: z.string().url().default("http://alertmanager:9093")
 });
 
 export type AppConfig = z.infer<typeof envSchema> & {
@@ -94,6 +114,11 @@ export function loadConfig(): AppConfig {
 
   return {
     ...parsed,
+    ALERTMANAGER_WEBHOOK_ENABLED:
+      parsed.ALERTMANAGER_WEBHOOK_ENABLED && Boolean(parsed.ALERTMANAGER_WEBHOOK_URL),
+    ALERTMANAGER_TELEGRAM_ENABLED:
+      parsed.ALERTMANAGER_TELEGRAM_ENABLED &&
+      Boolean(parsed.ALERTMANAGER_TELEGRAM_BOT_TOKEN && parsed.ALERTMANAGER_TELEGRAM_CHAT_ID),
     corsOrigins: parsed.CORS_ORIGINS.split(",")
       .map((origin) => origin.trim())
       .filter(Boolean)

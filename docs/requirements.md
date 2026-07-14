@@ -95,6 +95,8 @@ This document is the current product and operational contract. Items described a
 - Deactivation is rejected while the user has an active interactive call, revokes sessions, removes agent registration material, and preserves historical attribution.
 - Successful mutating `/admin/*` requests create `admin_audit_events` with actor, request ID, method, route, response status, source IP, user agent, bounded string route parameters, and timestamp.
 - Audit history is paginated and filterable by actor, method, and date.
+- Admins can update runtime product policies from Settings: default phone country, contact retry policy, export limit, retention windows/control, per-call PCAP capture, the global trunk caller ID, Alertmanager repeat interval, and enablement of deployment-configured notification channels.
+- Runtime settings are stored in `system_settings`, audited through the normal `/admin/*` mutation hook, and override `.env` defaults without exposing alert credentials.
 - Audit/retention/legal-hold duration is an external policy decision; it must not be assumed from call-log retention.
 
 ## History And Reporting
@@ -107,7 +109,7 @@ This document is the current product and operational contract. Items described a
 
 ## Retention
 
-- Automatic retention is enabled by default and runs at API startup and then every `RETENTION_RUN_INTERVAL_SECONDS` (86,400 seconds by default).
+- Automatic retention is enabled by default and runs at API startup and then every `RETENTION_RUN_INTERVAL_SECONDS` (86,400 seconds by default). Its enabled flag and retention windows can change without restarting the API.
 - PostgreSQL advisory locking prevents two API instances from performing the same retention run concurrently.
 - Default call-log retention is seven days; default call-recording retention is 30 days.
 - Only terminal `completed`, `failed`, and `canceled` calls are eligible.

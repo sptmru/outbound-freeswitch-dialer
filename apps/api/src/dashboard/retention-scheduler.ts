@@ -105,16 +105,7 @@ export function startRetentionScheduler(
     }
   };
 
-  if (!config.RETENTION_ENABLED) {
-    return {
-      runNow,
-      stop: () => {
-        stopped = true;
-      }
-    };
-  }
-
-  void runNow();
+  if (config.RETENTION_ENABLED) void runNow();
   const interval = setInterval(() => void runNow(), config.RETENTION_RUN_INTERVAL_SECONDS * 1000);
   interval.unref();
 

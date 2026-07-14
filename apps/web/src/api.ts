@@ -4,6 +4,8 @@ import type {
   AdminCampaignListResponse,
   AdminRecordingListResponse,
   AdminUserListResponse,
+  AdminSystemSettings,
+  UpdateAdminSystemSettingsRequest,
   AgentDeskResponse,
   CampaignContactListItem,
   CampaignContactsResponse,
@@ -243,6 +245,19 @@ export async function fetchFreeSwitchDiagnostics(): Promise<FreeSwitchDiagnostic
 export async function runFreeSwitchSafeTest(): Promise<FreeSwitchSafeTestResponse> {
   return apiFetch<FreeSwitchSafeTestResponse>("/admin/freeswitch/safe-test", {
     method: "POST"
+  });
+}
+
+export async function fetchSystemSettings(): Promise<AdminSystemSettings> {
+  return apiFetch<AdminSystemSettings>("/admin/system-settings");
+}
+
+export async function updateSystemSettings(
+  input: UpdateAdminSystemSettingsRequest
+): Promise<AdminSystemSettings> {
+  return apiFetch<AdminSystemSettings>("/admin/system-settings", {
+    method: "PATCH",
+    body: JSON.stringify(input)
   });
 }
 

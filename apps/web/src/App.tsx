@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { FormEvent } from "react";
+import type { ChangeEvent, FormEvent } from "react";
 import {
   Activity,
   AlertTriangle,
@@ -56,6 +56,7 @@ import {
   fetchCsvImportDetail,
   fetchAgentDesk,
   fetchFreeSwitchDiagnostics,
+  fetchSystemSettings,
   fetchSuppression,
   fetchMe,
   getCallRecordingAudioUrl,
@@ -77,6 +78,7 @@ import {
   updateAgentAvailability,
   updateCampaign,
   updateUser,
+  updateSystemSettings,
   uploadRecording
 } from "./api";
 import { useSoftphoneRegistration } from "./softphone";
@@ -87,6 +89,8 @@ import type {
   AdminAuditResponse,
   AdminRecordingListResponse,
   AdminUserListResponse,
+  AdminSystemSettings,
+  UpdateAdminSystemSettingsRequest,
   AgentDeskResponse,
   CampaignContactListItem,
   CampaignContactsResponse,
@@ -3718,6 +3722,7 @@ function SettingsView({
 }) {
   return (
     <div className="operations-grid two">
+      <SystemSettingsPanel />
       <FreeSwitchDiagnosticsPanel />
       <article className="panel">
         <PanelHeader icon={BarChart3} title="Business KPIs" meta="Today" />
@@ -3742,6 +3747,194 @@ function SettingsView({
       <UsersPanel onChanged={onChanged} users={admin.users} />
       <AdminAuditPanel users={admin.users} />
     </div>
+  );
+}
+
+function SystemSettingsPanel() {
+  const [settings, setSettings] = useState<AdminSystemSettings | null>(null);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    void fetchSystemSettings()
+      .then(setSettings)
+      .catch((loadError) => setError(getErrorMessage(loadError, "Could not load system settings")));
+  }, []);
+
+  if (!settings) {
+    return (
+      <article className="panel">
+        <PanelHeader icon={Settings2} title="System policies" meta="Loading" />
+        {error && <p className="form-error">{error}</p>}
+      </article>
+    );
+  }
+
+  const set = <K extends keyof AdminSystemSettings>(key: K, value: AdminSystemSettings[K]) =>
+    setSettings((current) => (current ? { ...current, [key]: value } : current));
+  const number = (key: keyof AdminSystemSettings) => (event: ChangeEvent<HTMLInputElement>) =>
+    set(key, Number(event.target.value) as never);
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    setPending(true);
+    setError(null);
+    setMessage(null);
+    const { availableAlertChannels: _available, updatedAt: _updatedAt, ...input } = settings;
+    try {
+      setSettings(await updateSystemSettings(input as UpdateAdminSystemSettingsRequest));
+      setMessage("Settings applied");
+    } catch (saveError) {
+      setError(getErrorMessage(saveError, "Could not save system settings"));
+    } finally {
+      setPending(false);
+    }
+  };
+
+  return (
+    <article className="panel form-panel system-settings-panel">
+      <PanelHeader icon={Settings2} title="System policies" meta="Applies immediately" />
+      <form className="stack-form" onSubmit={submit}>
+        <div className="inline-fields">
+          <label>
+            Default phone country
+            <input
+              maxLength={2}
+              value={settings.defaultPhoneCountryCode}
+              onChange={(e) => set("defaultPhoneCountryCode", e.target.value.toUpperCase())}
+            />
+          </label>
+          <label>
+            Call history export rows
+            <input
+              min={100}
+              max={250000}
+              type="number"
+              value={settings.callHistoryExportMaxRows}
+              onChange={number("callHistoryExportMaxRows")}
+            />
+          </label>
+        </div>
+        <div className="inline-fields">
+          <label>
+            Contact attempts
+            <input
+              min={1}
+              max={100}
+              type="number"
+              value={settings.contactMaxAttempts}
+              onChange={number("contactMaxAttempts")}
+            />
+          </label>
+          <label>
+            Retry delay, seconds
+            <input
+              min={0}
+              max={604800}
+              type="number"
+              value={settings.contactRetryDelaySeconds}
+              onChange={number("contactRetryDelaySeconds")}
+            />
+          </label>
+        </div>
+        <div className="inline-fields">
+          <label>
+            Call history, days
+            <input
+              min={1}
+              max={3650}
+              type="number"
+              value={settings.callLogRetentionDays}
+              onChange={number("callLogRetentionDays")}
+            />
+          </label>
+          <label>
+            Recordings, days
+            <input
+              min={1}
+              max={3650}
+              type="number"
+              value={settings.callRecordingRetentionDays}
+              onChange={number("callRecordingRetentionDays")}
+            />
+          </label>
+          <label>
+            PCAP files, days
+            <input
+              min={1}
+              max={365}
+              type="number"
+              value={settings.pcapRetentionDays}
+              onChange={number("pcapRetentionDays")}
+            />
+          </label>
+          <label>
+            Trunk caller ID
+            <input
+              maxLength={80}
+              value={settings.sipTrunkCallerId ?? ""}
+              onChange={(e) => set("sipTrunkCallerId", e.target.value || null)}
+            />
+          </label>
+        </div>
+        <div className="toggle-row">
+          <label>
+            <input
+              checked={settings.retentionEnabled}
+              type="checkbox"
+              onChange={(e) => set("retentionEnabled", e.target.checked)}
+            />
+            Automatic retention
+          </label>
+          <label>
+            <input
+              checked={settings.pcapCaptureEnabled}
+              type="checkbox"
+              onChange={(e) => set("pcapCaptureEnabled", e.target.checked)}
+            />
+            Capture call PCAPs
+          </label>
+        </div>
+        <div className="inline-fields">
+          <label>
+            Alert repeat interval
+            <input
+              placeholder="4h"
+              value={settings.alertmanagerRepeatInterval}
+              onChange={(e) => set("alertmanagerRepeatInterval", e.target.value)}
+            />
+          </label>
+        </div>
+        <div className="toggle-row">
+          <label>
+            <input
+              checked={settings.alertmanagerWebhookEnabled}
+              disabled={!settings.availableAlertChannels.webhook}
+              type="checkbox"
+              onChange={(e) => set("alertmanagerWebhookEnabled", e.target.checked)}
+            />
+            Webhook alerts
+          </label>
+          <label>
+            <input
+              checked={settings.alertmanagerTelegramEnabled}
+              disabled={!settings.availableAlertChannels.telegram}
+              type="checkbox"
+              onChange={(e) => set("alertmanagerTelegramEnabled", e.target.checked)}
+            />
+            Telegram alerts
+          </label>
+        </div>
+        <p className="panel-note">
+          Alert credentials remain deployment-managed; this screen only enables configured channels.
+        </p>
+        {error && <p className="form-error">{error}</p>}
+        {message && <p className="form-success">{message}</p>}
+        <button className="primary-action" disabled={pending} type="submit">
+          {pending ? "Saving…" : "Save settings"}
+        </button>
+      </form>
+    </article>
   );
 }
 

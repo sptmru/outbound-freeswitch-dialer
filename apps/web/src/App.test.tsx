@@ -12,11 +12,13 @@ const apiMocks = vi.hoisted(() => ({
   fetchCallHistory: vi.fn(),
   fetchCsvImports: vi.fn(),
   fetchMe: vi.fn(),
+  fetchSystemSettings: vi.fn(),
   getCallRecordingAudioUrl: vi.fn(),
   logout: vi.fn(),
   startManualCall: vi.fn(),
   subscribeAgentEvents: vi.fn(),
   updateAgentAvailability: vi.fn(),
+  updateSystemSettings: vi.fn(),
   useSoftphoneRegistration: vi.fn()
 }));
 
@@ -32,11 +34,13 @@ vi.mock("./api", async () => {
     fetchCallHistory: apiMocks.fetchCallHistory,
     fetchCsvImports: apiMocks.fetchCsvImports,
     fetchMe: apiMocks.fetchMe,
+    fetchSystemSettings: apiMocks.fetchSystemSettings,
     getCallRecordingAudioUrl: apiMocks.getCallRecordingAudioUrl,
     logout: apiMocks.logout,
     startManualCall: apiMocks.startManualCall,
     subscribeAgentEvents: apiMocks.subscribeAgentEvents,
-    updateAgentAvailability: apiMocks.updateAgentAvailability
+    updateAgentAvailability: apiMocks.updateAgentAvailability,
+    updateSystemSettings: apiMocks.updateSystemSettings
   };
 });
 
@@ -66,6 +70,8 @@ describe("App Agent Desk empty states", () => {
     apiMocks.fetchMe.mockResolvedValue({ user: userRow() });
     apiMocks.fetchCsvImports.mockResolvedValue({ imports: [] });
     apiMocks.fetchAdminOverview.mockResolvedValue(adminResponse());
+    apiMocks.fetchSystemSettings.mockResolvedValue(systemSettings());
+    apiMocks.updateSystemSettings.mockImplementation(async (input) => ({ ...systemSettings(), ...input }));
     apiMocks.fetchCallHistory.mockResolvedValue({
       items: [],
       page: 1,
@@ -159,6 +165,26 @@ describe("App Agent Desk empty states", () => {
     window.history.pushState({}, "", "/settings?campaignId=11111111-1111-4111-8111-111111111111");
     window.dispatchEvent(new PopStateEvent("popstate"));
     expect(await screen.findByRole("heading", { level: 1, name: "Settings" })).toBeInTheDocument();
+  });
+
+  it("saves admin runtime policies from Settings", async () => {
+    const admin = userRow({ role: "admin" });
+    window.history.replaceState({}, "", "/settings");
+    apiMocks.fetchMe.mockResolvedValue({ user: admin });
+    apiMocks.fetchAgentDesk.mockResolvedValue(deskResponse({ user: admin }));
+
+    render(<App />);
+    const attempts = await screen.findByLabelText("Contact attempts");
+    fireEvent.change(attempts, { target: { value: "5" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save settings" }));
+
+    await waitFor(() => expect(apiMocks.updateSystemSettings).toHaveBeenCalled());
+    expect(apiMocks.updateSystemSettings.mock.calls[0]?.[0]).toMatchObject({
+      contactMaxAttempts: 5,
+      defaultPhoneCountryCode: "US",
+      pcapCaptureEnabled: false
+    });
+    expect(await screen.findByText("Settings applied")).toBeInTheDocument();
   });
 
   it("preselects the active Agent Desk campaign in Add lead and CSV import", async () => {
@@ -630,6 +656,26 @@ describe("App Agent Desk empty states", () => {
     expect(apiMocks.fetchCallDetail).toHaveBeenCalledWith(call.id);
   });
 });
+
+function systemSettings() {
+  return {
+    defaultPhoneCountryCode: "US",
+    contactMaxAttempts: 3,
+    contactRetryDelaySeconds: 900,
+    callHistoryExportMaxRows: 50000,
+    callLogRetentionDays: 7,
+    callRecordingRetentionDays: 30,
+    pcapRetentionDays: 7,
+    retentionEnabled: true,
+    pcapCaptureEnabled: false,
+    sipTrunkCallerId: null,
+    alertmanagerRepeatInterval: "4h",
+    alertmanagerWebhookEnabled: false,
+    alertmanagerTelegramEnabled: false,
+    availableAlertChannels: { webhook: true, telegram: true },
+    updatedAt: null
+  };
+}
 
 function userRow(overrides: Partial<PublicUser> = {}): PublicUser {
   return {

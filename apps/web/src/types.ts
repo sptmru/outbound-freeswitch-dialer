@@ -4,6 +4,7 @@ export type {
   AdminCampaignListResponse,
   AdminRecordingListResponse,
   AdminUserListResponse,
+  AdminSystemSettings,
   AgentDeskResponse,
   CampaignContactsResponse,
   CampaignContactListItem,
@@ -40,5 +41,6 @@ export type {
   UpdateCampaignRequest,
   UpdateAgentAvailabilityRequest,
   UpdateUserRequest,
-  UpdateUserResponse
+  UpdateUserResponse,
+  UpdateAdminSystemSettingsRequest
 } from "@outbound-dialer/shared";

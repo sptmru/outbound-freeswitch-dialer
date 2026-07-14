@@ -174,9 +174,16 @@ The event record is the source of lifecycle evidence. A local completion event s
 - Suppression entries store the current block; `suppression_events` preserve create/update/import/remove/blocked-manual-dial evidence.
 - A Fastify hook records every successful mutating `/admin/*` request in `admin_audit_events`. It stores identifiers and bounded string route parameters, not request bodies/secrets.
 
+## Runtime Administration Settings
+
+- `.env` remains the bootstrap/default and deployment-secret source. An `admin.runtime_settings` JSON document in `system_settings` holds the validated admin override set.
+- The API applies overrides to its shared live configuration after migrations and after `PATCH /admin/system-settings`; request-time dialing, normalization, export, caller-ID, PCAP, metrics, and retention consumers see the updated values immediately.
+- The PCAP supervisor remains internally ready while the API policy controls whether a call creates capture state, so disabling capture does not require recreating the privileged sidecar.
+- Alert destination credentials remain in the protected deployment environment. The UI can enable only channels whose credentials are present; the API rewrites the mounted generated Alertmanager config and calls its lifecycle reload endpoint.
+
 ## Retention Architecture
 
-- The scheduler runs once at API startup and then on `RETENTION_RUN_INTERVAL_SECONDS` while `RETENTION_ENABLED=true`.
+- The scheduler remains alive at `RETENTION_RUN_INTERVAL_SECONDS`; each execution reads the current `RETENTION_ENABLED` and retention-window overrides.
 - An in-process flag avoids overlap and a PostgreSQL advisory lock avoids cross-instance overlap.
 - Terminal calls without recording metadata are deleted after `CALL_LOG_RETENTION_DAYS`.
 - Calls with recordings remain until `CALL_RECORDING_RETENTION_DAYS`; then the file is unlinked first.
