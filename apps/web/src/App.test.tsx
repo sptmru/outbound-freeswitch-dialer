@@ -61,6 +61,7 @@ const softphoneRuntime = {
 describe("App Agent Desk empty states", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    window.history.replaceState({}, "", "/");
     apiMocks.fetchMe.mockResolvedValue({ user: userRow() });
     apiMocks.fetchCsvImports.mockResolvedValue({ imports: [] });
     apiMocks.fetchAdminOverview.mockResolvedValue(adminResponse());
@@ -79,6 +80,54 @@ describe("App Agent Desk empty states", () => {
       deskResponse({ availability: { status: "paused", wrapUpUntil: null } })
     );
     apiMocks.useSoftphoneRegistration.mockReturnValue(softphoneRuntime);
+  });
+
+  it("restores the shared page and selected campaign from the URL", async () => {
+    const admin = userRow({ role: "admin" });
+    const campaignId = "77777777-7777-4777-8777-777777777777";
+    const campaign = {
+      id: campaignId,
+      name: "Restored campaign",
+      status: "active" as const,
+      callableLeads: 4,
+      manualDialingEnabled: true,
+      callRecordingEnabled: false,
+      earlyMediaAvmdEnabled: false
+    };
+    window.history.replaceState({}, "", `/call-history?campaignId=${campaignId}`);
+    apiMocks.fetchMe.mockResolvedValue({ user: admin });
+    apiMocks.fetchAgentDesk.mockResolvedValue(
+      deskResponse({
+        user: admin,
+        campaign,
+        availableCampaigns: [campaign]
+      })
+    );
+
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { level: 1, name: "Call history" })).toBeInTheDocument();
+    expect(apiMocks.fetchAgentDesk).toHaveBeenCalledWith(campaignId);
+    expect(window.location.pathname).toBe("/call-history");
+    expect(new URLSearchParams(window.location.search).get("campaignId")).toBe(campaignId);
+  });
+
+  it("updates the browser URL when navigating between admin pages", async () => {
+    const admin = userRow({ role: "admin" });
+    apiMocks.fetchMe.mockResolvedValue({ user: admin });
+    apiMocks.fetchAgentDesk.mockResolvedValue(deskResponse({ user: admin }));
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Campaigns" }));
+
+    expect(window.location.pathname).toBe("/campaigns");
+    expect(new URLSearchParams(window.location.search).get("campaignId")).toBe(
+      "11111111-1111-4111-8111-111111111111"
+    );
+
+    window.history.pushState({}, "", "/settings?campaignId=11111111-1111-4111-8111-111111111111");
+    window.dispatchEvent(new PopStateEvent("popstate"));
+    expect(await screen.findByRole("heading", { level: 1, name: "Settings" })).toBeInTheDocument();
   });
 
   it("hydrates the cookie session without a browser-stored bearer token", async () => {

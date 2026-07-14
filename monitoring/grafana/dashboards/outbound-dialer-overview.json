@@ -15,7 +15,7 @@
       "title": "Open application / Call History",
       "tooltip": "Protected per-call PCAP catalogue and downloads",
       "type": "link",
-      "url": "https://__APP_DOMAIN__/"
+      "url": "https://__APP_DOMAIN__/call-history"
     }
   ],
   "liveNow": false,

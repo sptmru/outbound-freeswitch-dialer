@@ -12,7 +12,7 @@ test("monitoring dashboard provisions the application link and PCAP panels", () 
   );
   const renderer = readFileSync(join(root, "scripts/render-monitoring-config.mjs"), "utf8");
 
-  assert.equal(dashboard.links[0].url, "https://__APP_DOMAIN__/");
+  assert.equal(dashboard.links[0].url, "https://__APP_DOMAIN__/call-history");
   assert.match(renderer, /replaceAll\("__APP_DOMAIN__", appDomain\)/);
   assert.deepEqual(
     dashboard.panels.filter((panel) => panel.id >= 12 && panel.id <= 16).map((panel) => panel.title),

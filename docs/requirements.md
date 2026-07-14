@@ -99,6 +99,7 @@ This document is the current product and operational contract. Items described a
 
 ## History And Reporting
 
+- Authenticated application sections have stable shareable URLs, and the selected Agent Desk campaign is preserved in the URL across navigation and page reloads.
 - Admin call history is paginated and filterable by text, campaign, agent, outcome, date range, voicemail drop/signal, and recording availability.
 - Call detail includes lifecycle events and technical identifiers needed for diagnosis.
 - CSV export applies the same filters and refuses exports above `CALL_HISTORY_EXPORT_MAX_ROWS` (50,000 by default).

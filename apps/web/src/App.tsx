@@ -106,6 +106,37 @@ import type {
 type View = "desk" | "campaigns" | "recordings" | "history" | "suppression" | "settings";
 type AgentDeskWithCampaign = AgentDeskResponse & { campaign: NonNullable<AgentDeskResponse["campaign"]> };
 
+const viewPaths: Record<View, string> = {
+  desk: "/",
+  campaigns: "/campaigns",
+  recordings: "/recordings",
+  history: "/call-history",
+  suppression: "/suppression",
+  settings: "/settings"
+};
+
+function readNavigationState(): { campaignId: string | null; view: View } {
+  const normalizedPath = window.location.pathname.replace(/\/$/, "") || "/";
+  const view =
+    (Object.entries(viewPaths).find(([, path]) => path === normalizedPath)?.[0] as View | undefined) ??
+    "desk";
+  return {
+    campaignId: new URLSearchParams(window.location.search).get("campaignId"),
+    view
+  };
+}
+
+function writeNavigationState(view: View, campaignId: string | null, replace = false) {
+  const url = new URL(window.location.href);
+  url.pathname = viewPaths[view];
+  if (campaignId) {
+    url.searchParams.set("campaignId", campaignId);
+  } else {
+    url.searchParams.delete("campaignId");
+  }
+  window.history[replace ? "replaceState" : "pushState"]({}, "", `${url.pathname}${url.search}${url.hash}`);
+}
+
 const navItems: Array<{ id: View; label: string; icon: typeof BarChart3 }> = [
   { id: "desk", label: "Agent desk", icon: BarChart3 },
   { id: "campaigns", label: "Campaigns", icon: Upload },
@@ -139,13 +170,16 @@ function getPhoneStatusCopy(softphone: SoftphoneRuntime): { detail: string; labe
 }
 
 export function App() {
+  const initialNavigation = useRef(readNavigationState());
   const [sessionReady, setSessionReady] = useState(false);
   const [user, setUser] = useState<PublicUser | null>(null);
   const [desk, setDesk] = useState<AgentDeskResponse | null>(null);
   const [admin, setAdmin] = useState<AdminOverviewResponse | null>(null);
   const [csvImports, setCsvImports] = useState<CsvImportSummary[]>([]);
-  const [selectedCampaignId, setSelectedCampaignId] = useState<string | null>(null);
-  const [view, setView] = useState<View>("desk");
+  const [selectedCampaignId, setSelectedCampaignId] = useState<string | null>(
+    initialNavigation.current.campaignId
+  );
+  const [view, setView] = useState<View>(initialNavigation.current.view);
   const [error, setError] = useState<string | null>(null);
   const [manualDialNumber, setManualDialNumber] = useState("");
   const activeCallPollRequestRef = useRef(0);
@@ -156,14 +190,25 @@ export function App() {
     void hydrateSession();
   }, []);
 
+  useEffect(() => {
+    const restoreNavigation = () => {
+      const navigation = readNavigationState();
+      setView(navigation.view);
+      setSelectedCampaignId(navigation.campaignId);
+    };
+    window.addEventListener("popstate", restoreNavigation);
+    return () => window.removeEventListener("popstate", restoreNavigation);
+  }, []);
+
   function resetSession(nextError: string | null = null) {
     setUser(null);
     setDesk(null);
     setAdmin(null);
     setCsvImports([]);
-    setSelectedCampaignId(null);
+    const navigation = readNavigationState();
+    setSelectedCampaignId(navigation.campaignId);
     setManualDialNumber("");
-    setView("desk");
+    setView(navigation.view);
     setError(nextError);
   }
 
@@ -175,7 +220,9 @@ export function App() {
       ]);
       setUser(nextUser);
       setDesk(nextDesk);
-      setSelectedCampaignId(nextDesk.campaign?.id ?? null);
+      const nextCampaignId = nextDesk.campaign?.id ?? null;
+      setSelectedCampaignId(nextCampaignId);
+      writeNavigationState(nextUser.role === "agent" ? "desk" : view, nextCampaignId, true);
       if (nextUser.role === "admin") {
         const [nextAdmin, nextImports] = await Promise.all([fetchAdminOverview(), fetchCsvImports()]);
         setAdmin(nextAdmin);
@@ -207,8 +254,16 @@ export function App() {
   }
 
   async function handleCampaignChange(campaignId: string) {
-    setSelectedCampaignId(campaignId);
-    setDesk(await fetchAgentDesk(campaignId));
+    const nextDesk = await fetchAgentDesk(campaignId);
+    const nextCampaignId = nextDesk.campaign?.id ?? null;
+    setSelectedCampaignId(nextCampaignId);
+    setDesk(nextDesk);
+    writeNavigationState(activeView, nextCampaignId);
+  }
+
+  function navigateToView(nextView: View) {
+    setView(nextView);
+    writeNavigationState(nextView, selectedCampaignId);
   }
 
   useEffect(() => {
@@ -348,7 +403,7 @@ export function App() {
                   className={item.id === activeView ? "nav-item active" : "nav-item"}
                   disabled={Boolean(desk.activeCall && activeView === "desk" && item.id !== "desk")}
                   key={item.id}
-                  onClick={() => setView(item.id)}
+                  onClick={() => navigateToView(item.id)}
                   type="button"
                   title={
                     desk.activeCall && activeView === "desk" && item.id !== "desk"
@@ -405,7 +460,7 @@ export function App() {
               onChanged={hydrateSession}
               onManualDial={(phoneNumber) => {
                 setManualDialNumber(phoneNumber);
-                setView("desk");
+                navigateToView("desk");
               }}
               view={activeView}
               user={user}
