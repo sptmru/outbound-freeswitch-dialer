@@ -14,6 +14,7 @@ import type {
   AdminUserListResponse,
   AgentDeskResponse,
   CallDetailResponse,
+  CallAvmdReview,
   CallHistoryResponse,
   CampaignContactListItem,
   CampaignContactsResponse,
@@ -47,6 +48,7 @@ import type {
   SuppressContactRequest,
   UpdateAgentAvailabilityRequest,
   UpdateCampaignRequest,
+  UpsertCallAvmdReviewRequest,
   AdminSystemSettings
 } from "@outbound-dialer/shared";
 import { z } from "zod";
@@ -64,6 +66,7 @@ import {
 import { ensureAgentForUser, getSoftphoneProvisioningForUser, toPublicUser } from "../users.js";
 import { getCsvImportsPage, getUsersPage } from "./admin-libraries.js";
 import { getAdminAnalytics, parseAnalyticsFilters } from "./analytics.js";
+import { upsertCallAvmdReview } from "./avmd-reviews.js";
 import {
   campaignExists,
   deleteCampaign,
@@ -231,8 +234,14 @@ const callHistoryQuerySchema = z.object({
   from: z.coerce.date().optional(),
   to: z.coerce.date().optional(),
   voicemail: z.enum(["drop", "signal"]).optional(),
-  recording: z.enum(["available", "missing"]).optional()
+  recording: z.enum(["available", "missing"]).optional(),
+  avmdReview: z.enum(["needs_review", "reviewed", "uncertain"]).optional()
 });
+
+const upsertCallAvmdReviewSchema = z.object({
+  actualParty: z.enum(["human", "machine", "uncertain"]),
+  notes: z.string().max(1000).optional()
+}) satisfies z.ZodType<UpsertCallAvmdReviewRequest>;
 
 const suppressionQuerySchema = z.object({
   q: z.string().max(160).default(""),
@@ -476,6 +485,24 @@ export function registerDashboardRoutes(
       return reply.code(404).send({ message: "Call not found" });
     }
     return detail;
+  });
+
+  app.put("/admin/calls/:callId/avmd-review", async (request, reply): Promise<CallAvmdReview | void> => {
+    const user = await requireAdmin(request, reply, config, pool);
+    if (!user) return;
+    const params = z.object({ callId: z.string().uuid() }).parse(request.params);
+    const input = upsertCallAvmdReviewSchema.parse(request.body);
+    const result = await upsertCallAvmdReview(pool, {
+      callId: params.callId,
+      actualParty: input.actualParty,
+      notes: input.notes,
+      reviewerUserId: user.id
+    });
+    if (result.status === "ok") return result.review;
+    if (result.status === "not_found") {
+      return reply.code(404).send({ message: "Call not found" });
+    }
+    return reply.code(409).send({ message: "Only completed calls with AVMD attempted can be reviewed" });
   });
 
   app.get("/admin/calls/:callId/recording", async (request, reply): Promise<void> => {

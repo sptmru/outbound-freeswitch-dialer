@@ -18,6 +18,7 @@ import {
 import { CsvImportError, importContactsFromCsv, parseCsv } from "./csv.js";
 import { validateDialableNumber } from "./manual-dial.js";
 import { normalizePhoneNumber } from "./phone.js";
+import { getCallHistoryPage } from "./responders.js";
 import { __testing } from "./routes.js";
 
 const selectedCampaignId = "11111111-1111-4111-8111-111111111111";
@@ -523,6 +524,12 @@ describe("dashboard route helpers", () => {
             call_recording_enabled: false,
             voicemail_signal_status: null,
             voicemail_confidence: null,
+            avmd_attempted: true,
+            freeswitch_terminal_at: endedAt,
+            terminal_persisted_at: endedAt,
+            terminal_source: "freeswitch_customer_terminal",
+            terminal_event_name: "CHANNEL_HANGUP",
+            finalization_latency_ms: 12,
             campaign_id: selectedCampaignId,
             agent_user_id: userRow().id
           }
@@ -565,6 +572,12 @@ describe("dashboard route helpers", () => {
           }
         ]);
       }
+      if (sql.includes("from call_avmd_reviews")) {
+        return rows([]);
+      }
+      if (sql.includes("from call_media_stats")) {
+        return rows([]);
+      }
       throw new Error(`Unexpected query: ${sql}`);
     });
 
@@ -573,6 +586,9 @@ describe("dashboard route helpers", () => {
     assert.equal(detail?.call.outcome, "answered");
     assert.equal(detail?.call.phoneNumber, "+14155550100");
     assert.equal(detail?.call.hangupCause, "NORMAL_CLEARING");
+    assert.equal(detail?.call.avmdAttempted, true);
+    assert.equal(detail?.call.finalizationLatencyMs, 12);
+    assert.deepEqual(detail?.mediaQuality, []);
     assert.deepEqual(detail?.timeline, [
       {
         at: createdAt.toISOString(),
@@ -588,6 +604,43 @@ describe("dashboard route helpers", () => {
     ]);
     assert.equal(detail?.legs.length, 2);
     assert.equal(detail?.legs[0]?.hangupCause, "NORMAL_CLEARING");
+  });
+
+  it("binds and maps the AVMD review call-history filter", async () => {
+    const createdAt = new Date("2026-07-10T08:00:00.000Z");
+    const pool = createQueryPool((sql, params) => {
+      assert.match(sql, /\$9 = 'needs_review'/);
+      assert.match(sql, /limit \$10 offset \$11/);
+      assert.deepEqual(params, [null, null, null, null, null, null, null, null, "needs_review", 25, 0]);
+      return rows([
+        {
+          id: "44444444-4444-4444-8444-444444444444",
+          lead_name: "Jane",
+          agent_name: "Alex",
+          phone_number: "+14155550100",
+          campaign_name: "Follow-up",
+          campaign_id: selectedCampaignId,
+          agent_user_id: userRow().id,
+          state: "completed",
+          outcome: "answered",
+          created_at: createdAt,
+          duration_seconds: 60,
+          recording_available: true,
+          pcap_status: null,
+          pcap_available: false,
+          voicemail_signal_status: "none",
+          avmd_review_status: "needs_review",
+          total_count: "1"
+        }
+      ]);
+    });
+
+    const result = await getCallHistoryPage(pool, {
+      page: 1,
+      pageSize: 25,
+      avmdReview: "needs_review"
+    });
+    assert.equal(result.items[0]?.avmdReviewStatus, "needs_review");
   });
 
   it("resolves a persisted call recording without exposing unrelated call data", async () => {

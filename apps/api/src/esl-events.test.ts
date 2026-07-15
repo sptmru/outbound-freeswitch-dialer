@@ -53,6 +53,49 @@ describe("FreeSWITCH event helpers", () => {
     }
   });
 
+  it("persists terminal timing in the guarded update that wins customer finalization", async () => {
+    const queries: Array<{ params: readonly unknown[]; sql: string }> = [];
+    const pool = createQueryPool((sql, params) => {
+      queries.push({ sql, params });
+      if (sql.includes("select agent_id, answered_at, contact_id, state, voicemail_signal_status")) {
+        return rows([
+          {
+            agent_id: null,
+            answered_at: new Date("2026-07-15T05:00:00.000Z"),
+            contact_id: null,
+            state: "bridged",
+            voicemail_signal_status: "none"
+          }
+        ]);
+      }
+      if (sql.includes("returning agent_id, contact_id")) {
+        return rows([{ agent_id: null, contact_id: null }]);
+      }
+      return rows([]);
+    });
+
+    await __testing.persistFreeSwitchEvent(config, pool, {
+      body: "",
+      headers: {
+        "event-date-timestamp": "1784092290123456",
+        "event-name": "CHANNEL_HANGUP",
+        "hangup-cause": "NORMAL_CLEARING",
+        "unique-id": "22222222-2222-4222-8222-222222222222",
+        variable_outbound_dialer_call_id: "11111111-1111-4111-8111-111111111111",
+        variable_outbound_dialer_leg_type: "customer"
+      }
+    });
+
+    const terminalUpdate = queries.find((query) =>
+      query.sql.includes("terminal_source = 'freeswitch_customer_terminal'")
+    );
+    assert.ok(terminalUpdate);
+    assert.match(terminalUpdate.sql, /with stamp as/);
+    assert.match(terminalUpdate.sql, /and ended_at is null/);
+    assert.equal((terminalUpdate.params[3] as Date).toISOString(), "2026-07-15T05:11:30.123Z");
+    assert.equal(terminalUpdate.params[4], "CHANNEL_HANGUP");
+  });
+
   it("builds a stable WAV path for a call recording", () => {
     assert.equal(
       __testing.buildCallRecordingPath(
@@ -406,7 +449,9 @@ describe("FreeSWITCH event helpers", () => {
     assert.deepEqual(update?.params, [
       "11111111-1111-4111-8111-111111111111",
       "completed",
-      "customer_hung_up"
+      "customer_hung_up",
+      null,
+      "CHANNEL_HANGUP"
     ]);
     assert.ok(queries.some((query) => /update\s+agents/.test(query.sql)));
   });
@@ -660,7 +705,8 @@ describe("FreeSWITCH event helpers", () => {
     const callUpdate = queries.find((query) => query.sql.includes("update calls"));
     assert.match(callUpdate?.sql ?? "", /outcome = 'voicemail_dropped'/);
     assert.match(callUpdate?.sql ?? "", /voicemail_playback_completed_at/);
-    assert.match(callUpdate?.sql ?? "", /ended_at = coalesce/);
+    assert.match(callUpdate?.sql ?? "", /ended_at = stamp\.persisted_at/);
+    assert.match(callUpdate?.sql ?? "", /terminal_source = coalesce/);
     assert.ok(queries.some((query) => query.sql.includes("'voicemail_playback_completed'")));
     assert.ok(
       queries.some((query) => query.sql.includes("update contacts") && query.sql.includes("'completed'"))
@@ -723,7 +769,10 @@ describe("FreeSWITCH event helpers", () => {
     assert.deepEqual(update?.params, [
       "11111111-1111-4111-8111-111111111111",
       "completed",
-      "customer_hung_up"
+      "customer_hung_up",
+      null,
+      null,
+      "test"
     ]);
     assert.ok(queries.some((query) => query.params.includes("voicemail_playback_interrupted")));
     assert.ok(

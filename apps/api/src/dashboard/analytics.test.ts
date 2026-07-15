@@ -131,6 +131,64 @@ describe("admin analytics", () => {
             }
           ]);
         }
+        if (sql === __testing.avmdQualitySql) {
+          return rows([
+            {
+              eligible_calls: "10",
+              reviewed_calls: "6",
+              uncertain_reviews: "1",
+              true_positives: "2",
+              false_positives: "1",
+              true_negatives: "2",
+              false_negatives: "0"
+            }
+          ]);
+        }
+        if (sql === __testing.mediaOverviewSql) {
+          return rows([
+            {
+              answered_calls: "6",
+              observed_calls: "4",
+              suspected_one_way_calls: "1",
+              average_mos: "4.12",
+              p95_jitter_loss_rate: "0.37",
+              average_quality_percentage: "91.24",
+              providers: [{ provider: "sip-trunk", count: 4 }]
+            }
+          ]);
+        }
+        if (sql === __testing.mediaLegsSql) {
+          return rows([
+            {
+              leg_type: "customer",
+              observed_calls: "4",
+              average_mos: "4.12",
+              p95_jitter_loss_rate: "0.37",
+              average_quality_percentage: "91.24",
+              codecs: [{ codec: "PCMU", count: 4 }]
+            }
+          ]);
+        }
+        if (sql === __testing.telephonyReliabilitySql) {
+          return rows([
+            {
+              finalization_samples: "5",
+              average_finalization_ms: "42.4",
+              p95_finalization_ms: "88.7",
+              max_finalization_ms: "91",
+              registration_db_count: 2,
+              registration_freeswitch_count: 2,
+              registration_drift_count: 0,
+              registration_corrections_last_run: 1,
+              registration_reconciled_at: new Date("2026-07-15T00:00:30.000Z"),
+              active_calls_db_count: 1,
+              active_calls_missing_in_freeswitch: 0,
+              active_calls_closed_last_run: 0,
+              active_calls_reconciled_at: new Date("2026-07-15T00:00:40.000Z"),
+              reconciliation_closures: "1"
+            }
+          ]);
+        }
         throw new Error("Unexpected analytics query");
       }
     } as unknown as pg.Pool;
@@ -142,7 +200,7 @@ describe("admin analytics", () => {
       snapshotAt
     );
 
-    assert.equal(queries.length, 5);
+    assert.equal(queries.length, 9);
     assert.deepEqual(
       queries.map((query) => query.params),
       [
@@ -150,7 +208,11 @@ describe("admin analytics", () => {
         [from, to, campaignId, "Asia/Yerevan"],
         [from, to, campaignId, 3, 60, snapshotAt],
         [from, to, campaignId],
-        [from, to, campaignId, 3, 60, snapshotAt]
+        [from, to, campaignId, 3, 60, snapshotAt],
+        [from, to, campaignId],
+        [from, to, campaignId],
+        [from, to, campaignId],
+        [from, to, campaignId]
       ]
     );
     assert.deepEqual(result.summary, {
@@ -193,11 +255,36 @@ describe("admin analytics", () => {
     });
     assert.equal(result.voicemail.completionRate, 66.7);
     assert.equal(result.voicemail.averageReleaseSeconds, 2);
+    assert.deepEqual(result.avmdQuality, {
+      eligibleCalls: 10,
+      reviewedCalls: 6,
+      uncertainReviews: 1,
+      reviewCoverageRate: 60,
+      truePositives: 2,
+      falsePositives: 1,
+      trueNegatives: 2,
+      falseNegatives: 0,
+      precision: 66.7,
+      recall: 100,
+      falsePositiveRate: 33.3
+    });
+    assert.equal(result.mediaQuality.coverageRate, 66.7);
+    assert.equal(result.mediaQuality.averageMos, 4.1);
+    assert.equal(result.mediaQuality.providers[0]?.provider, "sip-trunk");
+    assert.equal(result.mediaQuality.legs[0]?.codecs[0]?.codec, "PCMU");
+    assert.match(__testing.mediaOverviewSql, /duration_seconds >= 10/);
+    assert.match(
+      __testing.mediaOverviewSql,
+      /coalesce\(inbound_media_packet_count, inbound_packet_count\) <= 5/
+    );
+    assert.equal(result.telephonyReliability.p95FinalizationMs, 88.7);
+    assert.equal(result.telephonyReliability.reconciliationClosures, 1);
   });
 
   it("returns zero percentages when there is no denominator", () => {
     assert.equal(__testing.percent(3, 0), 0);
     assert.equal(__testing.percent(0, 0), 0);
+    assert.equal(__testing.nullablePercent(0, 0), null);
   });
 });
 

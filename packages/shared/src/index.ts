@@ -334,6 +334,53 @@ export interface AdminAnalyticsResponse {
     completionRate: number;
     averageReleaseSeconds: number;
   };
+  avmdQuality: {
+    eligibleCalls: number;
+    reviewedCalls: number;
+    uncertainReviews: number;
+    reviewCoverageRate: number;
+    truePositives: number;
+    falsePositives: number;
+    trueNegatives: number;
+    falseNegatives: number;
+    precision: number | null;
+    recall: number | null;
+    falsePositiveRate: number | null;
+  };
+  mediaQuality: {
+    answeredCalls: number;
+    observedCalls: number;
+    coverageRate: number;
+    suspectedOneWayCalls: number;
+    averageMos: number | null;
+    p95JitterLossRate: number | null;
+    averageQualityPercentage: number | null;
+    providers: Array<{ provider: string; count: number }>;
+    legs: Array<{
+      legType: "agent" | "customer";
+      observedCalls: number;
+      averageMos: number | null;
+      p95JitterLossRate: number | null;
+      averageQualityPercentage: number | null;
+      codecs: Array<{ codec: string; count: number }>;
+    }>;
+  };
+  telephonyReliability: {
+    finalizationSamples: number;
+    averageFinalizationMs: number | null;
+    p95FinalizationMs: number | null;
+    maxFinalizationMs: number | null;
+    registrationDatabaseCount: number | null;
+    registrationFreeSwitchCount: number | null;
+    registrationDriftCount: number | null;
+    registrationCorrectionsLastRun: number | null;
+    registrationReconciledAt: string | null;
+    activeCallsDatabaseCount: number | null;
+    activeCallsMissingInFreeSwitch: number | null;
+    activeCallsClosedLastRun: number | null;
+    activeCallsReconciledAt: string | null;
+    reconciliationClosures: number;
+  };
 }
 
 export interface AdminLibraryPage<T> {
@@ -366,6 +413,7 @@ export interface CallHistoryItem {
   pcapStatus: CallPcapStatus | null;
   pcapAvailable: boolean;
   voicemailSignal: string | null;
+  avmdReviewStatus: "needs_review" | "reviewed" | "uncertain" | null;
 }
 
 export interface CallHistoryResponse {
@@ -384,6 +432,7 @@ export interface CallDetailResponse {
     manualDial: boolean;
     voicemailSignal: string | null;
     voicemailConfidence: number | null;
+    avmdAttempted: boolean;
     recordingStatus: CallRecordingStatus;
     recordingDurationSeconds: number | null;
     recordingFileSizeBytes: number | null;
@@ -397,7 +446,14 @@ export interface CallDetailResponse {
     pcapAvailable: boolean;
     lastReasonCode: string | null;
     hangupCause: string | null;
+    freeswitchTerminalAt: string | null;
+    terminalPersistedAt: string | null;
+    terminalSource: string | null;
+    terminalEventName: string | null;
+    finalizationLatencyMs: number | null;
   };
+  avmdReview: CallAvmdReview | null;
+  mediaQuality: Array<CallMediaQuality>;
   legs: Array<{
     type: "agent" | "customer";
     state: string;
@@ -420,6 +476,40 @@ export interface CallDetailResponse {
     agentLegUuid: string | null;
     customerLegUuid: string | null;
   }>;
+}
+
+export type AvmdActualParty = "human" | "machine" | "uncertain";
+
+export interface CallAvmdReview {
+  actualParty: AvmdActualParty;
+  notes: string | null;
+  reviewedByName: string;
+  reviewedAt: string;
+  updatedAt: string;
+}
+
+export interface UpsertCallAvmdReviewRequest {
+  actualParty: AvmdActualParty;
+  notes?: string;
+}
+
+export interface CallMediaQuality {
+  legType: "agent" | "customer";
+  capturedAt: string;
+  readCodec: string | null;
+  writeCodec: string | null;
+  sipGateway: string | null;
+  sipProfile: string | null;
+  inboundPacketCount: number | null;
+  outboundPacketCount: number | null;
+  inboundMediaPacketCount: number | null;
+  outboundMediaPacketCount: number | null;
+  inboundSkipPacketCount: number | null;
+  inboundJitterLossRate: number | null;
+  inboundJitterMaxVariance: number | null;
+  inboundMos: number | null;
+  inboundQualityPercentage: number | null;
+  suspectedOneWayAudio: boolean;
 }
 
 export interface CreateRecordingResponse {

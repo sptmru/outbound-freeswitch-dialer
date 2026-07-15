@@ -4,7 +4,7 @@
 
 - Open **Analytics** for the operational scorecard. Select Today, 7 days, or 30 days and optionally narrow the view to one campaign. Date boundaries and daily buckets use the IANA timezone reported by the browser and show that timezone next to the source context.
 - Read **Answer rate** as calls with `answered_at` divided by attempts. Read **Contact rate** as answered calls excluding detected/dropped voicemail divided by attempts; this is an operational proxy rather than independently reviewed human-contact truth.
-- The call funnel, daily trend, campaign performance, agent performance, and voicemail lifecycle use the selected call period. Data-quality counts are a current queue snapshot and carry their own snapshot timestamp.
+- The call funnel, daily trend, campaign performance, agent performance, voicemail lifecycle, AVMD review evidence, media quality, and finalization latency use the selected call period. Data-quality counts and reconciliation drift are current snapshots and carry their own observation timestamps.
 - Use attempts together with unique contacts and contact rate. Attempts alone can rise because of retries without improving campaign reach or connection quality.
 - Retry efficiency describes repeated contacts that later connected; small denominators can move sharply, so use it with attempted-contact volume.
 - Use **Refresh** after an operational change when an immediate reread is required. The analytics page is not a replacement for the near-real-time call controls or Grafana health dashboard.
@@ -42,6 +42,8 @@
 
 - Filter call history by search text, campaign, agent, outcome, date, voicemail drop/signal, and recording availability.
 - Open call detail for leg UUIDs, state events, commands, hangup causes, AVMD/voicemail lifecycle, and media availability.
+- For an answered call with a playable recording, use **AVMD review** to label what actually answered as Human, Voicemail / machine, or Uncertain. Listen before labeling; the detector result alone is not ground truth. Analytics always shows reviewed-sample coverage next to precision/recall.
+- Technical media cards report FreeSWITCH RTP counters captured at hangup separately for the agent and customer legs. A suspected one-way flag is diagnostic evidence, not confirmation of what either party heard.
 - CSV export uses the active filters and is rejected above `CALL_HISTORY_EXPORT_MAX_ROWS` (50,000 by default).
 - Successful mutating admin requests are recorded in the administrative audit log. Use actor/method/date filters when investigating; request bodies/secrets are intentionally not stored.
 
@@ -55,7 +57,7 @@
 
 ## Operations
 
-- Review Grafana/Alertmanager, API latency/error rate, DB/ESL/trunk readiness, ESL queue health, stuck calls and voicemail jobs, recording finalization, retention status, backup freshness, TLS, disk, and restarts.
+- Review Grafana/Alertmanager, API latency/error rate, DB/ESL/trunk readiness, ESL queue health, registration and active-call drift, media coverage/suspected one-way flags, terminal finalization, stuck calls and voicemail jobs, recording finalization, retention status, backup freshness, TLS, disk, and restarts.
 - Confirm that an authenticated backup reached the off-host destination. A local `.enc` file alone is not disaster-recovery acceptance.
 - Follow the runbooks for deploy/rollback, backup/restore, incidents, and captures; preserve call ID, both leg UUIDs, UTC time, and deployed SHA.
 - Do not claim voicemail success from local playback alone. Verify the far-end mailbox when that is the user-visible requirement.

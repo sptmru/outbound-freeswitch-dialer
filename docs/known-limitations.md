@@ -3,9 +3,10 @@
 - The product is single-tenant and the deployment is a single-host Docker topology; it is not a high-availability control plane.
 - Each agent has one interactive call at a time. A released voicemail customer leg can remain as a tracked background job while the same agent starts another interactive call.
 - Agent pause and configurable post-call wrap-up are implemented, but scheduled callbacks, supervisor-controlled requeue, reason-coded pauses, and workforce-management reporting are not.
-- VM/beep/AVMD detection is advisory. It neither decides human versus machine nor triggers an automatic voicemail drop.
-- Admin **Contact rate** is therefore an operational proxy that excludes detected/dropped voicemail from technically answered calls; the system does not yet store independently reviewed human/machine ground truth for AVMD precision or false-positive reporting.
-- Prometheus does not currently receive per-leg RTP loss, jitter, one-way-audio, or negotiated-codec quality measurements. PCAP and FreeSWITCH diagnostics support incident investigation, but they are not a continuous media-quality KPI source.
+- VM/beep/AVMD detection is advisory. It neither decides human versus machine nor triggers an automatic voicemail drop. Admin review now supplies human/machine/uncertain ground truth, but precision and recall describe only the reviewed sample; coverage and confusion counts must be considered with the rate.
+- Admin **Contact rate** remains an operational proxy that excludes detected/dropped voicemail from technically answered calls. It is not a substitute for reviewed human-contact ground truth.
+- Per-leg RTP counters, MOS, jitter, codecs, and gateway/profile are captured from FreeSWITCH at `CHANNEL_HANGUP_COMPLETE`. They prove what the server observed, not what a browser played, whether a microphone contained speech, or what a PSTN participant heard. “Suspected one-way” is intentionally a conservative diagnostic flag.
+- AVMD reviews and media observations follow call-log retention because they reference the call. Long-term model evaluation requires exporting or extending retention for an approved cohort.
 - FreeSWITCH playback completion proves the local application flow, not that the far-end mailbox stored the entire message. Representative carrier/device testing is required.
 - Provider routing, caller ID, codecs/DTMF, throughput, hangup mapping, WSS/NAT behavior, and external audio have not been accepted until evidenced in the target environment.
 - The default retry policy is three attempts with a 15-minute delay. It is a technical default, not approval of calling windows, jurisdictional limits, or outcome-specific retry rules.

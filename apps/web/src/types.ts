@@ -9,7 +9,9 @@ export type {
   AgentDeskResponse,
   CampaignContactsResponse,
   CampaignContactListItem,
+  CallAvmdReview,
   CallDetailResponse,
+  CallMediaQuality,
   CallHistoryResponse,
   CreateCampaignRequest,
   CreateContactRequest,
@@ -43,5 +45,6 @@ export type {
   UpdateAgentAvailabilityRequest,
   UpdateUserRequest,
   UpdateUserResponse,
-  UpdateAdminSystemSettingsRequest
+  UpdateAdminSystemSettingsRequest,
+  UpsertCallAvmdReviewRequest
 } from "@outbound-dialer/shared";

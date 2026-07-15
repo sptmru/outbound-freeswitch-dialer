@@ -83,6 +83,52 @@ test("monitoring dashboard exposes API, persistence, media, and operations signa
   assert.equal(panels.get("Container restarts (15m)")?.targets[0]?.instant, true);
 });
 
+test("monitoring dashboard exposes bounded call-quality and reconciliation signals", () => {
+  const dashboard = JSON.parse(
+    readFileSync(join(root, "monitoring/grafana/dashboards/outbound-dialer-overview.json"), "utf8")
+  );
+  const panels = new Map(dashboard.panels.map((panel) => [panel.title, panel]));
+
+  assert.match(
+    panels.get("Media stats coverage (15m)")?.targets[0]?.expr ?? "",
+    /coverage="complete".*coverage="eligible"/
+  );
+  assert.equal(
+    panels.get("Suspected one-way audio by leg")?.targets[0]?.expr,
+    "outbound_dialer_media_one_way_suspected_calls_window"
+  );
+  assert.equal(
+    panels.get("Negotiated codecs (15m)")?.targets[0]?.expr,
+    "outbound_dialer_media_codecs_window"
+  );
+  assert.equal(
+    panels.get("Terminal finalization latency (15m)")?.targets[0]?.expr,
+    "outbound_dialer_terminal_finalization_duration_milliseconds"
+  );
+  assert.match(
+    panels.get("Registration reconciliation detail")?.targets[0]?.expr ?? "",
+    /registration_reconciliation_last_run_timestamp_seconds/
+  );
+  assert.match(
+    panels.get("Active-call reconciliation detail")?.targets[0]?.expr ?? "",
+    /active_call_reconciliation_last_run_timestamp_seconds/
+  );
+});
+
+test("new monitoring alerts require sustained failures or guarded samples", () => {
+  const rules = readFileSync(join(root, "monitoring/prometheus/rules.yml"), "utf8");
+
+  assert.match(rules, /alert: RegistrationReconciliationFailing[\s\S]*?for: 1m/);
+  assert.match(rules, /alert: RegistrationReconciliationStale[\s\S]*?> 30[\s\S]*?for: 1m/);
+  assert.match(rules, /alert: ActiveCallReconciliationFailing[\s\S]*?for: 5m/);
+  assert.match(rules, /alert: ActiveCallReconciliationStale[\s\S]*?> 180[\s\S]*?for: 5m/);
+  assert.match(rules, /alert: MediaStatsCoverageLow[\s\S]*?coverage="eligible"\}\) >= 10[\s\S]*?for: 15m/);
+  assert.match(
+    rules,
+    /alert: TerminalFinalizationSlow[\s\S]*?terminal_finalization_samples_window >= 10[\s\S]*?for: 10m/
+  );
+});
+
 test("monitoring dashboard current-state cards use instant Prometheus queries", () => {
   const dashboard = JSON.parse(
     readFileSync(join(root, "monitoring/grafana/dashboards/outbound-dialer-overview.json"), "utf8")
@@ -103,7 +149,11 @@ test("monitoring dashboard current-state cards use instant Prometheus queries", 
     "Backup age",
     "TLS certificate remaining",
     "Retention age",
-    "Container restarts (15m)"
+    "Container restarts (15m)",
+    "Media stats coverage (15m)",
+    "Suspected one-way audio (15m)",
+    "Registration reconciliation",
+    "Active-call reconciliation"
   ];
   const panels = new Map(dashboard.panels.map((panel) => [panel.title, panel]));
 

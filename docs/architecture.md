@@ -49,7 +49,7 @@ Only nginx is intended as the public HTTP entrypoint. Grafana is routed by hostn
 
 - Authentication, role authorization, cookie CSRF protection, login rate limiting, and safe proxy handling.
 - Campaign/contact selection, suppression checks, manual validation, and user/admin workflows.
-- Read-only admin analytics aggregate bounded date/campaign queries from PostgreSQL. Period facts and current contact-queue snapshots are returned as distinct sections so the UI does not imply historical snapshots that were never stored.
+- Read-only admin analytics aggregate bounded date/campaign queries from PostgreSQL. Period facts and current contact-queue snapshots are returned as distinct sections so the UI does not imply historical snapshots that were never stored. AVMD quality is joined to explicit `call_avmd_reviews`; RTP quality comes from per-leg `call_media_stats`; point-in-time drift comes from the singleton `telephony_observability_state`.
 - ESL originate, bridge, DTMF, hangup, voicemail transfer, event processing, recording startup, and reconciliation. Incoming events use a bounded ordered queue with exponential retry for transient PostgreSQL failures; overflow disconnects the listener and is surfaced through metrics instead of being silently ignored.
 - Call/leg/event persistence and automatic outcome/contact lifecycle.
 - Voicemail transcoding, media ticket issuance, and byte-range streaming.
@@ -80,6 +80,7 @@ Only nginx is intended as the public HTTP entrypoint. Grafana is routed by hostn
 - fail2ban tails the shared FreeSWITCH log volume and installs host firewall bans for the repository-defined SIP scanner filter.
 - Prometheus, Grafana, Alertmanager, Loki, Alloy, exporters, and blackbox checks.
 - Application metrics keep label cardinality bounded; product dimensions that grow with history stay in PostgreSQL-backed admin analytics rather than Prometheus labels.
+- `CHANNEL_HANGUP_COMPLETE` is the durable per-leg source for final FreeSWITCH RTP counters, MOS, jitter, codecs, and SIP gateway/profile. Media rows upsert on `(call_id, leg_type)` so ESL retries are idempotent. Terminal latency uses the FreeSWITCH microsecond event timestamp and the same guarded database update that wins terminal state.
 - PostgreSQL metrics use the independent `outbound_dialer_exporter` login with `pg_monitor`, read-only transactions, and no application-table grants; deploy/restore rotate it from `POSTGRES_EXPORTER_PASSWORD` after database changes.
 - Monitoring files are release-gated with the validators embedded in the exact Prometheus, Alertmanager, Blackbox Exporter, Loki, and Alloy images before services are changed.
 - Alloy discovers only containers from `COMPOSE_PROJECT_NAME`, reads FreeSWITCH and deployment logs, and sends them to Loki through the private Compose network. It reaches read-only container and network metadata through a verb-disabled socket proxy rather than mounting the Docker socket directly; network metadata is required for Docker discovery even though Alloy does not use it to mutate Docker networking.

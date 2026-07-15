@@ -8,7 +8,8 @@ import {
   fetchCsvImports,
   fetchMe,
   logout,
-  subscribeAgentEvents
+  subscribeAgentEvents,
+  upsertCallAvmdReview
 } from "./api";
 
 describe("cookie-authenticated API client", () => {
@@ -95,6 +96,32 @@ describe("cookie-authenticated API client", () => {
         expect.objectContaining({ credentials: "include" })
       );
     }
+  });
+
+  it("saves an AVMD review with an idempotent call-scoped PUT", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      json: async () => ({
+        actualParty: "machine",
+        notes: "Clear greeting",
+        reviewedByName: "Admin",
+        reviewedAt: "2026-07-15T12:00:00.000Z",
+        updatedAt: "2026-07-15T12:00:00.000Z"
+      }),
+      ok: true,
+      status: 200
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await upsertCallAvmdReview("call/id", { actualParty: "machine", notes: "Clear greeting" });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/admin/calls/call%2Fid/avmd-review",
+      expect.objectContaining({
+        body: JSON.stringify({ actualParty: "machine", notes: "Clear greeting" }),
+        credentials: "include",
+        method: "PUT"
+      })
+    );
   });
 });
 

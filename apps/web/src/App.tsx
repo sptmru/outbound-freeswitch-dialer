@@ -82,6 +82,7 @@ import {
   updateCampaign,
   updateUser,
   updateSystemSettings,
+  upsertCallAvmdReview,
   uploadRecording
 } from "./api";
 import { useSoftphoneRegistration } from "./softphone";
@@ -98,10 +99,12 @@ import type {
   AgentDeskResponse,
   CampaignContactListItem,
   CampaignContactsResponse,
+  CallAvmdReview,
   CsvImportDetailResponse,
   CsvImportHistoryResponse,
   CsvImportSummary,
   CallDetailResponse,
+  CallMediaQuality,
   CallHistoryResponse,
   FreeSwitchDiagnosticsResponse,
   FreeSwitchSafeTestResponse,
@@ -1798,6 +1801,8 @@ function AnalyticsView({ admin }: { admin: AdminOverviewResponse }) {
             <AnalyticsDataQualityPanel data={analytics.dataQuality} />
             <AnalyticsVoicemailPanel data={analytics.voicemail} />
           </div>
+
+          <AnalyticsQualityEvidence analytics={analytics} />
         </>
       ) : (
         <section className="panel empty-row">Analytics are unavailable for this period.</section>
@@ -2125,6 +2130,257 @@ function AnalyticsVoicemailPanel({ data }: { data: AdminAnalyticsResponse["voice
         <span>Average agent release</span>
         <strong>{formatAnalyticsDuration(data.averageReleaseSeconds)}</strong>
       </div>
+    </section>
+  );
+}
+
+function formatNullablePercent(value: number | null): string {
+  return value === null ? "—" : formatPercent(value);
+}
+
+function formatMilliseconds(value: number | null): string {
+  if (value === null) return "—";
+  if (value < 1) return "<1 ms";
+  if (value < 1000) return `${Math.round(value).toLocaleString()} ms`;
+  return `${(value / 1000).toLocaleString(undefined, { maximumFractionDigits: 2 })} s`;
+}
+
+function AnalyticsQualityEvidence({ analytics }: { analytics: AdminAnalyticsResponse }) {
+  return (
+    <section className="analytics-quality-evidence" aria-labelledby="quality-evidence-title">
+      <div className="surface-heading">
+        <h2 id="quality-evidence-title">Quality evidence</h2>
+        <p>Reviewed classifications, observed media telemetry and point-in-time reconciliation.</p>
+      </div>
+      <div className="analytics-quality-grid">
+        <AnalyticsAvmdQuality data={analytics.avmdQuality} />
+        <AnalyticsMediaQuality data={analytics.mediaQuality} />
+        <AnalyticsTelephonyReliability data={analytics.telephonyReliability} />
+      </div>
+    </section>
+  );
+}
+
+function AnalyticsAvmdQuality({ data }: { data: AdminAnalyticsResponse["avmdQuality"] }) {
+  return (
+    <section className="panel quality-evidence-card avmd-quality-card">
+      <PanelHeader icon={Voicemail} meta="reviewed sample" title="AVMD review evidence" />
+      <div className="quality-metric-grid">
+        <div>
+          <span>Review coverage</span>
+          <strong>{data.eligibleCalls > 0 ? formatPercent(data.reviewCoverageRate) : "—"}</strong>
+          <small>
+            {data.reviewedCalls.toLocaleString()} definitive / {data.eligibleCalls.toLocaleString()} eligible
+          </small>
+        </div>
+        <div>
+          <span>Uncertain reviews</span>
+          <strong>{data.uncertainReviews.toLocaleString()}</strong>
+          <small>Excluded from confusion metrics</small>
+        </div>
+        <div>
+          <span>Precision</span>
+          <strong>{formatNullablePercent(data.precision)}</strong>
+          <small>
+            {data.truePositives.toLocaleString()} TP /{" "}
+            {(data.truePositives + data.falsePositives).toLocaleString()} detected
+          </small>
+        </div>
+        <div>
+          <span>Recall</span>
+          <strong>{formatNullablePercent(data.recall)}</strong>
+          <small>
+            {data.truePositives.toLocaleString()} TP /{" "}
+            {(data.truePositives + data.falseNegatives).toLocaleString()} machines
+          </small>
+        </div>
+      </div>
+      <div className="confusion-matrix-wrap">
+        <table className="confusion-matrix">
+          <caption>Detector result compared with definitive reviewer classification</caption>
+          <thead>
+            <tr>
+              <th>Detector</th>
+              <th>Machine</th>
+              <th>Human</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <th>Detected</th>
+              <td>{data.truePositives.toLocaleString()} TP</td>
+              <td>{data.falsePositives.toLocaleString()} FP</td>
+            </tr>
+            <tr>
+              <th>Not detected</th>
+              <td>{data.falseNegatives.toLocaleString()} FN</td>
+              <td>{data.trueNegatives.toLocaleString()} TN</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div className="quality-inline-stat">
+        <span>False-positive rate</span>
+        <strong>{formatNullablePercent(data.falsePositiveRate)}</strong>
+        <small>
+          {data.falsePositives.toLocaleString()} FP /{" "}
+          {(data.falsePositives + data.trueNegatives).toLocaleString()} reviewed humans
+        </small>
+      </div>
+      <p className="analytics-note">
+        Detected is the positive result; Possible and no signal count as not detected. Rates use only
+        definitive reviews, not production-wide truth.
+      </p>
+    </section>
+  );
+}
+
+function AnalyticsMediaQuality({ data }: { data: AdminAnalyticsResponse["mediaQuality"] }) {
+  const observed = data.observedCalls > 0;
+  return (
+    <section className="panel quality-evidence-card">
+      <PanelHeader icon={Radio} meta="FreeSWITCH counters" title="Media observations" />
+      <div className="quality-metric-grid">
+        <div>
+          <span>Measurement coverage</span>
+          <strong>{data.answeredCalls > 0 ? formatPercent(data.coverageRate) : "—"}</strong>
+          <small>
+            {data.observedCalls.toLocaleString()} observed / {data.answeredCalls.toLocaleString()} technically
+            answered
+          </small>
+        </div>
+        <div>
+          <span>Suspected one-way</span>
+          <strong>{observed ? data.suspectedOneWayCalls.toLocaleString() : "—"}</strong>
+          <small>
+            {observed ? `of ${data.observedCalls.toLocaleString()} observed calls` : "Not observed"}
+          </small>
+        </div>
+        <div>
+          <span>Average MOS</span>
+          <strong>{data.averageMos === null ? "—" : data.averageMos.toFixed(2)}</strong>
+          <small>FreeSWITCH-reported</small>
+        </div>
+        <div>
+          <span>Average quality</span>
+          <strong>{formatNullablePercent(data.averageQualityPercentage)}</strong>
+          <small>FreeSWITCH-reported</small>
+        </div>
+      </div>
+      {!observed && data.answeredCalls > 0 && (
+        <div className="quality-unavailable">Media telemetry was not observed for answered calls.</div>
+      )}
+      <div className="media-leg-breakdown">
+        {data.legs.map((leg) => (
+          <div className="media-leg-summary" key={leg.legType}>
+            <div>
+              <strong>{leg.legType === "agent" ? "Agent leg" : "Customer leg"}</strong>
+              <span>{leg.observedCalls.toLocaleString()} observed calls</span>
+            </div>
+            <small>
+              MOS {leg.averageMos === null ? "—" : leg.averageMos.toFixed(2)} · p95 jitter loss rate{" "}
+              {leg.p95JitterLossRate === null
+                ? "—"
+                : leg.p95JitterLossRate.toLocaleString(undefined, { maximumFractionDigits: 3 })}
+            </small>
+            <div className="codec-breakdown">
+              {leg.codecs.length ? (
+                leg.codecs.map((codec) => (
+                  <span key={codec.codec}>
+                    {codec.codec} <b>{codec.count}</b>
+                  </span>
+                ))
+              ) : (
+                <span>Codec not observed</span>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="provider-breakdown">
+        <strong>Provider observations</strong>
+        <div className="codec-breakdown">
+          {data.providers.length ? (
+            data.providers.map((item) => (
+              <span key={item.provider}>
+                {item.provider} <b>{item.count}</b>
+              </span>
+            ))
+          ) : (
+            <span>Provider not observed</span>
+          )}
+        </div>
+      </div>
+      <p className="analytics-note">
+        Suspected one-way means captured RTP counters showed media in only one direction. It is a diagnostic
+        flag, not confirmation of what either party heard.
+      </p>
+    </section>
+  );
+}
+
+function AnalyticsTelephonyReliability({ data }: { data: AdminAnalyticsResponse["telephonyReliability"] }) {
+  const registrationAvailable =
+    data.registrationDatabaseCount !== null &&
+    data.registrationFreeSwitchCount !== null &&
+    data.registrationDriftCount !== null;
+  const activeCallAvailable =
+    data.activeCallsDatabaseCount !== null && data.activeCallsMissingInFreeSwitch !== null;
+  return (
+    <section className="panel quality-evidence-card">
+      <PanelHeader icon={Activity} meta="period + snapshots" title="Telephony reliability" />
+      <div className="quality-metric-grid">
+        <div>
+          <span>Finalization p95</span>
+          <strong>{formatMilliseconds(data.p95FinalizationMs)}</strong>
+          <small>
+            {data.finalizationSamples.toLocaleString()} measured · avg{" "}
+            {formatMilliseconds(data.averageFinalizationMs)} · max{" "}
+            {formatMilliseconds(data.maxFinalizationMs)}
+          </small>
+        </div>
+        <div>
+          <span>Registration count drift</span>
+          <strong>
+            {registrationAvailable ? data.registrationDriftCount?.toLocaleString() : "Unavailable"}
+          </strong>
+          <small>
+            {registrationAvailable
+              ? `DB ${data.registrationDatabaseCount} · FreeSWITCH ${data.registrationFreeSwitchCount}`
+              : "No current reconciliation snapshot"}
+          </small>
+        </div>
+        <div>
+          <span>DB calls missing in FreeSWITCH</span>
+          <strong>
+            {activeCallAvailable ? data.activeCallsMissingInFreeSwitch?.toLocaleString() : "Unavailable"}
+          </strong>
+          <small>
+            {activeCallAvailable
+              ? `of ${data.activeCallsDatabaseCount} DB-active calls`
+              : "No current reconciliation snapshot"}
+          </small>
+        </div>
+        <div>
+          <span>Reconciliation closures</span>
+          <strong>{data.reconciliationClosures.toLocaleString()}</strong>
+          <small>{data.activeCallsClosedLastRun ?? "—"} closed on the latest run</small>
+        </div>
+      </div>
+      <div className="reliability-context">
+        <span>
+          Registration:{" "}
+          {data.registrationReconciledAt ? formatDateTime(data.registrationReconciledAt) : "Unavailable"}
+        </span>
+        <span>
+          Active calls:{" "}
+          {data.activeCallsReconciledAt ? formatDateTime(data.activeCallsReconciledAt) : "Unavailable"}
+        </span>
+      </div>
+      <p className="analytics-note">
+        Drift is a point-in-time UUID/count reconciliation. Finalization latency is shown only for calls with
+        a measured terminal signal.
+      </p>
     </section>
   );
 }
@@ -3727,6 +3983,7 @@ function HistoryView({ admin }: { admin: AdminOverviewResponse }) {
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [voicemail, setVoicemail] = useState<"" | "drop" | "signal">("");
+  const [avmdReview, setAvmdReview] = useState<"" | "needs_review" | "reviewed" | "uncertain">("");
   const [page, setPage] = useState(1);
   const [historyPending, setHistoryPending] = useState(false);
   const [pcapPendingId, setPcapPendingId] = useState<string | null>(null);
@@ -3745,7 +4002,8 @@ function HistoryView({ admin }: { admin: AdminOverviewResponse }) {
         from: historyDateBoundary(dateFrom, false),
         to: historyDateBoundary(dateTo, true),
         voicemail: voicemail || undefined,
-        recording: recording || undefined
+        recording: recording || undefined,
+        avmdReview: avmdReview || undefined
       })
         .then((next) => {
           if (active) setHistory(next);
@@ -3761,7 +4019,7 @@ function HistoryView({ admin }: { admin: AdminOverviewResponse }) {
       active = false;
       window.clearTimeout(timeout);
     };
-  }, [agentId, campaignId, dateFrom, dateTo, outcome, page, query, recording, voicemail]);
+  }, [agentId, avmdReview, campaignId, dateFrom, dateTo, outcome, page, query, recording, voicemail]);
 
   async function exportHistory() {
     setError(null);
@@ -3774,7 +4032,8 @@ function HistoryView({ admin }: { admin: AdminOverviewResponse }) {
         from: historyDateBoundary(dateFrom, false),
         to: historyDateBoundary(dateTo, true),
         voicemail: voicemail || undefined,
-        recording: recording || undefined
+        recording: recording || undefined,
+        avmdReview: avmdReview || undefined
       });
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
@@ -3961,6 +4220,22 @@ function HistoryView({ admin }: { admin: AdminOverviewResponse }) {
             <option value="missing">Missing</option>
           </select>
         </label>
+        <label>
+          AVMD review
+          <select
+            aria-label="AVMD review"
+            value={avmdReview}
+            onChange={(event) => {
+              setAvmdReview(event.target.value as typeof avmdReview);
+              setPage(1);
+            }}
+          >
+            <option value="">Any</option>
+            <option value="needs_review">Needs review</option>
+            <option value="reviewed">Reviewed</option>
+            <option value="uncertain">Uncertain</option>
+          </select>
+        </label>
         <button
           className="secondary-action compact-action"
           onClick={() => void exportHistory()}
@@ -4000,9 +4275,16 @@ function HistoryView({ admin }: { admin: AdminOverviewResponse }) {
                 {formatDateTime(call.createdAt)}
                 <small>{formatDuration(call.durationSeconds)}</small>
               </span>
-              <b className={`outcome-badge outcome-${call.outcome ?? call.state}`}>
-                {formatOutcome(call.outcome, call.state)}
-              </b>
+              <span className="history-outcome-stack">
+                <b className={`outcome-badge outcome-${call.outcome ?? call.state}`}>
+                  {formatOutcome(call.outcome, call.state)}
+                </b>
+                {call.avmdReviewStatus && (
+                  <small className={`avmd-review-badge ${call.avmdReviewStatus}`}>
+                    {formatAvmdReviewStatus(call.avmdReviewStatus)}
+                  </small>
+                )}
+              </span>
             </button>
             {selectedCallId === call.id && (
               <div className="call-detail">
@@ -4081,6 +4363,25 @@ function HistoryView({ admin }: { admin: AdminOverviewResponse }) {
                     {detail.call.recordingAvailable && (
                       <CallRecordingPlayer callId={detail.call.id} leadName={detail.call.leadName} />
                     )}
+                    <AvmdReviewCard
+                      detail={detail}
+                      key={detail.call.id}
+                      onSaved={(review) => {
+                        setDetail((current) => (current ? { ...current, avmdReview: review } : current));
+                        setHistory((current) => ({
+                          ...current,
+                          items: current.items.map((item) =>
+                            item.id === call.id
+                              ? {
+                                  ...item,
+                                  avmdReviewStatus:
+                                    review.actualParty === "uncertain" ? "uncertain" : "reviewed"
+                                }
+                              : item
+                          )
+                        }));
+                      }}
+                    />
                     {detail.call.pcapAvailable && (
                       <div className="pcap-download-card">
                         <div>
@@ -4110,6 +4411,7 @@ function HistoryView({ admin }: { admin: AdminOverviewResponse }) {
                       </button>
                       {technicalCallId === call.id && (
                         <div className="technical-call-details">
+                          <CallTechnicalEvidence detail={detail} />
                           <div className="call-leg-grid">
                             {detail.legs?.map((leg) => (
                               <div className="call-leg-card" key={leg.type}>
@@ -4197,6 +4499,288 @@ function historyDateBoundary(value: string, endOfDay: boolean): string | undefin
     date.setMilliseconds(-1);
   }
   return date.toISOString();
+}
+
+function formatAvmdReviewStatus(
+  status: NonNullable<AdminOverviewResponse["callHistory"][number]["avmdReviewStatus"]>
+): string {
+  const labels = {
+    needs_review: "Needs AVMD review",
+    reviewed: "AVMD reviewed",
+    uncertain: "AVMD uncertain"
+  } as const;
+  return labels[status];
+}
+
+function formatAvmdPrediction(detail: CallDetailResponse): string {
+  const signal = detail.call.voicemailSignal;
+  const label = signal === "detected" ? "Detected" : signal === "possible" ? "Possible" : "No detection";
+  return detail.call.voicemailConfidence === null
+    ? label
+    : `${label} · confidence ${detail.call.voicemailConfidence}`;
+}
+
+function formatAvmdActualParty(actualParty: CallAvmdReview["actualParty"]): string {
+  const labels = {
+    human: "Human",
+    machine: "Voicemail / machine",
+    uncertain: "Uncertain"
+  } as const;
+  return labels[actualParty];
+}
+
+function AvmdReviewCard({
+  detail,
+  onSaved
+}: {
+  detail: CallDetailResponse;
+  onSaved: (review: CallAvmdReview) => void;
+}) {
+  const [actualParty, setActualParty] = useState<CallAvmdReview["actualParty"] | null>(
+    detail.avmdReview?.actualParty ?? null
+  );
+  const [notes, setNotes] = useState(detail.avmdReview?.notes ?? "");
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+  const canReview = detail.call.avmdAttempted && detail.call.recordingAvailable;
+
+  async function saveReview(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!actualParty) {
+      setError("Choose what answered the call");
+      return;
+    }
+    if (actualParty === "uncertain" && !notes.trim()) {
+      setError("Add a note explaining why the review is uncertain");
+      return;
+    }
+    setPending(true);
+    setError(null);
+    setSaved(false);
+    try {
+      const review = await upsertCallAvmdReview(detail.call.id, {
+        actualParty,
+        notes: notes.trim() || undefined
+      });
+      onSaved(review);
+      setSaved(true);
+    } catch (saveError) {
+      setError(getErrorMessage(saveError, "Could not save AVMD review"));
+    } finally {
+      setPending(false);
+    }
+  }
+
+  if (!detail.call.avmdAttempted && !detail.avmdReview) {
+    return (
+      <section className="avmd-review-card unavailable" aria-labelledby={`avmd-review-${detail.call.id}`}>
+        <div>
+          <strong id={`avmd-review-${detail.call.id}`}>AVMD review</strong>
+          <span>AVMD was not started for this call; no review is needed.</span>
+        </div>
+      </section>
+    );
+  }
+
+  if (!canReview) {
+    return (
+      <section className="avmd-review-card unavailable" aria-labelledby={`avmd-review-${detail.call.id}`}>
+        <div>
+          <strong id={`avmd-review-${detail.call.id}`}>AVMD review</strong>
+          <span>Detector: {formatAvmdPrediction(detail)}</span>
+        </div>
+        {detail.avmdReview ? (
+          <div className="avmd-review-existing">
+            <StatusBadge label={formatAvmdActualParty(detail.avmdReview.actualParty)} tone="neutral" />
+            <span>
+              Reviewed by {detail.avmdReview.reviewedByName} · {formatDateTime(detail.avmdReview.reviewedAt)}
+            </span>
+            {detail.avmdReview.notes && <p>{detail.avmdReview.notes}</p>}
+            <small>The recording is no longer available, so this review cannot be rechecked.</small>
+          </div>
+        ) : (
+          <p>Review unavailable: this call has no playable recording.</p>
+        )}
+      </section>
+    );
+  }
+
+  return (
+    <section className="avmd-review-card" aria-labelledby={`avmd-review-${detail.call.id}`}>
+      <div className="avmd-review-heading">
+        <div>
+          <strong id={`avmd-review-${detail.call.id}`}>AVMD review</strong>
+          <span>Detector: {formatAvmdPrediction(detail)}</span>
+        </div>
+        {detail.avmdReview && (
+          <small>
+            Reviewed by {detail.avmdReview.reviewedByName} · {formatDateTime(detail.avmdReview.reviewedAt)}
+          </small>
+        )}
+      </div>
+      <p>
+        Listen to the call recording, then classify what answered. This review evaluates the detector; it does
+        not confirm voicemail delivery.
+      </p>
+      <form onSubmit={saveReview}>
+        <fieldset>
+          <legend>What answered?</legend>
+          <div className="avmd-review-options">
+            {(["human", "machine", "uncertain"] as const).map((value) => (
+              <label className={actualParty === value ? "selected" : undefined} key={value}>
+                <input
+                  checked={actualParty === value}
+                  name={`avmd-actual-party-${detail.call.id}`}
+                  onChange={() => {
+                    setActualParty(value);
+                    setError(null);
+                    setSaved(false);
+                  }}
+                  type="radio"
+                  value={value}
+                />
+                {formatAvmdActualParty(value)}
+              </label>
+            ))}
+          </div>
+        </fieldset>
+        <label>
+          Review note{actualParty === "uncertain" ? " (required for Uncertain)" : " (optional)"}
+          <textarea
+            maxLength={1000}
+            onChange={(event) => {
+              setNotes(event.target.value);
+              setSaved(false);
+            }}
+            placeholder="Add context that will help interpret this review"
+            value={notes}
+          />
+        </label>
+        {error && (
+          <p className="form-error" role="alert">
+            {error}
+          </p>
+        )}
+        {saved && (
+          <p className="inline-success" aria-live="polite">
+            AVMD review saved
+          </p>
+        )}
+        <button className="primary-action compact-action" disabled={pending} type="submit">
+          {pending ? "Saving review" : detail.avmdReview ? "Update review" : "Save review"}
+        </button>
+      </form>
+    </section>
+  );
+}
+
+function formatMediaValue(value: number | null): string {
+  return value === null ? "—" : value.toLocaleString(undefined, { maximumFractionDigits: 3 });
+}
+
+function MediaQualityCard({ item }: { item: CallMediaQuality }) {
+  return (
+    <div className="call-media-quality-card">
+      <div>
+        <strong>{item.legType === "agent" ? "Agent leg" : "Customer leg"}</strong>
+        {item.suspectedOneWayAudio && <StatusBadge label="Suspected one-way" tone="warn" />}
+      </div>
+      <dl>
+        <div>
+          <dt>Read codec</dt>
+          <dd>{item.readCodec ?? "—"}</dd>
+        </div>
+        <div>
+          <dt>Write codec</dt>
+          <dd>{item.writeCodec ?? "—"}</dd>
+        </div>
+        {item.sipGateway && (
+          <div>
+            <dt>SIP gateway</dt>
+            <dd>{item.sipGateway}</dd>
+          </div>
+        )}
+        {item.sipProfile && (
+          <div>
+            <dt>SIP profile</dt>
+            <dd>{item.sipProfile}</dd>
+          </div>
+        )}
+        <div>
+          <dt>Inbound media packets</dt>
+          <dd>{formatMediaValue(item.inboundMediaPacketCount)}</dd>
+        </div>
+        <div>
+          <dt>Outbound media packets</dt>
+          <dd>{formatMediaValue(item.outboundMediaPacketCount)}</dd>
+        </div>
+        <div>
+          <dt>MOS</dt>
+          <dd>{formatMediaValue(item.inboundMos)}</dd>
+        </div>
+        <div>
+          <dt>Quality</dt>
+          <dd>
+            {item.inboundQualityPercentage === null ? "—" : formatPercent(item.inboundQualityPercentage)}
+          </dd>
+        </div>
+      </dl>
+      <small>Captured {formatDateTime(item.capturedAt)}</small>
+    </div>
+  );
+}
+
+function CallTechnicalEvidence({ detail }: { detail: CallDetailResponse }) {
+  const terminalMeasured = detail.call.finalizationLatencyMs !== null;
+  return (
+    <div className="call-technical-evidence">
+      <section>
+        <h4>Terminal persistence</h4>
+        <div className="technical-evidence-grid">
+          <div>
+            <span>Source</span>
+            <strong>{detail.call.terminalSource ?? "Not measured"}</strong>
+          </div>
+          <div>
+            <span>Event</span>
+            <strong>{detail.call.terminalEventName ?? "—"}</strong>
+          </div>
+          <div>
+            <span>FreeSWITCH terminal</span>
+            <strong>
+              {detail.call.freeswitchTerminalAt ? formatDateTime(detail.call.freeswitchTerminalAt) : "—"}
+            </strong>
+          </div>
+          <div>
+            <span>Persisted terminal</span>
+            <strong>
+              {detail.call.terminalPersistedAt ? formatDateTime(detail.call.terminalPersistedAt) : "—"}
+            </strong>
+          </div>
+          <div>
+            <span>Finalization lag</span>
+            <strong>
+              {terminalMeasured ? formatMilliseconds(detail.call.finalizationLatencyMs) : "Not measured"}
+            </strong>
+          </div>
+        </div>
+      </section>
+      <section>
+        <h4>Media observations</h4>
+        <p>FreeSWITCH RTP counters captured at hangup. They do not prove what either party heard.</p>
+        {detail.mediaQuality.length ? (
+          <div className="call-media-quality-grid">
+            {detail.mediaQuality.map((item) => (
+              <MediaQualityCard item={item} key={item.legType} />
+            ))}
+          </div>
+        ) : (
+          <div className="quality-unavailable">No FreeSWITCH media telemetry was captured.</div>
+        )}
+      </section>
+    </div>
+  );
 }
 
 function CallRecordingPlayer({ callId, leadName }: { callId: string; leadName: string }) {

@@ -132,7 +132,7 @@ Firewall and host-published-port changes were excluded by instruction. They are 
 These additions should follow acceptance of the current behavior, not block it unless the client explicitly promotes them:
 
 - Outcome-specific scheduled callbacks, reason-coded pauses, and supervisor requeue controls beyond the implemented ready/pause/wrap-up flow.
-- Ground-truth review workflow for AVMD precision/false positives and media-quality instrumentation for RTP loss, jitter, one-way audio, and codec/provider breakdowns. Current lifecycle events and automatic outcomes alone are not sufficient evidence for these measures.
+- Representative AVMD review cohorts and runtime calibration of media-quality thresholds remain operational follow-ups. The product now persists reviewer ground truth, per-leg FreeSWITCH RTP quality/codec/provider evidence, reconciliation snapshots, and terminal finalization latency; these sources still require adequate sample coverage before policy decisions.
 - Object storage for recordings with lifecycle, immutable/legal-hold support, checksum verification, and managed key rotation.
 - Generated OpenAPI/runtime schemas so API and web share validation, not TypeScript types alone.
 - Split large call-control/UI modules behind one explicit transition service/state machine.

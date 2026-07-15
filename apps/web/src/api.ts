@@ -10,6 +10,7 @@ import type {
   AgentDeskResponse,
   CampaignContactListItem,
   CampaignContactsResponse,
+  CallAvmdReview,
   CallDetailResponse,
   CallHistoryResponse,
   CreateCampaignRequest,
@@ -40,6 +41,7 @@ import type {
   SuppressContactRequest,
   UpdateCampaignRequest,
   UpdateAgentAvailabilityRequest,
+  UpsertCallAvmdReviewRequest,
   UpdateUserRequest,
   UpdateUserResponse
 } from "./types";
@@ -184,6 +186,16 @@ export async function fetchCallDetail(callId: string): Promise<CallDetailRespons
   return apiFetch<CallDetailResponse>(`/admin/calls/${callId}`);
 }
 
+export async function upsertCallAvmdReview(
+  callId: string,
+  input: UpsertCallAvmdReviewRequest
+): Promise<CallAvmdReview> {
+  return apiFetch<CallAvmdReview>(`/admin/calls/${encodeURIComponent(callId)}/avmd-review`, {
+    method: "PUT",
+    body: JSON.stringify(input)
+  });
+}
+
 export async function getCallRecordingAudioUrl(callId: string): Promise<string> {
   const ticket = await apiFetch<MediaTicketResponse>(`/admin/calls/${callId}/recording-ticket`, {
     method: "POST"
@@ -202,6 +214,7 @@ export type CallHistoryFilters = {
   to?: string;
   voicemail?: "drop" | "signal";
   recording?: "available" | "missing";
+  avmdReview?: "needs_review" | "reviewed" | "uncertain";
 };
 
 export type AdminLibraryFilters = {

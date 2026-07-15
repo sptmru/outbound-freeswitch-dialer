@@ -1,7 +1,13 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
-import type { AdminAnalyticsResponse, AdminOverviewResponse, AgentDeskResponse, PublicUser } from "./types";
+import type {
+  AdminAnalyticsResponse,
+  AdminOverviewResponse,
+  AgentDeskResponse,
+  CallDetailResponse,
+  PublicUser
+} from "./types";
 
 const apiMocks = vi.hoisted(() => ({
   dropVoicemail: vi.fn(),
@@ -19,6 +25,7 @@ const apiMocks = vi.hoisted(() => ({
   startManualCall: vi.fn(),
   subscribeAgentEvents: vi.fn(),
   updateAgentAvailability: vi.fn(),
+  upsertCallAvmdReview: vi.fn(),
   updateSystemSettings: vi.fn(),
   useSoftphoneRegistration: vi.fn()
 }));
@@ -42,6 +49,7 @@ vi.mock("./api", async () => {
     startManualCall: apiMocks.startManualCall,
     subscribeAgentEvents: apiMocks.subscribeAgentEvents,
     updateAgentAvailability: apiMocks.updateAgentAvailability,
+    upsertCallAvmdReview: apiMocks.upsertCallAvmdReview,
     updateSystemSettings: apiMocks.updateSystemSettings
   };
 });
@@ -89,6 +97,13 @@ describe("App Agent Desk empty states", () => {
     apiMocks.updateAgentAvailability.mockResolvedValue(
       deskResponse({ availability: { status: "paused", wrapUpUntil: null } })
     );
+    apiMocks.upsertCallAvmdReview.mockResolvedValue({
+      actualParty: "machine",
+      notes: "Clear mailbox greeting",
+      reviewedByName: "Admin Example",
+      reviewedAt: "2026-07-15T12:00:00.000Z",
+      updatedAt: "2026-07-15T12:00:00.000Z"
+    });
     apiMocks.useSoftphoneRegistration.mockReturnValue(softphoneRuntime);
   });
 
@@ -199,6 +214,10 @@ describe("App Agent Desk empty states", () => {
     expect(await screen.findByRole("heading", { level: 1, name: "Analytics" })).toBeInTheDocument();
     expect(await screen.findByText("44 answered / 100 attempts")).toBeInTheDocument();
     expect(screen.getByText("31 connected calls / 100 attempts")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Quality evidence" })).toBeInTheDocument();
+    expect(screen.getByText("AVMD review evidence")).toBeInTheDocument();
+    expect(screen.getByText("Provider observations")).toBeInTheDocument();
+    expect(screen.getByText("Registration count drift")).toBeInTheDocument();
     expect(apiMocks.fetchAdminAnalytics).toHaveBeenCalledWith(
       expect.objectContaining({
         campaignId: campaign.id,
@@ -242,6 +261,65 @@ describe("App Agent Desk empty states", () => {
       pcapCaptureEnabled: false
     });
     expect(await screen.findByText("Settings applied")).toBeInTheDocument();
+  });
+
+  it("shows unavailable quality evidence without converting missing observations to zero", async () => {
+    const admin = userRow({ role: "admin" });
+    window.history.replaceState({}, "", "/analytics");
+    apiMocks.fetchMe.mockResolvedValue({ user: admin });
+    apiMocks.fetchAgentDesk.mockResolvedValue(deskResponse({ user: admin }));
+    apiMocks.fetchAdminAnalytics.mockResolvedValue(
+      adminAnalyticsResponse({
+        avmdQuality: {
+          eligibleCalls: 0,
+          reviewedCalls: 0,
+          uncertainReviews: 0,
+          reviewCoverageRate: 0,
+          truePositives: 0,
+          falsePositives: 0,
+          trueNegatives: 0,
+          falseNegatives: 0,
+          precision: null,
+          recall: null,
+          falsePositiveRate: null
+        },
+        mediaQuality: {
+          answeredCalls: 4,
+          observedCalls: 0,
+          coverageRate: 0,
+          suspectedOneWayCalls: 0,
+          averageMos: null,
+          p95JitterLossRate: null,
+          averageQualityPercentage: null,
+          providers: [],
+          legs: []
+        },
+        telephonyReliability: {
+          finalizationSamples: 0,
+          averageFinalizationMs: null,
+          p95FinalizationMs: null,
+          maxFinalizationMs: null,
+          registrationDatabaseCount: null,
+          registrationFreeSwitchCount: null,
+          registrationDriftCount: null,
+          registrationCorrectionsLastRun: null,
+          registrationReconciledAt: null,
+          activeCallsDatabaseCount: null,
+          activeCallsMissingInFreeSwitch: null,
+          activeCallsClosedLastRun: null,
+          activeCallsReconciledAt: null,
+          reconciliationClosures: 0
+        }
+      })
+    );
+
+    render(<App />);
+
+    expect(
+      await screen.findByText("Media telemetry was not observed for answered calls.")
+    ).toBeInTheDocument();
+    expect(screen.getAllByText("Unavailable").length).toBeGreaterThanOrEqual(2);
+    expect(screen.getAllByText("—").length).toBeGreaterThan(0);
   });
 
   it("preselects the active Agent Desk campaign in Add lead and CSV import", async () => {
@@ -644,9 +722,34 @@ describe("App Agent Desk empty states", () => {
     expect(screen.queryByText(/slightly increases the chance of false positives/i)).not.toBeInTheDocument();
   });
 
+  it("does not offer AVMD classification without a playable recording", async () => {
+    const admin = userRow({ role: "admin" });
+    const call = callHistoryRow({ avmdReviewStatus: "needs_review", recordingAvailable: false });
+    apiMocks.fetchMe.mockResolvedValue({ user: admin });
+    apiMocks.fetchAgentDesk.mockResolvedValue(deskResponse({ user: admin }));
+    apiMocks.fetchAdminOverview.mockResolvedValue(adminResponse({ callHistory: [call] }));
+    apiMocks.fetchCallHistory.mockResolvedValue({
+      items: [call],
+      page: 1,
+      pageSize: 25,
+      total: 1,
+      totalPages: 1
+    });
+    apiMocks.fetchCallDetail.mockResolvedValue(callDetailResponse(call));
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Call history" }));
+    fireEvent.click(await screen.findByRole("button", { name: /Avery Johnson/ }));
+
+    expect(
+      await screen.findByText("Review unavailable: this call has no playable recording.")
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Save review" })).not.toBeInTheDocument();
+  });
+
   it("plays a call recording and keeps technical events collapsed until requested", async () => {
     const admin = userRow({ role: "admin" });
-    const call = callHistoryRow({ recordingAvailable: true });
+    const call = callHistoryRow({ recordingAvailable: true, avmdReviewStatus: "needs_review" });
     apiMocks.fetchMe.mockResolvedValue({ user: admin });
     apiMocks.fetchAgentDesk.mockResolvedValue(deskResponse({ user: admin }));
     apiMocks.fetchAdminOverview.mockResolvedValue(adminResponse({ callHistory: [call] }));
@@ -666,6 +769,7 @@ describe("App Agent Desk empty states", () => {
         manualDial: false,
         voicemailSignal: null,
         voicemailConfidence: null,
+        avmdAttempted: true,
         recordingStatus: "available",
         recordingDurationSeconds: 60,
         recordingFileSizeBytes: 128_000,
@@ -678,8 +782,35 @@ describe("App Agent Desk empty states", () => {
         pcapStatus: "available",
         pcapAvailable: true,
         lastReasonCode: null,
-        hangupCause: null
+        hangupCause: null,
+        freeswitchTerminalAt: call.createdAt,
+        terminalPersistedAt: call.createdAt,
+        terminalSource: "freeswitch_channel_event",
+        terminalEventName: "CHANNEL_HANGUP_COMPLETE",
+        finalizationLatencyMs: 42
       },
+      avmdReview: null,
+      mediaQuality: [
+        {
+          legType: "customer",
+          capturedAt: call.createdAt,
+          readCodec: "PCMU",
+          writeCodec: "PCMU",
+          sipGateway: "primary-trunk",
+          sipProfile: "external",
+          inboundPacketCount: 120,
+          outboundPacketCount: 118,
+          inboundMediaPacketCount: 120,
+          outboundMediaPacketCount: 118,
+          inboundSkipPacketCount: 0,
+          inboundJitterLossRate: 0.01,
+          inboundJitterMaxVariance: 0.02,
+          inboundMos: 4.2,
+          inboundQualityPercentage: 93,
+          suspectedOneWayAudio: false
+        }
+      ],
+      legs: [],
       timeline: [
         {
           at: call.createdAt,
@@ -687,13 +818,25 @@ describe("App Agent Desk empty states", () => {
           state: "bridged",
           label: "Customer connected",
           reasonCode: null,
-          freeSwitchEventName: "CHANNEL_ANSWER"
+          freeSwitchEventName: "CHANNEL_ANSWER",
+          apiCommandName: null,
+          agentLegUuid: null,
+          customerLegUuid: null
         }
       ]
     });
 
     render(<App />);
     fireEvent.click(await screen.findByRole("button", { name: "Call history" }));
+    fireEvent.change(await screen.findByLabelText("AVMD review"), {
+      target: { value: "needs_review" }
+    });
+    await waitFor(() =>
+      expect(apiMocks.fetchCallHistory).toHaveBeenLastCalledWith(
+        expect.objectContaining({ avmdReview: "needs_review" })
+      )
+    );
+    expect(screen.getByText("Needs AVMD review")).toBeInTheDocument();
     fireEvent.click(await screen.findByRole("button", { name: /Avery Johnson/ }));
 
     const player = await screen.findByLabelText("Call recording for Avery Johnson");
@@ -702,10 +845,26 @@ describe("App Agent Desk empty states", () => {
     expect(screen.getByText("Integrity checked")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Download PCAP" })).toBeInTheDocument();
     expect(screen.getByText("Filtered to this call's SIP signaling and media ports.")).toBeInTheDocument();
+    expect(screen.getByText(/This review evaluates the detector/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("radio", { name: "Voicemail / machine" }));
+    fireEvent.change(screen.getByLabelText(/Review note/), {
+      target: { value: "Clear mailbox greeting" }
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save review" }));
+    await waitFor(() =>
+      expect(apiMocks.upsertCallAvmdReview).toHaveBeenCalledWith(call.id, {
+        actualParty: "machine",
+        notes: "Clear mailbox greeting"
+      })
+    );
+    expect(await screen.findByText("AVMD review saved")).toBeInTheDocument();
     expect(player).toHaveAttribute("src", "/api/media/ticketed-recording");
     expect(screen.queryByText("Customer connected")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Show technical details" }));
     expect(await screen.findByText("Customer connected")).toBeInTheDocument();
+    expect(screen.getByText("Terminal persistence")).toBeInTheDocument();
+    expect(screen.getByText("primary-trunk")).toBeInTheDocument();
+    expect(screen.getByText("external")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Hide technical details" })).toHaveAttribute(
       "aria-expanded",
       "true"
@@ -953,6 +1112,63 @@ function adminAnalyticsResponse(overrides: Partial<AdminAnalyticsResponse> = {})
       completionRate: 90,
       averageReleaseSeconds: 3
     },
+    avmdQuality: {
+      eligibleCalls: 20,
+      reviewedCalls: 12,
+      uncertainReviews: 2,
+      reviewCoverageRate: 60,
+      truePositives: 5,
+      falsePositives: 1,
+      trueNegatives: 4,
+      falseNegatives: 2,
+      precision: 83.3,
+      recall: 71.4,
+      falsePositiveRate: 20
+    },
+    mediaQuality: {
+      answeredCalls: 44,
+      observedCalls: 30,
+      coverageRate: 68.2,
+      suspectedOneWayCalls: 2,
+      averageMos: 4.12,
+      p95JitterLossRate: 0.04,
+      averageQualityPercentage: 91.5,
+      providers: [{ provider: "primary-trunk", count: 30 }],
+      legs: [
+        {
+          legType: "agent",
+          observedCalls: 28,
+          averageMos: 4.2,
+          p95JitterLossRate: 0.03,
+          averageQualityPercentage: 93,
+          codecs: [{ codec: "OPUS", count: 28 }]
+        },
+        {
+          legType: "customer",
+          observedCalls: 30,
+          averageMos: 4.04,
+          p95JitterLossRate: 0.05,
+          averageQualityPercentage: 90,
+          codecs: [{ codec: "PCMU", count: 30 }]
+        }
+      ]
+    },
+    telephonyReliability: {
+      finalizationSamples: 32,
+      averageFinalizationMs: 42,
+      p95FinalizationMs: 120,
+      maxFinalizationMs: 340,
+      registrationDatabaseCount: 3,
+      registrationFreeSwitchCount: 2,
+      registrationDriftCount: 1,
+      registrationCorrectionsLastRun: 1,
+      registrationReconciledAt: "2026-07-15T12:00:00.000Z",
+      activeCallsDatabaseCount: 2,
+      activeCallsMissingInFreeSwitch: 1,
+      activeCallsClosedLastRun: 1,
+      activeCallsReconciledAt: "2026-07-15T12:00:00.000Z",
+      reconciliationClosures: 3
+    },
     ...overrides
   };
 }
@@ -976,6 +1192,44 @@ function callHistoryRow(
     pcapStatus: null,
     pcapAvailable: false,
     voicemailSignal: null,
+    avmdReviewStatus: null,
     ...overrides
+  };
+}
+
+function callDetailResponse(call: AdminOverviewResponse["callHistory"][number]): CallDetailResponse {
+  return {
+    call: {
+      ...call,
+      startedAt: call.createdAt,
+      answeredAt: call.createdAt,
+      endedAt: call.createdAt,
+      manualDial: false,
+      voicemailSignal: null,
+      voicemailConfidence: null,
+      avmdAttempted: true,
+      recordingStatus: call.recordingAvailable ? "available" : "disabled",
+      recordingDurationSeconds: null,
+      recordingFileSizeBytes: null,
+      recordingIntegrityCheckedAt: null,
+      recordingFailureReason: null,
+      pcapFileSizeBytes: null,
+      pcapStartedAt: null,
+      pcapEndedAt: null,
+      pcapFailureReason: null,
+      pcapStatus: null,
+      pcapAvailable: false,
+      lastReasonCode: null,
+      hangupCause: null,
+      freeswitchTerminalAt: null,
+      terminalPersistedAt: null,
+      terminalSource: null,
+      terminalEventName: null,
+      finalizationLatencyMs: null
+    },
+    avmdReview: null,
+    mediaQuality: [],
+    legs: [],
+    timeline: []
   };
 }

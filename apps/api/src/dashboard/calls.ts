@@ -493,11 +493,15 @@ export async function syncFreeSwitchOriginate(
   } catch (error) {
     await pool.query(
       `
+        with stamp as (select clock_timestamp() as persisted_at)
         update calls
         set state = 'failed',
             outcome = 'failed',
-            ended_at = now(),
-            updated_at = now()
+            ended_at = stamp.persisted_at,
+            terminal_persisted_at = stamp.persisted_at,
+            terminal_source = 'originate_failure',
+            updated_at = stamp.persisted_at
+        from stamp
         where id = $1
       `,
       [input.callId]
@@ -649,17 +653,24 @@ async function failDialerCallFromFreeSwitch(
 ): Promise<void> {
   const updated = await pool.query(
     `
+      with stamp as (select clock_timestamp() as persisted_at)
       update calls
       set state = 'failed',
           outcome = 'failed',
-          ended_at = coalesce(ended_at, now()),
-          updated_at = now()
+          ended_at = stamp.persisted_at,
+          terminal_persisted_at = stamp.persisted_at,
+          terminal_source = case
+            when $2 = 'freeswitch_originate_skipped' then 'originate_failure'
+            else 'originate_watchdog'
+          end,
+          updated_at = stamp.persisted_at
+      from stamp
       where id = $1
         and ended_at is null
         and state not in ('completed', 'failed', 'canceled')
       returning contact_id
     `,
-    [callId]
+    [callId, event.eventType]
   );
   if (!updated.rowCount) {
     return;
@@ -1212,11 +1223,15 @@ export async function endDialerCall(
 
     await client.query(
       `
+        with stamp as (select clock_timestamp() as persisted_at)
         update calls
         set state = 'completed',
             outcome = $2,
-            ended_at = now(),
-            updated_at = now()
+            ended_at = stamp.persisted_at,
+            terminal_persisted_at = stamp.persisted_at,
+            terminal_source = 'agent_api',
+            updated_at = stamp.persisted_at
+        from stamp
         where id = $1
       `,
       [callId, outcome]

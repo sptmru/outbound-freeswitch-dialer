@@ -524,6 +524,7 @@ export type CallHistoryFilters = {
   to?: Date;
   voicemail?: "drop" | "signal";
   recording?: "available" | "missing";
+  avmdReview?: "needs_review" | "reviewed" | "uncertain";
 };
 
 export async function getCallHistoryPage(
@@ -547,6 +548,7 @@ export async function getCallHistoryPage(
     pcap_status: CallPcapStatus | null;
     pcap_available: boolean;
     voicemail_signal_status: string | null;
+    avmd_review_status: "needs_review" | "reviewed" | "uncertain" | null;
     total_count: string;
   }>(
     `
@@ -565,6 +567,12 @@ export async function getCallHistoryPage(
       call_pcaps.status as pcap_status,
       call_pcaps.status = 'available' and call_pcaps.file_path is not null as pcap_available,
       calls.voicemail_signal_status,
+      case
+        when calls.answered_at is null or calls.ended_at is null or not coalesce(avmd.attempted, false) then null
+        when call_avmd_reviews.actual_party = 'uncertain' then 'uncertain'
+        when call_avmd_reviews.call_id is not null then 'reviewed'
+        else 'needs_review'
+      end as avmd_review_status,
       count(*) over() as total_count,
       extract(epoch from (coalesce(calls.ended_at, now()) - coalesce(calls.answered_at, calls.started_at, calls.created_at)))::int as duration_seconds
     from calls
@@ -573,6 +581,14 @@ export async function getCallHistoryPage(
     left join users on users.id = agents.user_id
     left join campaigns on campaigns.id = calls.campaign_id
     left join call_pcaps on call_pcaps.call_id = calls.id
+    left join call_avmd_reviews on call_avmd_reviews.call_id = calls.id
+    left join lateral (
+      select true as attempted
+      from call_events
+      where call_events.call_id = calls.id
+        and call_events.event_type = 'voicemail_detection_started'
+      limit 1
+    ) avmd on true
     where ($1::text is null or concat_ws(' ', contacts.display_name, calls.destination_number, users.name, campaigns.name) ilike '%' || $1 || '%')
       and ($2::uuid is null or calls.campaign_id = $2)
       and ($3::uuid is null or users.id = $3)
@@ -589,8 +605,14 @@ export async function getCallHistoryPage(
         or ($8 = 'available' and calls.call_recording_status = 'available' and calls.call_recording_path is not null)
         or ($8 = 'missing' and (calls.call_recording_status <> 'available' or calls.call_recording_path is null))
       )
+      and (
+        $9::text is null
+        or ($9 = 'needs_review' and calls.answered_at is not null and calls.ended_at is not null and coalesce(avmd.attempted, false) and call_avmd_reviews.call_id is null)
+        or ($9 = 'reviewed' and call_avmd_reviews.actual_party in ('human', 'machine'))
+        or ($9 = 'uncertain' and call_avmd_reviews.actual_party = 'uncertain')
+      )
     order by calls.created_at desc
-    limit $9 offset $10
+    limit $10 offset $11
   `,
     [
       filters.q?.trim() || null,
@@ -601,6 +623,7 @@ export async function getCallHistoryPage(
       filters.to ?? null,
       filters.voicemail ?? null,
       filters.recording ?? null,
+      filters.avmdReview ?? null,
       filters.pageSize,
       offset
     ]
@@ -621,7 +644,8 @@ export async function getCallHistoryPage(
     recordingAvailable: row.recording_available,
     pcapStatus: row.pcap_status,
     pcapAvailable: row.pcap_available,
-    voicemailSignal: row.voicemail_signal_status
+    voicemailSignal: row.voicemail_signal_status,
+    avmdReviewStatus: row.avmd_review_status
   }));
   const total = Number(result.rows[0]?.total_count ?? 0);
   return {
@@ -665,6 +689,12 @@ export async function getCallDetail(pool: pg.Pool, callId: string): Promise<Call
     pcap_file_path: string | null;
     voicemail_signal_status: string | null;
     voicemail_confidence: number | null;
+    avmd_attempted: boolean;
+    freeswitch_terminal_at: Date | null;
+    terminal_persisted_at: Date | null;
+    terminal_source: string | null;
+    terminal_event_name: string | null;
+    finalization_latency_ms: number | null;
   }>(
     `
       select
@@ -696,6 +726,16 @@ export async function getCallDetail(pool: pg.Pool, callId: string): Promise<Call
         call_pcaps.failure_reason as pcap_failure_reason,
         call_pcaps.file_path as pcap_file_path,
         calls.voicemail_signal_status,
+        calls.freeswitch_terminal_at,
+        calls.terminal_persisted_at,
+        calls.terminal_source,
+        calls.terminal_event_name,
+        calls.finalization_latency_ms,
+        exists (
+          select 1 from call_events
+          where call_events.call_id = calls.id
+            and call_events.event_type = 'voicemail_detection_started'
+        ) as avmd_attempted,
         voicemail.confidence as voicemail_confidence,
         extract(epoch from (coalesce(calls.ended_at, now()) - coalesce(calls.answered_at, calls.started_at, calls.created_at)))::int as duration_seconds
       from calls
@@ -721,7 +761,7 @@ export async function getCallDetail(pool: pg.Pool, callId: string): Promise<Call
     return null;
   }
 
-  const [events, legs] = await Promise.all([
+  const [events, legs, reviews, mediaQuality] = await Promise.all([
     pool.query<CallDetailEventRow>(
       `
         select
@@ -771,6 +811,60 @@ export async function getCallDetail(pool: pg.Pool, callId: string): Promise<Call
         order by case type when 'agent' then 0 else 1 end
       `,
       [callId]
+    ),
+    pool.query<{
+      actual_party: "human" | "machine" | "uncertain";
+      notes: string | null;
+      reviewed_by_name: string;
+      reviewed_at: Date;
+      updated_at: Date;
+    }>(
+      `
+        select actual_party, notes, reviewed_by_name, reviewed_at, updated_at
+        from call_avmd_reviews
+        where call_id = $1
+      `,
+      [callId]
+    ),
+    pool.query<{
+      leg_type: "agent" | "customer";
+      captured_at: Date;
+      read_codec: string | null;
+      write_codec: string | null;
+      sip_gateway: string | null;
+      sip_profile: string | null;
+      inbound_packet_count: string | number | null;
+      outbound_packet_count: string | number | null;
+      inbound_media_packet_count: string | number | null;
+      outbound_media_packet_count: string | number | null;
+      inbound_skip_packet_count: string | number | null;
+      inbound_jitter_loss_rate: string | number | null;
+      inbound_jitter_max_variance: string | number | null;
+      inbound_mos: string | number | null;
+      inbound_quality_percentage: string | number | null;
+    }>(
+      `
+        select
+          leg_type,
+          captured_at,
+          read_codec,
+          write_codec,
+          sip_gateway,
+          sip_profile,
+          inbound_packet_count,
+          outbound_packet_count,
+          inbound_media_packet_count,
+          outbound_media_packet_count,
+          inbound_skip_packet_count,
+          inbound_jitter_loss_rate,
+          inbound_jitter_max_variance,
+          inbound_mos,
+          inbound_quality_percentage
+        from call_media_stats
+        where call_id = $1
+        order by case leg_type when 'agent' then 0 else 1 end
+      `,
+      [callId]
     )
   ]);
 
@@ -791,6 +885,14 @@ export async function getCallDetail(pool: pg.Pool, callId: string): Promise<Call
       agentId: row.agent_user_id,
       state: row.state,
       outcome: row.outcome,
+      avmdReviewStatus:
+        !row.avmd_attempted || !row.answered_at || !row.ended_at
+          ? null
+          : reviews.rows[0]?.actual_party === "uncertain"
+            ? "uncertain"
+            : reviews.rows[0]
+              ? "reviewed"
+              : "needs_review",
       createdAt: row.created_at.toISOString(),
       startedAt: row.started_at?.toISOString() ?? null,
       answeredAt: row.answered_at?.toISOString() ?? null,
@@ -798,6 +900,7 @@ export async function getCallDetail(pool: pg.Pool, callId: string): Promise<Call
       manualDial: row.manual_dial,
       voicemailSignal: row.voicemail_signal_status,
       voicemailConfidence: row.voicemail_confidence === null ? null : Number(row.voicemail_confidence),
+      avmdAttempted: row.avmd_attempted,
       recordingStatus,
       recordingDurationSeconds: row.call_recording_duration_seconds ?? null,
       recordingFileSizeBytes:
@@ -817,9 +920,41 @@ export async function getCallDetail(pool: pg.Pool, callId: string): Promise<Call
       pcapAvailable: row.pcap_status === "available" && Boolean(row.pcap_file_path),
       lastReasonCode,
       hangupCause,
+      freeswitchTerminalAt: row.freeswitch_terminal_at?.toISOString() ?? null,
+      terminalPersistedAt: row.terminal_persisted_at?.toISOString() ?? null,
+      terminalSource: row.terminal_source,
+      terminalEventName: row.terminal_event_name,
+      finalizationLatencyMs: row.finalization_latency_ms,
       durationSeconds: row.duration_seconds ?? 0,
       recordingAvailable: recordingStatus === "available" && Boolean(row.call_recording_path)
     },
+    avmdReview: reviews.rows[0]
+      ? {
+          actualParty: reviews.rows[0].actual_party,
+          notes: reviews.rows[0].notes,
+          reviewedByName: reviews.rows[0].reviewed_by_name,
+          reviewedAt: reviews.rows[0].reviewed_at.toISOString(),
+          updatedAt: reviews.rows[0].updated_at.toISOString()
+        }
+      : null,
+    mediaQuality: mediaQuality.rows.map((media) => ({
+      legType: media.leg_type,
+      capturedAt: media.captured_at.toISOString(),
+      readCodec: media.read_codec,
+      writeCodec: media.write_codec,
+      sipGateway: media.sip_gateway,
+      sipProfile: media.sip_profile,
+      inboundPacketCount: nullableNumber(media.inbound_packet_count),
+      outboundPacketCount: nullableNumber(media.outbound_packet_count),
+      inboundMediaPacketCount: nullableNumber(media.inbound_media_packet_count),
+      outboundMediaPacketCount: nullableNumber(media.outbound_media_packet_count),
+      inboundSkipPacketCount: nullableNumber(media.inbound_skip_packet_count),
+      inboundJitterLossRate: nullableNumber(media.inbound_jitter_loss_rate),
+      inboundJitterMaxVariance: nullableNumber(media.inbound_jitter_max_variance),
+      inboundMos: nullableNumber(media.inbound_mos),
+      inboundQualityPercentage: nullableNumber(media.inbound_quality_percentage),
+      suspectedOneWayAudio: isSuspectedOneWayAudio(media, row.duration_seconds ?? 0)
+    })),
     legs: legs.rows.map((leg) => {
       const legEvents = events.rows.filter((event) => eventBelongsToLeg(event, leg.freeswitch_uuid));
       return {
@@ -859,6 +994,33 @@ type CallDetailEventRow = {
   raw_json: Record<string, unknown>;
   created_at: Date;
 };
+
+function nullableNumber(value: string | number | null | undefined): number | null {
+  if (value === null || value === undefined) return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function isSuspectedOneWayAudio(
+  media: {
+    inbound_packet_count: string | number | null;
+    outbound_packet_count: string | number | null;
+    inbound_media_packet_count: string | number | null;
+    outbound_media_packet_count: string | number | null;
+  },
+  durationSeconds: number
+): boolean {
+  const inbound =
+    nullableNumber(media.inbound_media_packet_count) ?? nullableNumber(media.inbound_packet_count);
+  const outbound =
+    nullableNumber(media.outbound_media_packet_count) ?? nullableNumber(media.outbound_packet_count);
+  return (
+    durationSeconds >= 10 &&
+    inbound !== null &&
+    outbound !== null &&
+    ((inbound <= 5 && outbound >= 50) || (outbound <= 5 && inbound >= 50))
+  );
+}
 
 function eventBelongsToLeg(event: CallDetailEventRow, legUuid: string | null): boolean {
   if (!legUuid) return false;

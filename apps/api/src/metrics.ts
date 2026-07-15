@@ -35,6 +35,24 @@ const databaseSnapshotUp = new Gauge({
   registers: [registry]
 });
 
+const mediaCoverageValues = ["eligible", "complete", "partial", "missing"] as const;
+const mediaLegTypes = ["agent", "customer"] as const;
+const mediaDirections = ["inbound", "outbound"] as const;
+const mediaPacketKinds = ["all", "media"] as const;
+const codecDirections = ["read", "write"] as const;
+const codecValues = ["PCMU", "PCMA", "G729", "OPUS", "G722", "L16", "OTHER", "UNKNOWN"] as const;
+const terminalStatistics = ["average", "p50", "p95", "max"] as const;
+const terminalCoverageValues = ["measured", "unmeasured"] as const;
+const terminalSourceValues = [
+  "freeswitch_customer_terminal",
+  "active_call_reconciliation",
+  "background_job",
+  "api",
+  "voicemail_custom",
+  "unknown"
+] as const;
+type MediaStatistic = "average" | "p10" | "p95";
+
 const activeCalls = gauge(
   "outbound_dialer_active_calls",
   "Current non-terminal calls excluding voicemail playback continuing after agent release."
@@ -90,6 +108,106 @@ const callOutcomesWindow = new Gauge({
   labelNames: ["outcome"] as const,
   registers: [registry]
 });
+const mediaQualityCallsWindow = labeledGauge(
+  "outbound_dialer_media_quality_calls_window",
+  "Answered calls eligible for media quality analysis during the last 15 minutes, grouped by coverage.",
+  ["coverage"]
+);
+const mediaOneWaySuspectedCallsWindow = labeledGauge(
+  "outbound_dialer_media_one_way_suspected_calls_window",
+  "Answered calls with strongly asymmetric RTP packet flow during the last 15 minutes.",
+  ["leg_type"]
+);
+const mediaPacketsWindow = labeledGauge(
+  "outbound_dialer_media_packets_window",
+  "RTP packet totals captured from completed call legs during the last 15 minutes.",
+  ["leg_type", "direction", "kind"]
+);
+const mediaJitterLossRateWindow = labeledGauge(
+  "outbound_dialer_media_inbound_jitter_loss_rate_window",
+  "FreeSWITCH-reported inbound jitter loss rate during the last 15 minutes.",
+  ["leg_type", "statistic"]
+);
+const mediaJitterMaxVarianceWindow = labeledGauge(
+  "outbound_dialer_media_inbound_jitter_max_variance_window",
+  "FreeSWITCH-reported inbound jitter maximum variance during the last 15 minutes.",
+  ["leg_type", "statistic"]
+);
+const mediaMosWindow = labeledGauge(
+  "outbound_dialer_media_mos_window",
+  "FreeSWITCH-reported inbound MOS during the last 15 minutes.",
+  ["leg_type", "statistic"]
+);
+const mediaQualityPercentageWindow = labeledGauge(
+  "outbound_dialer_media_quality_percentage_window",
+  "FreeSWITCH-reported inbound quality percentage during the last 15 minutes.",
+  ["leg_type", "statistic"]
+);
+const mediaCodecsWindow = labeledGauge(
+  "outbound_dialer_media_codecs_window",
+  "Completed call legs by normalized negotiated codec during the last 15 minutes.",
+  ["leg_type", "direction", "codec"]
+);
+const terminalFinalizationSamplesWindow = gauge(
+  "outbound_dialer_terminal_finalization_samples_window",
+  "Customer terminal events with measured persistence latency during the last 15 minutes."
+);
+const terminalFinalizationDurationMilliseconds = labeledGauge(
+  "outbound_dialer_terminal_finalization_duration_milliseconds",
+  "Hangup-to-durable-terminal latency statistics during the last 15 minutes.",
+  ["statistic"]
+);
+const terminalFinalizationCoverageWindow = labeledGauge(
+  "outbound_dialer_terminal_finalization_coverage_window",
+  "FreeSWITCH customer terminal calls grouped by finalization latency coverage during the last 15 minutes.",
+  ["status"]
+);
+const terminalCallsWindow = labeledGauge(
+  "outbound_dialer_terminal_calls_window",
+  "Terminal calls during the last 15 minutes grouped by bounded terminal source.",
+  ["source"]
+);
+const registrationReconciliationUp = gauge(
+  "outbound_dialer_registration_reconciliation_up",
+  "Whether the latest agent registration reconciliation succeeded."
+);
+const registrationReconciliationLastRun = gauge(
+  "outbound_dialer_registration_reconciliation_last_run_timestamp_seconds",
+  "Unix timestamp of the latest successful agent registration reconciliation."
+);
+const registrationReconciledAgents = labeledGauge(
+  "outbound_dialer_registration_reconciled_agents",
+  "Agent registrations observed in the synchronized reconciliation snapshot.",
+  ["source"]
+);
+const registrationDriftAgents = gauge(
+  "outbound_dialer_registration_drift_agents",
+  "Symmetric difference between PostgreSQL and FreeSWITCH registration identities before correction."
+);
+const registrationCorrectionsLastRun = gauge(
+  "outbound_dialer_registration_corrections_last_run",
+  "Agent rows corrected by the latest registration reconciliation."
+);
+const activeCallReconciliationUp = gauge(
+  "outbound_dialer_active_call_reconciliation_up",
+  "Whether the latest active-call reconciliation completed without errors."
+);
+const activeCallReconciliationLastRun = gauge(
+  "outbound_dialer_active_call_reconciliation_last_run_timestamp_seconds",
+  "Unix timestamp of the latest active-call reconciliation attempt."
+);
+const activeCallReconciliationDatabaseCalls = gauge(
+  "outbound_dialer_active_call_reconciliation_database_calls",
+  "Database active calls checked by the latest FreeSWITCH reconciliation."
+);
+const activeCallsMissingInFreeSwitch = gauge(
+  "outbound_dialer_active_calls_missing_in_freeswitch",
+  "Mature database active calls whose customer channel was missing in FreeSWITCH during reconciliation."
+);
+const activeCallsClosedLastRun = gauge(
+  "outbound_dialer_active_calls_closed_last_run",
+  "Database active calls closed by the latest FreeSWITCH reconciliation."
+);
 const pcapCaptureEnabled = gauge(
   "outbound_dialer_pcap_capture_enabled",
   "Whether automatic per-call PCAP capture is enabled."
@@ -280,7 +398,17 @@ export function recordRetentionFailure(): void {
 
 async function refreshDatabaseMetrics(pool: pg.Pool, stuckCallSeconds: number): Promise<void> {
   try {
-    const [snapshot, window, outcomes] = await Promise.all([
+    const [
+      snapshot,
+      window,
+      outcomes,
+      telephonyState,
+      terminalLatency,
+      terminalSources,
+      mediaCoverage,
+      mediaLegs,
+      mediaCodecs
+    ] = await Promise.all([
       pool.query<{
         active_calls: string;
         active_voicemail_jobs: string;
@@ -332,7 +460,174 @@ async function refreshDatabaseMetrics(pool: pg.Pool, stuckCallSeconds: number): 
           order by outcome
         `,
         [Array.from(callOutcomes)]
-      )
+      ),
+      pool.query<{
+        active_call_reconcile_status: string | null;
+        active_calls_closed_last_run: number | null;
+        active_calls_db_count: number | null;
+        active_calls_missing_in_freeswitch: number | null;
+        active_calls_reconciled_at_seconds: string | null;
+        registration_corrections_last_run: number | null;
+        registration_db_count: number | null;
+        registration_drift_count: number | null;
+        registration_freeswitch_count: number | null;
+        registration_reconcile_status: string | null;
+        registration_reconciled_at_seconds: string | null;
+      }>(`
+        select
+          registration_db_count,
+          registration_freeswitch_count,
+          registration_drift_count,
+          registration_corrections_last_run,
+          registration_reconcile_status,
+          extract(epoch from registration_reconciled_at)::text as registration_reconciled_at_seconds,
+          active_calls_db_count,
+          active_calls_missing_in_freeswitch,
+          active_calls_closed_last_run,
+          active_call_reconcile_status,
+          extract(epoch from active_calls_reconciled_at)::text as active_calls_reconciled_at_seconds
+        from telephony_observability_state
+        where singleton = true
+      `),
+      pool.query<{
+        average_latency_ms: string | null;
+        max_latency_ms: string | null;
+        measured_calls: string;
+        p50_latency_ms: string | null;
+        p95_latency_ms: string | null;
+        terminal_samples: string;
+        unmeasured_calls: string;
+      }>(`
+        select
+          count(*) filter (
+            where terminal_source = 'freeswitch_customer_terminal'
+              and finalization_latency_ms is not null
+          ) as terminal_samples,
+          avg(finalization_latency_ms) filter (
+            where terminal_source = 'freeswitch_customer_terminal'
+          )::text as average_latency_ms,
+          percentile_cont(0.50) within group (order by finalization_latency_ms) filter (
+            where terminal_source = 'freeswitch_customer_terminal'
+          )::text as p50_latency_ms,
+          percentile_cont(0.95) within group (order by finalization_latency_ms) filter (
+            where terminal_source = 'freeswitch_customer_terminal'
+          )::text as p95_latency_ms,
+          max(finalization_latency_ms) filter (
+            where terminal_source = 'freeswitch_customer_terminal'
+          )::text as max_latency_ms,
+          count(*) filter (
+            where terminal_source = 'freeswitch_customer_terminal'
+              and finalization_latency_ms is not null
+          ) as measured_calls,
+          count(*) filter (
+            where terminal_source = 'freeswitch_customer_terminal'
+              and finalization_latency_ms is null
+          ) as unmeasured_calls
+        from calls
+        where terminal_persisted_at >= now() - interval '15 minutes'
+      `),
+      pool.query<{ count: string; terminal_source: string | null }>(`
+        select terminal_source, count(*) as count
+        from calls
+        where terminal_persisted_at >= now() - interval '15 minutes'
+        group by terminal_source
+      `),
+      pool.query<{
+        complete_calls: string;
+        eligible_calls: string;
+        missing_calls: string;
+        partial_calls: string;
+      }>(`
+        with eligible_calls as (
+          select id
+          from calls
+          where answered_at is not null
+            and ended_at >= now() - interval '15 minutes'
+            and ended_at >= answered_at + interval '10 seconds'
+        ), coverage as (
+          select
+            eligible_calls.id,
+            count(call_media_stats.call_id) filter (
+              where coalesce(
+                call_media_stats.inbound_media_packet_count,
+                call_media_stats.inbound_packet_count
+              ) is not null
+                and coalesce(
+                  call_media_stats.outbound_media_packet_count,
+                  call_media_stats.outbound_packet_count
+                ) is not null
+            ) as observed_legs
+          from eligible_calls
+          left join call_media_stats on call_media_stats.call_id = eligible_calls.id
+          group by eligible_calls.id
+        )
+        select
+          count(*) as eligible_calls,
+          count(*) filter (where observed_legs >= 2) as complete_calls,
+          count(*) filter (where observed_legs = 1) as partial_calls,
+          count(*) filter (where observed_legs = 0) as missing_calls
+        from coverage
+      `),
+      pool.query<{
+        inbound_all_packets: string;
+        inbound_jitter_loss_rate_average: string | null;
+        inbound_jitter_loss_rate_p95: string | null;
+        inbound_jitter_max_variance_average: string | null;
+        inbound_jitter_max_variance_p95: string | null;
+        inbound_media_packets: string;
+        inbound_mos_average: string | null;
+        inbound_mos_p10: string | null;
+        inbound_quality_percentage_average: string | null;
+        inbound_quality_percentage_p10: string | null;
+        leg_type: string;
+        outbound_all_packets: string;
+        outbound_media_packets: string;
+        suspected_one_way_calls: string;
+      }>(`
+        select
+          media.leg_type,
+          count(*) filter (
+            where (
+              coalesce(media.inbound_media_packet_count, media.inbound_packet_count, 0) <= 5
+              and coalesce(media.outbound_media_packet_count, media.outbound_packet_count, 0) >= 50
+            ) or (
+              coalesce(media.outbound_media_packet_count, media.outbound_packet_count, 0) <= 5
+              and coalesce(media.inbound_media_packet_count, media.inbound_packet_count, 0) >= 50
+            )
+          ) as suspected_one_way_calls,
+          coalesce(sum(media.inbound_packet_count), 0) as inbound_all_packets,
+          coalesce(sum(media.outbound_packet_count), 0) as outbound_all_packets,
+          coalesce(sum(media.inbound_media_packet_count), 0) as inbound_media_packets,
+          coalesce(sum(media.outbound_media_packet_count), 0) as outbound_media_packets,
+          avg(media.inbound_jitter_loss_rate)::text as inbound_jitter_loss_rate_average,
+          percentile_cont(0.95) within group (order by media.inbound_jitter_loss_rate)::text
+            as inbound_jitter_loss_rate_p95,
+          avg(media.inbound_jitter_max_variance)::text as inbound_jitter_max_variance_average,
+          percentile_cont(0.95) within group (order by media.inbound_jitter_max_variance)::text
+            as inbound_jitter_max_variance_p95,
+          avg(media.inbound_mos)::text as inbound_mos_average,
+          percentile_cont(0.10) within group (order by media.inbound_mos)::text as inbound_mos_p10,
+          avg(media.inbound_quality_percentage)::text as inbound_quality_percentage_average,
+          percentile_cont(0.10) within group (order by media.inbound_quality_percentage)::text
+            as inbound_quality_percentage_p10
+        from call_media_stats media
+        join calls on calls.id = media.call_id
+        where calls.answered_at is not null
+          and calls.ended_at >= now() - interval '15 minutes'
+          and calls.ended_at >= calls.answered_at + interval '10 seconds'
+        group by media.leg_type
+      `),
+      pool.query<{ codec: string | null; codec_direction: string; count: string; leg_type: string }>(`
+        select leg_type, 'read' as codec_direction, read_codec as codec, count(*) as count
+        from call_media_stats
+        where captured_at >= now() - interval '15 minutes'
+        group by leg_type, read_codec
+        union all
+        select leg_type, 'write' as codec_direction, write_codec as codec, count(*) as count
+        from call_media_stats
+        where captured_at >= now() - interval '15 minutes'
+        group by leg_type, write_codec
+      `)
     ]);
 
     const current = snapshot.rows[0];
@@ -361,10 +656,260 @@ async function refreshDatabaseMetrics(pool: pg.Pool, stuckCallSeconds: number): 
         callOutcomesWindow.set({ outcome: outcome.outcome }, toNumber(outcome.count));
       }
     }
+    setTelephonyStateMetrics(telephonyState.rows[0]);
+    setTerminalMetrics(terminalLatency.rows[0], terminalSources.rows);
+    setMediaMetrics(mediaCoverage.rows[0], mediaLegs.rows, mediaCodecs.rows);
     databaseSnapshotUp.set(1);
   } catch {
     databaseSnapshotUp.set(0);
   }
+}
+
+function setTelephonyStateMetrics(
+  state:
+    | {
+        active_call_reconcile_status: string | null;
+        active_calls_closed_last_run: number | null;
+        active_calls_db_count: number | null;
+        active_calls_missing_in_freeswitch: number | null;
+        active_calls_reconciled_at_seconds: string | null;
+        registration_corrections_last_run: number | null;
+        registration_db_count: number | null;
+        registration_drift_count: number | null;
+        registration_freeswitch_count: number | null;
+        registration_reconcile_status: string | null;
+        registration_reconciled_at_seconds: string | null;
+      }
+    | undefined
+): void {
+  registrationReconciliationUp.set(state?.registration_reconcile_status === "ok" ? 1 : 0);
+  registrationReconciliationLastRun.set(toNumber(state?.registration_reconciled_at_seconds));
+  registrationReconciledAgents.reset();
+  registrationReconciledAgents.set({ source: "postgres" }, toNumber(state?.registration_db_count));
+  registrationReconciledAgents.set({ source: "freeswitch" }, toNumber(state?.registration_freeswitch_count));
+  registrationDriftAgents.set(toNumber(state?.registration_drift_count));
+  registrationCorrectionsLastRun.set(toNumber(state?.registration_corrections_last_run));
+
+  activeCallReconciliationUp.set(state?.active_call_reconcile_status === "ok" ? 1 : 0);
+  activeCallReconciliationLastRun.set(toNumber(state?.active_calls_reconciled_at_seconds));
+  activeCallReconciliationDatabaseCalls.set(toNumber(state?.active_calls_db_count));
+  activeCallsMissingInFreeSwitch.set(toNumber(state?.active_calls_missing_in_freeswitch));
+  activeCallsClosedLastRun.set(toNumber(state?.active_calls_closed_last_run));
+}
+
+function setTerminalMetrics(
+  latency:
+    | {
+        average_latency_ms: string | null;
+        max_latency_ms: string | null;
+        measured_calls: string;
+        p50_latency_ms: string | null;
+        p95_latency_ms: string | null;
+        terminal_samples: string;
+        unmeasured_calls: string;
+      }
+    | undefined,
+  sources: Array<{ count: string; terminal_source: string | null }>
+): void {
+  terminalFinalizationSamplesWindow.set(toNumber(latency?.terminal_samples));
+  terminalFinalizationDurationMilliseconds.reset();
+  const durationValues = new Map<string, unknown>([
+    ["average", latency?.average_latency_ms],
+    ["p50", latency?.p50_latency_ms],
+    ["p95", latency?.p95_latency_ms],
+    ["max", latency?.max_latency_ms]
+  ]);
+  for (const statistic of terminalStatistics) {
+    const value = toOptionalNumber(durationValues.get(statistic));
+    if (value !== null) terminalFinalizationDurationMilliseconds.set({ statistic }, value);
+  }
+
+  terminalFinalizationCoverageWindow.reset();
+  const coverageCounts: Record<(typeof terminalCoverageValues)[number], number> = {
+    measured: toNumber(latency?.measured_calls),
+    unmeasured: toNumber(latency?.unmeasured_calls)
+  };
+  for (const status of terminalCoverageValues) {
+    terminalFinalizationCoverageWindow.set({ status }, coverageCounts[status]);
+  }
+
+  terminalCallsWindow.reset();
+  const counts = new Map<(typeof terminalSourceValues)[number], number>(
+    terminalSourceValues.map((source) => [source, 0])
+  );
+  for (const source of sources) {
+    const normalized = normalizeTerminalSource(source.terminal_source);
+    counts.set(normalized, (counts.get(normalized) ?? 0) + toNumber(source.count));
+  }
+  for (const source of terminalSourceValues) {
+    terminalCallsWindow.set({ source }, counts.get(source) ?? 0);
+  }
+}
+
+function setMediaMetrics(
+  coverage:
+    | {
+        complete_calls: string;
+        eligible_calls: string;
+        missing_calls: string;
+        partial_calls: string;
+      }
+    | undefined,
+  legs: Array<{
+    inbound_all_packets: string;
+    inbound_jitter_loss_rate_average: string | null;
+    inbound_jitter_loss_rate_p95: string | null;
+    inbound_jitter_max_variance_average: string | null;
+    inbound_jitter_max_variance_p95: string | null;
+    inbound_media_packets: string;
+    inbound_mos_average: string | null;
+    inbound_mos_p10: string | null;
+    inbound_quality_percentage_average: string | null;
+    inbound_quality_percentage_p10: string | null;
+    leg_type: string;
+    outbound_all_packets: string;
+    outbound_media_packets: string;
+    suspected_one_way_calls: string;
+  }>,
+  codecs: Array<{ codec: string | null; codec_direction: string; count: string; leg_type: string }>
+): void {
+  mediaQualityCallsWindow.reset();
+  const coverageCounts: Record<(typeof mediaCoverageValues)[number], number> = {
+    eligible: toNumber(coverage?.eligible_calls),
+    complete: toNumber(coverage?.complete_calls),
+    partial: toNumber(coverage?.partial_calls),
+    missing: toNumber(coverage?.missing_calls)
+  };
+  for (const value of mediaCoverageValues) {
+    mediaQualityCallsWindow.set({ coverage: value }, coverageCounts[value]);
+  }
+
+  mediaOneWaySuspectedCallsWindow.reset();
+  mediaPacketsWindow.reset();
+  mediaJitterLossRateWindow.reset();
+  mediaJitterMaxVarianceWindow.reset();
+  mediaMosWindow.reset();
+  mediaQualityPercentageWindow.reset();
+  for (const legType of mediaLegTypes) {
+    mediaOneWaySuspectedCallsWindow.set({ leg_type: legType }, 0);
+    for (const direction of mediaDirections) {
+      for (const kind of mediaPacketKinds) {
+        mediaPacketsWindow.set({ leg_type: legType, direction, kind }, 0);
+      }
+    }
+  }
+
+  for (const leg of legs) {
+    if (!isMediaLegType(leg.leg_type)) continue;
+    const legType = leg.leg_type;
+    mediaOneWaySuspectedCallsWindow.set({ leg_type: legType }, toNumber(leg.suspected_one_way_calls));
+    mediaPacketsWindow.set(
+      { leg_type: legType, direction: "inbound", kind: "all" },
+      toNumber(leg.inbound_all_packets)
+    );
+    mediaPacketsWindow.set(
+      { leg_type: legType, direction: "outbound", kind: "all" },
+      toNumber(leg.outbound_all_packets)
+    );
+    mediaPacketsWindow.set(
+      { leg_type: legType, direction: "inbound", kind: "media" },
+      toNumber(leg.inbound_media_packets)
+    );
+    mediaPacketsWindow.set(
+      { leg_type: legType, direction: "outbound", kind: "media" },
+      toNumber(leg.outbound_media_packets)
+    );
+    setOptionalStatistic(mediaJitterLossRateWindow, legType, "average", leg.inbound_jitter_loss_rate_average);
+    setOptionalStatistic(mediaJitterLossRateWindow, legType, "p95", leg.inbound_jitter_loss_rate_p95);
+    setOptionalStatistic(
+      mediaJitterMaxVarianceWindow,
+      legType,
+      "average",
+      leg.inbound_jitter_max_variance_average
+    );
+    setOptionalStatistic(mediaJitterMaxVarianceWindow, legType, "p95", leg.inbound_jitter_max_variance_p95);
+    setOptionalStatistic(mediaMosWindow, legType, "average", leg.inbound_mos_average);
+    setOptionalStatistic(mediaMosWindow, legType, "p10", leg.inbound_mos_p10);
+    setOptionalStatistic(
+      mediaQualityPercentageWindow,
+      legType,
+      "average",
+      leg.inbound_quality_percentage_average
+    );
+    setOptionalStatistic(mediaQualityPercentageWindow, legType, "p10", leg.inbound_quality_percentage_p10);
+  }
+
+  mediaCodecsWindow.reset();
+  const codecCounts = new Map<string, number>();
+  for (const legType of mediaLegTypes) {
+    for (const direction of codecDirections) {
+      for (const codec of codecValues) {
+        codecCounts.set(`${legType}:${direction}:${codec}`, 0);
+      }
+    }
+  }
+  for (const codec of codecs) {
+    if (!isMediaLegType(codec.leg_type) || !isCodecDirection(codec.codec_direction)) continue;
+    const normalized = normalizeCodec(codec.codec);
+    const key = `${codec.leg_type}:${codec.codec_direction}:${normalized}`;
+    codecCounts.set(key, (codecCounts.get(key) ?? 0) + toNumber(codec.count));
+  }
+  for (const legType of mediaLegTypes) {
+    for (const direction of codecDirections) {
+      for (const codec of codecValues) {
+        mediaCodecsWindow.set(
+          { leg_type: legType, direction, codec },
+          codecCounts.get(`${legType}:${direction}:${codec}`) ?? 0
+        );
+      }
+    }
+  }
+}
+
+function setOptionalStatistic(
+  metric: Gauge,
+  legType: (typeof mediaLegTypes)[number],
+  statistic: MediaStatistic,
+  rawValue: unknown
+): void {
+  const value = toOptionalNumber(rawValue);
+  if (value !== null) metric.set({ leg_type: legType, statistic }, value);
+}
+
+function normalizeCodec(value: string | null): (typeof codecValues)[number] {
+  if (!value?.trim()) return "UNKNOWN";
+  const normalized = value.toUpperCase().replace(/[^A-Z0-9]/g, "");
+  if (["PCMU", "ULAW", "G711U", "G711ULAW"].includes(normalized)) return "PCMU";
+  if (["PCMA", "ALAW", "G711A", "G711ALAW"].includes(normalized)) return "PCMA";
+  if (normalized.startsWith("G729")) return "G729";
+  if (normalized === "OPUS") return "OPUS";
+  if (normalized.startsWith("G722")) return "G722";
+  if (normalized.startsWith("L16")) return "L16";
+  return "OTHER";
+}
+
+function normalizeTerminalSource(value: string | null): (typeof terminalSourceValues)[number] {
+  if (value && (terminalSourceValues as readonly string[]).includes(value)) {
+    return value as (typeof terminalSourceValues)[number];
+  }
+  if (["background_job_failure", "originate_failure", "originate_watchdog"].includes(value ?? "")) {
+    return "background_job";
+  }
+  if (value === "agent_api") {
+    return "api";
+  }
+  if (value?.includes("voicemail") || value?.includes("playback")) {
+    return "voicemail_custom";
+  }
+  return "unknown";
+}
+
+function isMediaLegType(value: string): value is (typeof mediaLegTypes)[number] {
+  return (mediaLegTypes as readonly string[]).includes(value);
+}
+
+function isCodecDirection(value: string): value is (typeof codecDirections)[number] {
+  return (codecDirections as readonly string[]).includes(value);
 }
 
 async function refreshSipTrunkMetrics(config: AppConfig): Promise<void> {
@@ -432,6 +977,10 @@ function gauge(name: string, help: string): Gauge {
   return new Gauge({ name, help, registers: [registry] });
 }
 
+function labeledGauge(name: string, help: string, labelNames: readonly string[]): Gauge {
+  return new Gauge({ name, help, labelNames, registers: [registry] });
+}
+
 function normalizeEventName(value: string | undefined): string {
   const normalized = value
     ?.trim()
@@ -440,14 +989,21 @@ function normalizeEventName(value: string | undefined): string {
   return normalized || "UNKNOWN";
 }
 
-function toNumber(value: string | undefined): number {
-  const parsed = Number(value ?? 0);
-  return Number.isFinite(parsed) ? parsed : 0;
+function toOptionalNumber(value: unknown): number | null {
+  if (value === null || value === undefined || value === "") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function toNumber(value: unknown): number {
+  return toOptionalNumber(value) ?? 0;
 }
 
 export const __testing = {
   metrics: () => registry.metrics(),
+  normalizeCodec,
   normalizeEventName,
+  normalizeTerminalSource,
   parseFreeSwitchCount,
   refreshDatabaseMetrics,
   refreshFreeSwitchRuntimeMetrics,

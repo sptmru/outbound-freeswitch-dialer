@@ -2,6 +2,7 @@ import net from "node:net";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import type pg from "pg";
+import { parseFreeSwitchEventTimestamp, persistCallMediaStats } from "./call-observability.js";
 import { CoalescedTask } from "./coalesced-task.js";
 import type { AppConfig } from "./config.js";
 import { finishAgentCall } from "./agent-availability.js";
@@ -371,6 +372,16 @@ async function persistFreeSwitchEvent(config: AppConfig, pool: pg.Pool, frame: E
     ]
   );
 
+  if (eventName === "CHANNEL_HANGUP_COMPLETE") {
+    await persistCallMediaStats(pool, {
+      callId,
+      eventName,
+      frame,
+      legType,
+      legUuid
+    });
+  }
+
   if (legUuid) {
     await pool.query(
       `
@@ -485,6 +496,7 @@ async function persistFreeSwitchEvent(config: AppConfig, pool: pg.Pool, frame: E
   }
 
   if (isTerminalEvent(eventName) && legType === "customer") {
+    const terminalEventAt = parseFreeSwitchEventTimestamp(frame.headers);
     const call = await pool.query<{
       agent_id: string | null;
       answered_at: Date | null;
@@ -511,11 +523,18 @@ async function persistFreeSwitchEvent(config: AppConfig, pool: pg.Pool, frame: E
         frame.headers["hangup-cause"]?.toUpperCase() ?? ""
       );
       if (normalHangup) {
-        await finalizeCompletedVoicemailPlayback(config, pool, callId, legUuid, {
-          headers: frame.headers,
-          body: frame.body,
-          source: "freeswitch_terminal_event"
-        });
+        await finalizeCompletedVoicemailPlayback(
+          config,
+          pool,
+          callId,
+          legUuid,
+          {
+            headers: frame.headers,
+            body: frame.body,
+            source: "freeswitch_terminal_event"
+          },
+          { eventAt: terminalEventAt, eventName, source: "freeswitch_customer_terminal" }
+        );
         return;
       }
       await finalizeIncompleteVoicemailPlayback(config, pool, {
@@ -526,7 +545,9 @@ async function persistFreeSwitchEvent(config: AppConfig, pool: pg.Pool, frame: E
         customerLegUuid: legUuid,
         hangupCause: frame.headers["hangup-cause"],
         raw: { headers: frame.headers, body: frame.body },
-        source: "freeswitch_terminal_event"
+        source: "freeswitch_customer_terminal",
+        terminalEventAt,
+        terminalEventName: eventName
       });
       return;
     }
@@ -538,16 +559,32 @@ async function persistFreeSwitchEvent(config: AppConfig, pool: pg.Pool, frame: E
     const terminalState = outcome === "failed" ? "failed" : "completed";
     const updated = await pool.query(
       `
+        with stamp as (
+          select clock_timestamp() as persisted_at
+        )
         update calls
         set state = $2,
             outcome = coalesce(outcome, $3),
-            ended_at = coalesce(ended_at, now()),
-            updated_at = now()
+            ended_at = stamp.persisted_at,
+            freeswitch_terminal_at = $4,
+            terminal_persisted_at = stamp.persisted_at,
+            terminal_source = 'freeswitch_customer_terminal',
+            terminal_event_name = $5,
+            finalization_latency_ms = case
+              when $4::timestamptz is not null
+                and $4 <= stamp.persisted_at
+                and floor(extract(epoch from (stamp.persisted_at - $4)) * 1000) <= 2147483647
+              then floor(extract(epoch from (stamp.persisted_at - $4)) * 1000)::integer
+              else null
+            end,
+            updated_at = stamp.persisted_at
+        from stamp
         where id = $1
+          and ended_at is null
           and state not in ('completed', 'failed', 'canceled')
         returning agent_id, contact_id
       `,
-      [callId, terminalState, outcome]
+      [callId, terminalState, outcome, terminalEventAt, eventName]
     );
     if (!updated.rowCount) {
       return;
@@ -1036,7 +1073,8 @@ async function finalizeCompletedVoicemailPlayback(
   pool: pg.Pool,
   callId: string,
   eventLegUuid: string | null,
-  raw: Record<string, unknown>
+  raw: Record<string, unknown>,
+  terminal?: { eventAt: Date | null; eventName: string; source: string }
 ): Promise<void> {
   const client = await pool.connect();
   try {
@@ -1047,18 +1085,38 @@ async function finalizeCompletedVoicemailPlayback(
       contact_id: string | null;
     }>(
       `
+        with stamp as (
+          select clock_timestamp() as persisted_at
+        )
         update calls
         set state = 'completed',
             outcome = 'voicemail_dropped',
-            voicemail_playback_completed_at = coalesce(voicemail_playback_completed_at, now()),
-            ended_at = coalesce(ended_at, now()),
-            updated_at = now()
+            voicemail_playback_completed_at = coalesce(voicemail_playback_completed_at, stamp.persisted_at),
+            ended_at = stamp.persisted_at,
+            freeswitch_terminal_at = coalesce(freeswitch_terminal_at, $2),
+            terminal_persisted_at = coalesce(terminal_persisted_at, stamp.persisted_at),
+            terminal_source = coalesce(terminal_source, $4),
+            terminal_event_name = coalesce(terminal_event_name, $3),
+            finalization_latency_ms = coalesce(finalization_latency_ms, case
+              when $2::timestamptz is not null
+                and $2 <= stamp.persisted_at
+                and floor(extract(epoch from (stamp.persisted_at - $2)) * 1000) <= 2147483647
+              then floor(extract(epoch from (stamp.persisted_at - $2)) * 1000)::integer
+              else null
+            end),
+            updated_at = stamp.persisted_at
+        from stamp
         where id = $1
           and ended_at is null
           and state in ('voicemail_drop_requested', 'voicemail_playback_started', 'agent_released')
         returning agent_id, agent_released_at, contact_id
       `,
-      [callId]
+      [
+        callId,
+        terminal?.eventAt ?? null,
+        terminal?.eventName ?? null,
+        terminal?.source ?? "voicemail_playback_event"
+      ]
     );
     const call = updated.rows[0];
     if (!call) {
@@ -1127,6 +1185,8 @@ async function finalizeIncompleteVoicemailPlayback(
     hangupCause?: string;
     raw: Record<string, unknown>;
     source: string;
+    terminalEventAt?: Date | null;
+    terminalEventName?: string;
   }
 ): Promise<void> {
   const normalHangup = ["NORMAL_CLEARING", "ORIGINATOR_CANCEL"].includes(
@@ -1141,16 +1201,38 @@ async function finalizeIncompleteVoicemailPlayback(
     await client.query("begin");
     const updated = await client.query(
       `
+        with stamp as (
+          select clock_timestamp() as persisted_at
+        )
         update calls
         set state = $2,
             outcome = $3,
-            ended_at = coalesce(ended_at, now()),
-            updated_at = now()
+            ended_at = stamp.persisted_at,
+            freeswitch_terminal_at = coalesce(freeswitch_terminal_at, $4),
+            terminal_persisted_at = coalesce(terminal_persisted_at, stamp.persisted_at),
+            terminal_source = coalesce(terminal_source, $6),
+            terminal_event_name = coalesce(terminal_event_name, $5),
+            finalization_latency_ms = coalesce(finalization_latency_ms, case
+              when $4::timestamptz is not null
+                and $4 <= stamp.persisted_at
+                and floor(extract(epoch from (stamp.persisted_at - $4)) * 1000) <= 2147483647
+              then floor(extract(epoch from (stamp.persisted_at - $4)) * 1000)::integer
+              else null
+            end),
+            updated_at = stamp.persisted_at
+        from stamp
         where id = $1
           and ended_at is null
           and state in ('voicemail_drop_requested', 'voicemail_playback_started', 'agent_released')
       `,
-      [input.callId, terminalState, outcome]
+      [
+        input.callId,
+        terminalState,
+        outcome,
+        input.terminalEventAt ?? null,
+        input.terminalEventName ?? null,
+        input.source
+      ]
     );
     if (!updated.rowCount) {
       await client.query("rollback");
@@ -1375,12 +1457,17 @@ async function persistBackgroundJobEvent(config: AppConfig, pool: pg.Pool, frame
   );
   await pool.query(
     `
+      with stamp as (select clock_timestamp() as persisted_at)
       update calls
       set state = 'failed',
           outcome = 'failed',
-          ended_at = coalesce(ended_at, now()),
-          updated_at = now()
+          ended_at = stamp.persisted_at,
+          terminal_persisted_at = stamp.persisted_at,
+          terminal_source = 'background_job_failure',
+          updated_at = stamp.persisted_at
+      from stamp
       where id = $1
+        and ended_at is null
         and state not in ('completed', 'failed', 'canceled')
     `,
     [row.call_id]
@@ -1453,6 +1540,8 @@ export async function reconcileActiveCalls(
   );
 
   let closed = 0;
+  let missing = 0;
+  let errors = 0;
   for (const call of result.rows) {
     try {
       const customerExists = await freeSwitchUuidExists(config, call.customer_leg_uuid, sendApiCommand);
@@ -1483,6 +1572,7 @@ export async function reconcileActiveCalls(
           }
           continue;
         }
+        missing += 1;
         await finalizeIncompleteVoicemailPlayback(config, pool, {
           agentId: call.agent_id,
           agentReleased: call.state === "agent_released",
@@ -1502,6 +1592,7 @@ export async function reconcileActiveCalls(
       if (Date.now() - call.created_at.getTime() < 60_000 || customerExists) {
         continue;
       }
+      missing += 1;
 
       const agentExists = await freeSwitchUuidExists(config, call.agent_leg_uuid, sendApiCommand);
       if (agentExists && call.agent_leg_uuid) {
@@ -1517,6 +1608,7 @@ export async function reconcileActiveCalls(
       await finalizeMissingActiveCall(config, pool, call);
       closed += 1;
     } catch (error) {
+      errors += 1;
       logger.warn(
         { callId: call.call_id, message: error instanceof Error ? error.message : String(error) },
         "failed to reconcile active call"
@@ -1524,7 +1616,24 @@ export async function reconcileActiveCalls(
     }
   }
 
-  logger.info({ checked: result.rows.length, closed }, "FreeSWITCH active-call reconciliation completed");
+  await pool.query(
+    `
+      update telephony_observability_state
+      set active_calls_db_count = $1,
+          active_calls_missing_in_freeswitch = $2,
+          active_calls_closed_last_run = $3,
+          active_call_reconcile_status = $4,
+          active_calls_reconciled_at = clock_timestamp(),
+          updated_at = now()
+      where singleton = true
+    `,
+    [result.rows.length, missing, closed, errors > 0 ? "partial" : "ok"]
+  );
+
+  logger.info(
+    { checked: result.rows.length, closed, errors, missing },
+    "FreeSWITCH active-call reconciliation completed"
+  );
 }
 
 async function abortTimedOutVoicemailDrop(
@@ -1589,6 +1698,8 @@ async function finalizeMissingActiveCall(
       set state = $2,
           outcome = $3,
           ended_at = coalesce(ended_at, now()),
+          terminal_persisted_at = coalesce(terminal_persisted_at, clock_timestamp()),
+          terminal_source = coalesce(terminal_source, 'active_call_reconciliation'),
           updated_at = now()
       where id = $1
         and ended_at is null

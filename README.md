@@ -12,7 +12,7 @@ The repository now contains the planned operational MVP: agent calling, manual v
 - Campaign create/edit/pause/archive, narrow `name` + `phone` CSV import, contact search/status, and suppression checks before originate.
 - Admin user lifecycle with edit, deactivate/reactivate, password reset, session revocation, preserved historical attribution, and administrative mutation audit.
 - Paginated/filterable call history, detail timelines, bounded CSV export, call-recording playback, suppression search/import/removal, and suppression event history.
-- Dedicated admin Analytics with date/campaign filters, summary KPIs, daily trend, funnel, campaign/agent comparisons, data-quality snapshot, and voicemail lifecycle reporting.
+- Dedicated admin Analytics with date/campaign filters, business KPIs, AVMD review evidence, per-leg RTP quality coverage, codec/provider breakdowns, and telephony reconciliation/finalization reporting.
 - WAV/MP3 voicemail uploads transcoded by ffmpeg to mono 8 kHz signed 16-bit PCM WAV with loudness normalization and a five-minute limit.
 - HttpOnly `SameSite=Strict` browser session cookie, Origin-based CSRF protection for cookie-authenticated mutations, login rate limiting, and Bearer compatibility for non-browser API clients.
 - Credentialed SSE at `GET /agent/events`, backed by PostgreSQL notifications, browser reconnect, and periodic HTTP fallback refresh.

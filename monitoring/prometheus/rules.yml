@@ -162,6 +162,60 @@ groups:
           summary: "FreeSWITCH event persistence queue overflowed"
           description: "The listener disconnected after its bounded persistence queue filled; active-call reconciliation will run after recovery."
 
+      - alert: RegistrationReconciliationFailing
+        expr: outbound_dialer_registration_reconciliation_up == 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Agent registration reconciliation is failing"
+          description: "The 5-second PostgreSQL/FreeSWITCH registration reconciliation has failed continuously for more than 1 minute."
+
+      - alert: RegistrationReconciliationStale
+        expr: time() - outbound_dialer_registration_reconciliation_last_run_timestamp_seconds > 30
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Agent registration reconciliation is stale"
+          description: "No successful PostgreSQL/FreeSWITCH registration reconciliation has been observed for more than 30 seconds."
+
+      - alert: ActiveCallReconciliationFailing
+        expr: outbound_dialer_active_call_reconciliation_up == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Active-call reconciliation is failing"
+          description: "The latest active-call reconciliation attempts have not completed successfully for more than 5 minutes."
+
+      - alert: ActiveCallReconciliationStale
+        expr: time() - outbound_dialer_active_call_reconciliation_last_run_timestamp_seconds > 180
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Active-call reconciliation is stale"
+          description: "No active-call reconciliation snapshot has been observed for more than 3 minutes."
+
+      - alert: MediaStatsCoverageLow
+        expr: sum(outbound_dialer_media_quality_calls_window{coverage="eligible"}) >= 10 and sum(outbound_dialer_media_quality_calls_window{coverage="complete"}) / clamp_min(sum(outbound_dialer_media_quality_calls_window{coverage="eligible"}), 1) < 0.8
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Completed-call media statistics coverage is low"
+          description: "Fewer than 80% of at least 10 eligible answered calls have media statistics for both legs."
+
+      - alert: TerminalFinalizationSlow
+        expr: outbound_dialer_terminal_finalization_duration_milliseconds{statistic="p95"} > 5000 and on() outbound_dialer_terminal_finalization_samples_window >= 10
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Terminal call persistence is slow"
+          description: "Customer terminal-event persistence p95 exceeded 5 seconds across at least 10 measured calls for 10 minutes."
+
   - name: outbound-dialer-host
     rules:
       - alert: HostHighCpu

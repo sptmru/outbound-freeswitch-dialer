@@ -54,52 +54,114 @@ export async function reconcileAgentRegistrations(
   pool: pg.Pool,
   sendApiCommand: FreeSwitchApiCommandSender = sendFreeSwitchApiCommand
 ): Promise<number> {
-  const response = await sendApiCommand(config, `sofia status profile ${AGENT_SIP_PROFILE} reg`);
-  const registeredUsernames = parseRegisteredSipUsernames(response.body || response.raw);
-  const result = await pool.query(
-    `
-      update agents
-      set registered = sip_username = any($1::text[]),
-          last_registered_at = case
-            when not registered and sip_username = any($1::text[]) then now()
-            else last_registered_at
-          end,
-          last_unregistered_at = case
-            when registered and not (sip_username = any($1::text[])) then now()
-            else last_unregistered_at
-          end,
-          status = case
-            when sip_username = any($1::text[]) and status = 'offline' then 'ready'
-            when not (sip_username = any($1::text[]))
-              and status in ('ready', 'registered')
-              and not exists (
-                select 1
-                from calls
-                where calls.agent_id = agents.id
-                  and calls.ended_at is null
-                  and calls.state not in ('completed', 'failed', 'canceled')
-              )
-              then 'offline'
-            else status
-          end,
-          updated_at = now()
-      where registered is distinct from (sip_username = any($1::text[]))
-         or (sip_username = any($1::text[]) and status = 'offline')
-         or (
-           not (sip_username = any($1::text[]))
-           and status in ('ready', 'registered')
-           and not exists (
-             select 1
-             from calls
-             where calls.agent_id = agents.id
-               and calls.ended_at is null
-               and calls.state not in ('completed', 'failed', 'canceled')
+  try {
+    const response = await sendApiCommand(config, `sofia status profile ${AGENT_SIP_PROFILE} reg`);
+    const registeredUsernames = parseRegisteredSipUsernames(response.body || response.raw);
+    const databaseRegistrations = await pool.query<{ sip_username: string }>(
+      "select sip_username from agents where registered = true order by sip_username"
+    );
+    const databaseUsernames = databaseRegistrations.rows.map((row) => row.sip_username);
+    const driftCount = symmetricDifferenceSize(databaseUsernames, registeredUsernames);
+    const result = await pool.query(
+      `
+        update agents
+        set registered = sip_username = any($1::text[]),
+            last_registered_at = case
+              when not registered and sip_username = any($1::text[]) then now()
+              else last_registered_at
+            end,
+            last_unregistered_at = case
+              when registered and not (sip_username = any($1::text[])) then now()
+              else last_unregistered_at
+            end,
+            status = case
+              when sip_username = any($1::text[]) and status = 'offline' then 'ready'
+              when not (sip_username = any($1::text[]))
+                and status in ('ready', 'registered')
+                and not exists (
+                  select 1
+                  from calls
+                  where calls.agent_id = agents.id
+                    and calls.ended_at is null
+                    and calls.state not in ('completed', 'failed', 'canceled')
+                )
+                then 'offline'
+              else status
+            end,
+            updated_at = now()
+        where registered is distinct from (sip_username = any($1::text[]))
+           or (sip_username = any($1::text[]) and status = 'offline')
+           or (
+             not (sip_username = any($1::text[]))
+             and status in ('ready', 'registered')
+             and not exists (
+               select 1
+               from calls
+               where calls.agent_id = agents.id
+                 and calls.ended_at is null
+                 and calls.state not in ('completed', 'failed', 'canceled')
+             )
            )
-         )
-    `,
-    [registeredUsernames]
-  );
-  return result.rowCount ?? 0;
+      `,
+      [registeredUsernames]
+    );
+    const changedAgents = result.rowCount ?? 0;
+    await pool.query(
+      `
+        insert into telephony_observability_state (
+          singleton,
+          registration_db_count,
+          registration_freeswitch_count,
+          registration_drift_count,
+          registration_corrections_last_run,
+          registration_reconcile_status,
+          registration_reconciled_at,
+          updated_at
+        )
+        values (true, $1, $2, $3, $4, 'ok', clock_timestamp(), now())
+        on conflict (singleton) do update
+        set registration_db_count = excluded.registration_db_count,
+            registration_freeswitch_count = excluded.registration_freeswitch_count,
+            registration_drift_count = excluded.registration_drift_count,
+            registration_corrections_last_run = excluded.registration_corrections_last_run,
+            registration_reconcile_status = excluded.registration_reconcile_status,
+            registration_reconciled_at = excluded.registration_reconciled_at,
+            updated_at = now()
+      `,
+      [databaseUsernames.length, registeredUsernames.length, driftCount, changedAgents]
+    );
+    return changedAgents;
+  } catch (error) {
+    await pool
+      .query(
+        `
+          insert into telephony_observability_state (
+            singleton,
+            registration_reconcile_status,
+            updated_at
+          )
+          values (true, 'failed', now())
+          on conflict (singleton) do update
+          set registration_reconcile_status = excluded.registration_reconcile_status,
+              updated_at = now()
+        `
+      )
+      .catch(() => undefined);
+    throw error;
+  }
+}
+
+function symmetricDifferenceSize(left: readonly string[], right: readonly string[]): number {
+  const leftSet = new Set(left);
+  const rightSet = new Set(right);
+  let difference = 0;
+  for (const value of leftSet) {
+    if (!rightSet.has(value)) difference += 1;
+  }
+  for (const value of rightSet) {
+    if (!leftSet.has(value)) difference += 1;
+  }
+  return difference;
 }
 
 export function parseRegisteredSipUsernames(value: string): string[] {
@@ -114,5 +176,6 @@ export function parseRegisteredSipUsernames(value: string): string[] {
 }
 
 export const __testing = {
-  parseRegisteredSipUsernames
+  parseRegisteredSipUsernames,
+  symmetricDifferenceSize
 };
