@@ -1426,7 +1426,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "100 * outbound_dialer_media_quality_calls_window{coverage=\"complete\"} / clamp_min(outbound_dialer_media_quality_calls_window{coverage=\"eligible\"}, 1)",
+          "expr": "100 * sum(outbound_dialer_media_quality_calls_window{coverage=\"complete\"}) / clamp_min(sum(outbound_dialer_media_quality_calls_window{coverage=\"eligible\"}), 1)",
           "instant": true,
           "legendFormat": "Complete coverage",
           "range": false,

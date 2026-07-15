@@ -89,9 +89,9 @@ test("monitoring dashboard exposes bounded call-quality and reconciliation signa
   );
   const panels = new Map(dashboard.panels.map((panel) => [panel.title, panel]));
 
-  assert.match(
+  assert.equal(
     panels.get("Media stats coverage (15m)")?.targets[0]?.expr ?? "",
-    /coverage="complete".*coverage="eligible"/
+    '100 * sum(outbound_dialer_media_quality_calls_window{coverage="complete"}) / clamp_min(sum(outbound_dialer_media_quality_calls_window{coverage="eligible"}), 1)'
   );
   assert.equal(
     panels.get("Suspected one-way audio by leg")?.targets[0]?.expr,
