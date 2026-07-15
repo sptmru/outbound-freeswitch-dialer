@@ -1,4 +1,5 @@
 export type {
+  AdminAnalyticsResponse,
   AdminOverviewResponse,
   AdminAuditResponse,
   AdminCampaignListResponse,

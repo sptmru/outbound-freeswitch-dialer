@@ -102,6 +102,9 @@ This document is the current product and operational contract. Items described a
 ## History And Reporting
 
 - Authenticated application sections have stable shareable URLs. The selected Agent Desk campaign is preserved in the URL across navigation and page reloads, and browser storage restores it when the application root is opened in another tab.
+- Admin analytics are available on a dedicated shareable `/analytics` view backed by `GET /admin/analytics`. The view supports a bounded date range, browser IANA timezone, and optional campaign filter, and presents summary, daily trend, call funnel, campaign performance, agent performance, data-quality snapshot, and voicemail lifecycle metrics.
+- Reporting distinguishes technical answer rate (`answered_at` / attempts) from connected-contact rate. A connected contact has answer evidence and excludes calls classified as detected or dropped voicemail; it is an operational proxy, not independently verified human-contact ground truth.
+- Date-filtered call metrics and current contact-queue snapshots are labeled separately. Current callable/suppressed/exhausted counts must not be presented as historical values for the selected call period.
 - Admin call history is paginated and filterable by text, campaign, agent, outcome, date range, voicemail drop/signal, and recording availability.
 - Call detail includes lifecycle events and technical identifiers needed for diagnosis.
 - CSV export applies the same filters and refuses exports above `CALL_HISTORY_EXPORT_MAX_ROWS` (50,000 by default).
@@ -133,6 +136,8 @@ This document is the current product and operational contract. Items described a
 ## Monitoring And Operations
 
 - Structured application logs, health/readiness endpoints, Prometheus metrics, Grafana dashboards, Alertmanager rules, and Loki collection are included.
+- Grafana includes call-control and operations diagnostics for API latency/error rate, bounded call outcomes, ESL persistence backlog/retries/overflows, active/stuck voicemail work, recording finalization backlog, retention/backup freshness, and host/container health. Product analytics remain in the authenticated admin application.
+- Prometheus application dimensions must remain bounded. Call IDs, contact IDs, campaign IDs, agent IDs, destination numbers, and other history-sized identifiers are not metric labels.
 - Optional environment-controlled packet capture saves one protected PCAP per call, exposes capture health through Prometheus, and makes files available only to admins through Call History with bounded retention.
 - The production owner must configure a real alert destination and an off-host uptime probe.
 - SIP/RTP incidents must be correlatable by call ID, leg UUIDs, timestamps, event records, and deployed SHA.

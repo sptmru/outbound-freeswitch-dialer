@@ -1,4 +1,5 @@
 import type {
+  AdminAnalyticsResponse,
   AdminOverviewResponse,
   AdminAuditResponse,
   AdminCampaignListResponse,
@@ -151,6 +152,18 @@ export async function fetchSoftphoneProvisioning(): Promise<SoftphoneProvisionin
 
 export async function fetchAdminOverview(): Promise<AdminOverviewResponse> {
   return apiFetch<AdminOverviewResponse>("/admin/overview");
+}
+
+export type AdminAnalyticsFilters = {
+  from: string;
+  to: string;
+  timeZone: string;
+  campaignId?: string;
+};
+
+export async function fetchAdminAnalytics(filters: AdminAnalyticsFilters): Promise<AdminAnalyticsResponse> {
+  const query = toQuery(filters);
+  return apiFetch<AdminAnalyticsResponse>(`/admin/analytics?${query}`);
 }
 
 export async function fetchAdminAudit(

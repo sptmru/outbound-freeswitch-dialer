@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { Counter, Gauge, Histogram, Registry, collectDefaultMetrics } from "prom-client";
 import type pg from "pg";
+import { callOutcomes } from "@outbound-dialer/shared";
 import type { AppConfig } from "./config.js";
 import { canOriginateCustomerLeg, sendFreeSwitchApiCommand } from "./esl.js";
 import { setFreeSwitchEventListenerSubscribed } from "./esl-listener-state.js";
@@ -34,7 +35,10 @@ const databaseSnapshotUp = new Gauge({
   registers: [registry]
 });
 
-const activeCalls = gauge("outbound_dialer_active_calls", "Current non-terminal calls.");
+const activeCalls = gauge(
+  "outbound_dialer_active_calls",
+  "Current non-terminal calls excluding voicemail playback continuing after agent release."
+);
 const stuckCalls = gauge(
   "outbound_dialer_stuck_calls",
   "Current non-terminal calls older than the configured threshold."
@@ -68,6 +72,24 @@ const recordingFailuresWindow = gauge(
   "outbound_dialer_recording_failures_window",
   "Call recording failures during the monitoring window."
 );
+const recordingFinalizationBacklog = gauge(
+  "outbound_dialer_recording_finalization_backlog",
+  "Terminal calls whose enabled recording is still pending, recording, or finalizing."
+);
+const activeVoicemailJobs = gauge(
+  "outbound_dialer_voicemail_jobs_active",
+  "Voicemail drops currently requested, playing, or continuing after the agent was released."
+);
+const stuckVoicemailJobs = gauge(
+  "outbound_dialer_voicemail_jobs_stuck",
+  "Active voicemail drops older than the configured stuck-call threshold."
+);
+const callOutcomesWindow = new Gauge({
+  name: "outbound_dialer_call_outcomes_window",
+  help: "Terminal call outcomes during the last 24 hours.",
+  labelNames: ["outcome"] as const,
+  registers: [registry]
+});
 const pcapCaptureEnabled = gauge(
   "outbound_dialer_pcap_capture_enabled",
   "Whether automatic per-call PCAP capture is enabled."
@@ -258,17 +280,23 @@ export function recordRetentionFailure(): void {
 
 async function refreshDatabaseMetrics(pool: pg.Pool, stuckCallSeconds: number): Promise<void> {
   try {
-    const [snapshot, window] = await Promise.all([
+    const [snapshot, window, outcomes] = await Promise.all([
       pool.query<{
         active_calls: string;
+        active_voicemail_jobs: string;
+        recording_finalization_backlog: string;
         registered_agents: string;
         stuck_calls: string;
+        stuck_voicemail_jobs: string;
         total_agents: string;
       }>(
         `
           select
-            (select count(*) from calls where ended_at is null and state not in ('completed', 'failed', 'canceled')) as active_calls,
-            (select count(*) from calls where ended_at is null and state not in ('completed', 'failed', 'canceled') and created_at < now() - ($1 * interval '1 second')) as stuck_calls,
+            (select count(*) from calls where ended_at is null and state not in ('completed', 'failed', 'canceled', 'agent_released')) as active_calls,
+            (select count(*) from calls where ended_at is null and state not in ('completed', 'failed', 'canceled', 'agent_released') and created_at < now() - ($1 * interval '1 second')) as stuck_calls,
+            (select count(*) from calls where ended_at is null and state in ('voicemail_drop_requested', 'voicemail_playback_started', 'agent_released')) as active_voicemail_jobs,
+            (select count(*) from calls where ended_at is null and state in ('voicemail_drop_requested', 'voicemail_playback_started', 'agent_released') and coalesce(voicemail_drop_requested_at, created_at) < now() - ($1 * interval '1 second')) as stuck_voicemail_jobs,
+            (select count(*) from calls where ended_at is not null and call_recording_enabled = true and call_recording_status in ('pending', 'recording', 'finalizing')) as recording_finalization_backlog,
             (select count(*) from agents where registered = true) as registered_agents,
             (select count(*) from agents) as total_agents
         `,
@@ -293,13 +321,27 @@ async function refreshDatabaseMetrics(pool: pg.Pool, stuckCallSeconds: number): 
           (select count(*) from call_pcaps where updated_at >= now() - interval '24 hours' and status = 'failed') as pcap_failures,
           (select coalesce(sum(file_size_bytes), 0) from call_pcaps where status = 'available') as pcap_storage_bytes,
           (select count(*) from calls where voicemail_playback_completed_at >= now() - interval '24 hours' and outcome = 'voicemail_dropped') as voicemail_drops
-      `)
+      `),
+      pool.query<{ count: string; outcome: string }>(
+        `
+          select outcome, count(*) as count
+          from calls
+          where ended_at >= now() - interval '24 hours'
+            and outcome = any($1::text[])
+          group by outcome
+          order by outcome
+        `,
+        [Array.from(callOutcomes)]
+      )
     ]);
 
     const current = snapshot.rows[0];
     const recent = window.rows[0];
     activeCalls.set(toNumber(current?.active_calls));
     stuckCalls.set(toNumber(current?.stuck_calls));
+    activeVoicemailJobs.set(toNumber(current?.active_voicemail_jobs));
+    stuckVoicemailJobs.set(toNumber(current?.stuck_voicemail_jobs));
+    recordingFinalizationBacklog.set(toNumber(current?.recording_finalization_backlog));
     registeredAgents.set(toNumber(current?.registered_agents));
     totalAgents.set(toNumber(current?.total_agents));
     callsAttemptedWindow.set(toNumber(recent?.attempted));
@@ -310,6 +352,15 @@ async function refreshDatabaseMetrics(pool: pg.Pool, stuckCallSeconds: number): 
     pcapCaptureFailuresWindow.set(toNumber(recent?.pcap_failures));
     pcapStorageBytes.set(toNumber(recent?.pcap_storage_bytes));
     voicemailDropsWindow.set(toNumber(recent?.voicemail_drops));
+    callOutcomesWindow.reset();
+    for (const outcome of callOutcomes) {
+      callOutcomesWindow.set({ outcome }, 0);
+    }
+    for (const outcome of outcomes.rows) {
+      if (callOutcomes.includes(outcome.outcome as (typeof callOutcomes)[number])) {
+        callOutcomesWindow.set({ outcome: outcome.outcome }, toNumber(outcome.count));
+      }
+    }
     databaseSnapshotUp.set(1);
   } catch {
     databaseSnapshotUp.set(0);

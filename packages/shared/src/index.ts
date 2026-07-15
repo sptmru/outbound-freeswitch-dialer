@@ -252,6 +252,90 @@ export interface AdminOverviewResponse {
   }>;
 }
 
+export interface AdminAnalyticsResponse {
+  filters: {
+    from: string;
+    to: string;
+    campaignId: string | null;
+    timeZone: string;
+  };
+  summary: {
+    attempts: number;
+    uniqueContacts: number;
+    answered: number;
+    answerRate: number;
+    connected: number;
+    contactRate: number;
+    averageTalkSeconds: number;
+    failed: number;
+    voicemailCompleted: number;
+    voicemailCompletionRate: number;
+  };
+  funnel: Array<{
+    stage: "Attempts" | "Answered" | "Connected" | "Completed";
+    count: number;
+  }>;
+  dailyTrend: Array<{
+    date: string;
+    attempts: number;
+    answered: number;
+    connected: number;
+    failed: number;
+    voicemailCompleted: number;
+    averageTalkSeconds: number;
+  }>;
+  campaignPerformance: Array<{
+    id: string;
+    name: string;
+    status: CampaignStatus;
+    loaded: number;
+    callable: number;
+    attemptedContacts: number;
+    attempts: number;
+    answered: number;
+    connected: number;
+    contactRate: number;
+    averageTalkSeconds: number;
+    retryEfficiency: number;
+    voicemailCompleted: number;
+  }>;
+  agentPerformance: Array<{
+    id: string;
+    name: string;
+    isActive: boolean;
+    registered: boolean;
+    availabilityStatus: AgentAvailabilityStatus;
+    activeCall: boolean;
+    attempts: number;
+    answered: number;
+    connected: number;
+    contactRate: number;
+    averageTalkSeconds: number;
+    voicemailDrops: number;
+    failed: number;
+  }>;
+  dataQuality: {
+    snapshotAt: string;
+    totalContacts: number;
+    callable: number;
+    suppressed: number;
+    exhausted: number;
+    importedRows: number;
+    rejectedRows: number;
+    duplicateRows: number;
+    invalidRows: number;
+  };
+  voicemail: {
+    requested: number;
+    started: number;
+    agentReleased: number;
+    completed: number;
+    failedOrInterrupted: number;
+    completionRate: number;
+    averageReleaseSeconds: number;
+  };
+}
+
 export interface AdminLibraryPage<T> {
   items: T[];
   page: number;

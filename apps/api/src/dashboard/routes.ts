@@ -7,6 +7,7 @@ import { pipeline } from "node:stream/promises";
 import type pg from "pg";
 import type {
   AdminCampaignListResponse,
+  AdminAnalyticsResponse,
   AdminOverviewResponse,
   AdminAuditResponse,
   AdminRecordingListResponse,
@@ -62,6 +63,7 @@ import {
 } from "../esl.js";
 import { ensureAgentForUser, getSoftphoneProvisioningForUser, toPublicUser } from "../users.js";
 import { getCsvImportsPage, getUsersPage } from "./admin-libraries.js";
+import { getAdminAnalytics, parseAnalyticsFilters } from "./analytics.js";
 import {
   campaignExists,
   deleteCampaign,
@@ -361,6 +363,15 @@ export function registerDashboardRoutes(
     }
 
     return buildAdminOverviewResponse(pool, toPublicUser(user), contactRetryPolicy);
+  });
+
+  app.get("/admin/analytics", async (request, reply): Promise<AdminAnalyticsResponse | void> => {
+    const user = await requireAdmin(request, reply, config, pool);
+    if (!user) {
+      return;
+    }
+    const filters = parseAnalyticsFilters(request.query);
+    return getAdminAnalytics(pool, filters, contactRetryPolicy);
   });
 
   app.get("/admin/campaigns", async (request, reply): Promise<AdminCampaignListResponse | void> => {

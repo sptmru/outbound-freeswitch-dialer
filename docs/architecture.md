@@ -49,6 +49,7 @@ Only nginx is intended as the public HTTP entrypoint. Grafana is routed by hostn
 
 - Authentication, role authorization, cookie CSRF protection, login rate limiting, and safe proxy handling.
 - Campaign/contact selection, suppression checks, manual validation, and user/admin workflows.
+- Read-only admin analytics aggregate bounded date/campaign queries from PostgreSQL. Period facts and current contact-queue snapshots are returned as distinct sections so the UI does not imply historical snapshots that were never stored.
 - ESL originate, bridge, DTMF, hangup, voicemail transfer, event processing, recording startup, and reconciliation. Incoming events use a bounded ordered queue with exponential retry for transient PostgreSQL failures; overflow disconnects the listener and is surfaced through metrics instead of being silently ignored.
 - Call/leg/event persistence and automatic outcome/contact lifecycle.
 - Voicemail transcoding, media ticket issuance, and byte-range streaming.
@@ -78,6 +79,7 @@ Only nginx is intended as the public HTTP entrypoint. Grafana is routed by hostn
 - A capability-scoped `pcap-capture` sidecar receives per-call capture commands through a Unix socket shared with the API. It starts a broad temporary capture before originate, then filters it at the terminal transition using SIP `Call-ID` and exact local media ports derived from persisted ESL events. The broad temporary file is deleted even when isolation fails. Capture is disabled by default, stored in a private named volume, retention-bound, and exposed to administrators only through scoped media tickets.
 - fail2ban tails the shared FreeSWITCH log volume and installs host firewall bans for the repository-defined SIP scanner filter.
 - Prometheus, Grafana, Alertmanager, Loki, Alloy, exporters, and blackbox checks.
+- Application metrics keep label cardinality bounded; product dimensions that grow with history stay in PostgreSQL-backed admin analytics rather than Prometheus labels.
 - PostgreSQL metrics use the independent `outbound_dialer_exporter` login with `pg_monitor`, read-only transactions, and no application-table grants; deploy/restore rotate it from `POSTGRES_EXPORTER_PASSWORD` after database changes.
 - Monitoring files are release-gated with the validators embedded in the exact Prometheus, Alertmanager, Blackbox Exporter, Loki, and Alloy images before services are changed.
 - Alloy discovers only containers from `COMPOSE_PROJECT_NAME`, reads FreeSWITCH and deployment logs, and sends them to Loki through the private Compose network. It reaches read-only container and network metadata through a verb-disabled socket proxy rather than mounting the Docker socket directly; network metadata is required for Docker discovery even though Alloy does not use it to mutate Docker networking.

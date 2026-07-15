@@ -4,6 +4,8 @@
 - Each agent has one interactive call at a time. A released voicemail customer leg can remain as a tracked background job while the same agent starts another interactive call.
 - Agent pause and configurable post-call wrap-up are implemented, but scheduled callbacks, supervisor-controlled requeue, reason-coded pauses, and workforce-management reporting are not.
 - VM/beep/AVMD detection is advisory. It neither decides human versus machine nor triggers an automatic voicemail drop.
+- Admin **Contact rate** is therefore an operational proxy that excludes detected/dropped voicemail from technically answered calls; the system does not yet store independently reviewed human/machine ground truth for AVMD precision or false-positive reporting.
+- Prometheus does not currently receive per-leg RTP loss, jitter, one-way-audio, or negotiated-codec quality measurements. PCAP and FreeSWITCH diagnostics support incident investigation, but they are not a continuous media-quality KPI source.
 - FreeSWITCH playback completion proves the local application flow, not that the far-end mailbox stored the entire message. Representative carrier/device testing is required.
 - Provider routing, caller ID, codecs/DTMF, throughput, hangup mapping, WSS/NAT behavior, and external audio have not been accepted until evidenced in the target environment.
 - The default retry policy is three attempts with a 15-minute delay. It is a technical default, not approval of calling windows, jurisdictional limits, or outcome-specific retry rules.

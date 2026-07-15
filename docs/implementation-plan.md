@@ -76,6 +76,8 @@ Firewall and host-published-port changes were excluded by instruction. They are 
 
 ### 6. Administration, History, And Audit
 
+- Dedicated period- and campaign-filtered admin Analytics view with summary KPIs, daily movement, call funnel, campaign/agent performance, data-quality snapshot, and voicemail lifecycle reporting.
+- Explicit metric definitions separate technical answers from connected contacts and separate period-filtered facts from current queue snapshots.
 - Campaign create/edit/status/archive plus manual-dial, recording, and early-media AVMD flags.
 - Campaign contacts, import history/detail, row feedback, search, filters, and manual contact actions.
 - User create/edit/deactivate/reactivate/role/password lifecycle with preserved attribution and FreeSWITCH cleanup.
@@ -92,6 +94,7 @@ Firewall and host-published-port changes were excluded by instruction. They are 
 - Recording-aware deletion: call rows are retained while recording data is younger; metadata is cleared only after successful unlink or confirmed absence; failures preserve the row for retry.
 - Admin dry-run/immediate retention endpoint plus success/failure/deletion metrics.
 - Prometheus, Grafana, Alertmanager, Loki, Alloy, host/container/PostgreSQL/exporter checks, public HTTPS blackbox probe, and provisioned alerts/dashboard.
+- Call-control/operations panels for API latency/error rate, bounded outcome mix, ESL queue health, voicemail jobs, recording finalization, retention, backup, TLS, and restart signals without per-call or per-user Prometheus labels.
 - Runtime-native validation of all monitoring configs before deploy/restore, plus a dedicated read-only `outbound_dialer_exporter` PostgreSQL role instead of reusing the application-owner connection.
 - Production preflight for secret strength, env permissions, pinned FreeSWITCH image, alert destination, off-host backup or explicit exception, and Compose validation.
 - Quality-gated SHA-tagged deployment, active-call guard, pre-deploy backup, one migration run, health wait, certificate/cron setup, smoke test, and deployment-state record.
@@ -129,7 +132,7 @@ Firewall and host-published-port changes were excluded by instruction. They are 
 These additions should follow acceptance of the current behavior, not block it unless the client explicitly promotes them:
 
 - Outcome-specific scheduled callbacks, reason-coded pauses, and supervisor requeue controls beyond the implemented ready/pause/wrap-up flow.
-- KPI definitions and dashboards for answer/contact rate, calls/hour, AHT, retry efficiency, voicemail completion, AVMD precision, and false positives.
+- Ground-truth review workflow for AVMD precision/false positives and media-quality instrumentation for RTP loss, jitter, one-way audio, and codec/provider breakdowns. Current lifecycle events and automatic outcomes alone are not sufficient evidence for these measures.
 - Object storage for recordings with lifecycle, immutable/legal-hold support, checksum verification, and managed key rotation.
 - Generated OpenAPI/runtime schemas so API and web share validation, not TypeScript types alone.
 - Split large call-control/UI modules behind one explicit transition service/state machine.

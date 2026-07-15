@@ -1,11 +1,12 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
-import type { AdminOverviewResponse, AgentDeskResponse, PublicUser } from "./types";
+import type { AdminAnalyticsResponse, AdminOverviewResponse, AgentDeskResponse, PublicUser } from "./types";
 
 const apiMocks = vi.hoisted(() => ({
   dropVoicemail: vi.fn(),
   endCall: vi.fn(),
+  fetchAdminAnalytics: vi.fn(),
   fetchAdminOverview: vi.fn(),
   fetchAgentDesk: vi.fn(),
   fetchCallDetail: vi.fn(),
@@ -28,6 +29,7 @@ vi.mock("./api", async () => {
     ...actual,
     dropVoicemail: apiMocks.dropVoicemail,
     endCall: apiMocks.endCall,
+    fetchAdminAnalytics: apiMocks.fetchAdminAnalytics,
     fetchAdminOverview: apiMocks.fetchAdminOverview,
     fetchAgentDesk: apiMocks.fetchAgentDesk,
     fetchCallDetail: apiMocks.fetchCallDetail,
@@ -69,6 +71,7 @@ describe("App Agent Desk empty states", () => {
     window.localStorage.removeItem("outbound_dialer_selected_campaign_id");
     apiMocks.fetchMe.mockResolvedValue({ user: userRow() });
     apiMocks.fetchCsvImports.mockResolvedValue({ imports: [] });
+    apiMocks.fetchAdminAnalytics.mockResolvedValue(adminAnalyticsResponse());
     apiMocks.fetchAdminOverview.mockResolvedValue(adminResponse());
     apiMocks.fetchSystemSettings.mockResolvedValue(systemSettings());
     apiMocks.updateSystemSettings.mockImplementation(async (input) => ({ ...systemSettings(), ...input }));
@@ -165,6 +168,57 @@ describe("App Agent Desk empty states", () => {
     window.history.pushState({}, "", "/settings?campaignId=11111111-1111-4111-8111-111111111111");
     window.dispatchEvent(new PopStateEvent("popstate"));
     expect(await screen.findByRole("heading", { level: 1, name: "Settings" })).toBeInTheDocument();
+  });
+
+  it("keeps the Analytics campaign filter separate from the Agent Desk campaign", async () => {
+    const admin = userRow({ role: "admin" });
+    const deskCampaignId = "11111111-1111-4111-8111-111111111111";
+    const campaign = {
+      id: "77777777-7777-4777-8777-777777777777",
+      name: "Archived analytics campaign",
+      status: "archived" as const,
+      loaded: 80,
+      callable: 32,
+      attempted: 48,
+      outcomeDistribution: [],
+      manualDialingEnabled: true,
+      callRecordingEnabled: false,
+      earlyMediaAvmdEnabled: false
+    };
+    window.history.replaceState(
+      {},
+      "",
+      `/analytics?campaignId=${deskCampaignId}&analyticsCampaignId=${campaign.id}`
+    );
+    apiMocks.fetchMe.mockResolvedValue({ user: admin });
+    apiMocks.fetchAgentDesk.mockResolvedValue(deskResponse({ user: admin }));
+    apiMocks.fetchAdminOverview.mockResolvedValue(adminResponse({ campaigns: [campaign] }));
+
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { level: 1, name: "Analytics" })).toBeInTheDocument();
+    expect(await screen.findByText("44 answered / 100 attempts")).toBeInTheDocument();
+    expect(screen.getByText("31 connected calls / 100 attempts")).toBeInTheDocument();
+    expect(apiMocks.fetchAdminAnalytics).toHaveBeenCalledWith(
+      expect.objectContaining({
+        campaignId: campaign.id,
+        from: expect.any(String),
+        timeZone: expect.any(String),
+        to: expect.any(String)
+      })
+    );
+
+    expect(screen.getByLabelText("Campaign")).toHaveValue(campaign.id);
+    fireEvent.change(screen.getByLabelText("Campaign"), { target: { value: "" } });
+    await waitFor(() =>
+      expect(apiMocks.fetchAdminAnalytics).toHaveBeenLastCalledWith(
+        expect.not.objectContaining({ campaignId: expect.anything() })
+      )
+    );
+    expect(window.location.pathname).toBe("/analytics");
+    expect(new URLSearchParams(window.location.search).get("campaignId")).toBe(deskCampaignId);
+    expect(new URLSearchParams(window.location.search).has("analyticsCampaignId")).toBe(false);
+    expect(window.localStorage.getItem("outbound_dialer_selected_campaign_id")).toBe(deskCampaignId);
   });
 
   it("saves admin runtime policies from Settings", async () => {
@@ -514,7 +568,7 @@ describe("App Agent Desk empty states", () => {
     render(<App />);
 
     expect(await screen.findByRole("button", { name: "Campaigns" })).toBeDisabled();
-    expect(screen.getAllByTitle("Finish the active call first")).toHaveLength(5);
+    expect(screen.getAllByTitle("Finish the active call first")).toHaveLength(6);
   });
 
   it("uses Dialer campaign branding and hides the unmapped company placeholder", async () => {
@@ -795,6 +849,110 @@ function adminResponse(overrides: Partial<AdminOverviewResponse> = {}): AdminOve
     users: [],
     callHistory: [],
     suppression: [],
+    ...overrides
+  };
+}
+
+function adminAnalyticsResponse(overrides: Partial<AdminAnalyticsResponse> = {}): AdminAnalyticsResponse {
+  return {
+    filters: {
+      from: "2026-07-09T00:00:00.000Z",
+      to: "2026-07-15T23:59:59.999Z",
+      campaignId: null,
+      timeZone: "Asia/Yerevan"
+    },
+    summary: {
+      attempts: 100,
+      uniqueContacts: 72,
+      answered: 44,
+      answerRate: 44,
+      connected: 31,
+      contactRate: 31,
+      averageTalkSeconds: 84,
+      failed: 12,
+      voicemailCompleted: 18,
+      voicemailCompletionRate: 90
+    },
+    funnel: [
+      { stage: "Attempts", count: 100 },
+      { stage: "Answered", count: 44 },
+      { stage: "Connected", count: 31 },
+      { stage: "Completed", count: 82 }
+    ],
+    dailyTrend: [
+      {
+        date: "2026-07-14",
+        attempts: 45,
+        answered: 20,
+        connected: 14,
+        failed: 6,
+        voicemailCompleted: 8,
+        averageTalkSeconds: 79
+      },
+      {
+        date: "2026-07-15",
+        attempts: 55,
+        answered: 24,
+        connected: 17,
+        failed: 6,
+        voicemailCompleted: 10,
+        averageTalkSeconds: 88
+      }
+    ],
+    campaignPerformance: [
+      {
+        id: "11111111-1111-4111-8111-111111111111",
+        name: "Selected campaign",
+        status: "active",
+        loaded: 80,
+        callable: 32,
+        attemptedContacts: 48,
+        attempts: 70,
+        answered: 32,
+        connected: 23,
+        contactRate: 32.9,
+        averageTalkSeconds: 91,
+        retryEfficiency: 18.2,
+        voicemailCompleted: 12
+      }
+    ],
+    agentPerformance: [
+      {
+        id: "99999999-9999-4999-8999-999999999999",
+        name: "Agent Example",
+        isActive: true,
+        registered: true,
+        availabilityStatus: "available",
+        activeCall: false,
+        attempts: 70,
+        answered: 32,
+        connected: 23,
+        contactRate: 32.9,
+        averageTalkSeconds: 91,
+        voicemailDrops: 12,
+        failed: 7
+      }
+    ],
+    dataQuality: {
+      snapshotAt: "2026-07-15T12:00:00.000Z",
+      totalContacts: 120,
+      callable: 72,
+      suppressed: 8,
+      exhausted: 16,
+      importedRows: 105,
+      rejectedRows: 5,
+      duplicateRows: 3,
+      invalidRows: 2
+    },
+    voicemail: {
+      requested: 20,
+      started: 20,
+      agentReleased: 19,
+      completed: 18,
+      failedOrInterrupted: 2,
+      completionRate: 90,
+      averageReleaseSeconds: 3
+    },
     ...overrides
   };
 }

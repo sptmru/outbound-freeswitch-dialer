@@ -1,5 +1,14 @@
 # Administrator Guide
 
+## Analytics
+
+- Open **Analytics** for the operational scorecard. Select Today, 7 days, or 30 days and optionally narrow the view to one campaign. Date boundaries and daily buckets use the IANA timezone reported by the browser and show that timezone next to the source context.
+- Read **Answer rate** as calls with `answered_at` divided by attempts. Read **Contact rate** as answered calls excluding detected/dropped voicemail divided by attempts; this is an operational proxy rather than independently reviewed human-contact truth.
+- The call funnel, daily trend, campaign performance, agent performance, and voicemail lifecycle use the selected call period. Data-quality counts are a current queue snapshot and carry their own snapshot timestamp.
+- Use attempts together with unique contacts and contact rate. Attempts alone can rise because of retries without improving campaign reach or connection quality.
+- Retry efficiency describes repeated contacts that later connected; small denominators can move sharply, so use it with attempted-contact volume.
+- Use **Refresh** after an operational change when an immediate reread is required. The analytics page is not a replacement for the near-real-time call controls or Grafana health dashboard.
+
 ## Campaigns And Contacts
 
 - Create a campaign in `draft`, review its contact data and policy, then activate it. Use `paused` to stop new calls temporarily and `archived` to preserve closed campaign history.
@@ -46,7 +55,7 @@
 
 ## Operations
 
-- Review Grafana/Alertmanager, API/DB/ESL/trunk readiness, stuck calls, recording/voicemail errors, retention status, backup freshness, disk, and restarts.
+- Review Grafana/Alertmanager, API latency/error rate, DB/ESL/trunk readiness, ESL queue health, stuck calls and voicemail jobs, recording finalization, retention status, backup freshness, TLS, disk, and restarts.
 - Confirm that an authenticated backup reached the off-host destination. A local `.enc` file alone is not disaster-recovery acceptance.
 - Follow the runbooks for deploy/rollback, backup/restore, incidents, and captures; preserve call ID, both leg UUIDs, UTC time, and deployed SHA.
 - Do not claim voicemail success from local playback alone. Verify the far-end mailbox when that is the user-visible requirement.
