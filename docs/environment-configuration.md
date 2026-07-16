@@ -93,7 +93,7 @@ Use [AWS NAT, firewall, STUN, and TURN](runbooks/aws-networking.md) for address 
 
 ### Monitoring and alerting
 
-`GRAFANA_ADMIN_USER`, `GRAFANA_ADMIN_PASSWORD`, and the retention settings configure Grafana, Prometheus, Loki, and Alertmanager. At least one of `ALERTMANAGER_WEBHOOK_URL` or the Telegram token/chat pair should route alerts off the host. `ALLOW_NO_ALERT_RECEIVER=true` is an explicit production risk acceptance.
+`GRAFANA_ADMIN_USER`, `GRAFANA_ADMIN_PASSWORD`, and the retention settings configure Grafana, Prometheus, Loki, and Alertmanager. At least one of the generic webhook, Slack Incoming Webhook, or Telegram destinations should route alerts off the host. Slack requires both `ALERTMANAGER_SLACK_WEBHOOK_URL` and `ALERTMANAGER_SLACK_CHANNEL`; its webhook URL must use HTTPS. `ALLOW_NO_ALERT_RECEIVER=true` is an explicit production risk acceptance.
 
 Monitoring is part of the main Compose deployment. `scripts/deploy.sh` renders `monitoring/generated/prometheus.yml` and `monitoring/generated/alertmanager.yml`, validates all monitoring configs with the pinned runtime images, then starts the stack. Do not edit generated files directly.
 
@@ -132,7 +132,7 @@ The Settings UI stores a bounded allowlist of product-policy overrides under `ad
 - `DEFAULT_PHONE_COUNTRY_CODE`, `CONTACT_MAX_ATTEMPTS`, `CONTACT_RETRY_DELAY_SECONDS`, and `CALL_HISTORY_EXPORT_MAX_ROWS`;
 - `CALL_LOG_RETENTION_DAYS`, `CALL_RECORDING_RETENTION_DAYS`, `PCAP_RETENTION_DAYS`, and `RETENTION_ENABLED`;
 - `PCAP_CAPTURE_ENABLED` and `SIP_TRUNK_CALLER_ID`;
-- `ALERTMANAGER_REPEAT_INTERVAL` plus enablement of already configured webhook/Telegram receivers.
+- `ALERTMANAGER_REPEAT_INTERVAL` plus enablement of already configured webhook/Slack/Telegram receivers.
 
 Alert receiver URLs/tokens remain deployment-managed secrets and are never returned by the settings API. Runtime alert changes update `monitoring/generated/alertmanager.yml` through the API's dedicated bind mount and use Alertmanager's lifecycle reload endpoint. Direct edits to generated files remain unsupported.
 

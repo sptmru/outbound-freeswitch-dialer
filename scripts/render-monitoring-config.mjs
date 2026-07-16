@@ -2,47 +2,56 @@
 
 import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const outputDirectory = resolve(process.argv[2] ?? "monitoring/generated");
-const appDomain = required("LETSENCRYPT_DOMAIN");
-const grafanaDomain = required("GRAFANA_DOMAIN");
-const grafanaPassword = required("GRAFANA_ADMIN_PASSWORD");
-
-if (appDomain === grafanaDomain) {
-  throw new Error("GRAFANA_DOMAIN must be different from LETSENCRYPT_DOMAIN");
-}
-if (grafanaPassword.length < 16 || grafanaPassword === "change-me-long-random-grafana-password") {
-  throw new Error("GRAFANA_ADMIN_PASSWORD must be a non-default value with at least 16 characters");
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  await main();
 }
 
-await mkdir(outputDirectory, { recursive: true });
+async function main() {
+  const outputDirectory = resolve(process.argv[2] ?? "monitoring/generated");
+  const appDomain = required("LETSENCRYPT_DOMAIN");
+  const grafanaDomain = required("GRAFANA_DOMAIN");
+  const grafanaPassword = required("GRAFANA_ADMIN_PASSWORD");
 
-const prometheusTemplate = await readFile(resolve("monitoring/prometheus/prometheus.yml.tpl"), "utf8");
-const prometheus = prometheusTemplate
-  .replaceAll("__APP_READY_URL__", `https://${appDomain}/api/health/ready`)
-  .replaceAll("__GRAFANA_HEALTH_URL__", `https://${grafanaDomain}/api/health`);
+  if (appDomain === grafanaDomain) {
+    throw new Error("GRAFANA_DOMAIN must be different from LETSENCRYPT_DOMAIN");
+  }
+  if (grafanaPassword.length < 16 || grafanaPassword === "change-me-long-random-grafana-password") {
+    throw new Error("GRAFANA_ADMIN_PASSWORD must be a non-default value with at least 16 characters");
+  }
 
-await writeFile(resolve(outputDirectory, "prometheus.yml"), prometheus, { mode: 0o644 });
-const grafanaDashboardTemplate = await readFile(
-  resolve("monitoring/grafana/dashboards/outbound-dialer-overview.json"),
-  "utf8"
-);
-const grafanaDashboard = grafanaDashboardTemplate.replaceAll("__APP_DOMAIN__", appDomain);
-await writeFile(resolve(outputDirectory, "outbound-dialer-overview.json"), grafanaDashboard, {
-  mode: 0o644
-});
-const alertmanagerPath = resolve(outputDirectory, "alertmanager.yml");
-await writeFile(alertmanagerPath, renderAlertmanager(), { mode: 0o640 });
-await chmod(alertmanagerPath, 0o640);
+  await mkdir(outputDirectory, { recursive: true });
 
-console.log(`Rendered monitoring configuration for ${appDomain} and ${grafanaDomain}`);
+  const prometheusTemplate = await readFile(resolve("monitoring/prometheus/prometheus.yml.tpl"), "utf8");
+  const prometheus = prometheusTemplate
+    .replaceAll("__APP_READY_URL__", `https://${appDomain}/api/health/ready`)
+    .replaceAll("__GRAFANA_HEALTH_URL__", `https://${grafanaDomain}/api/health`);
 
-function renderAlertmanager() {
-  const repeatInterval = process.env.ALERTMANAGER_REPEAT_INTERVAL?.trim() || "4h";
+  await writeFile(resolve(outputDirectory, "prometheus.yml"), prometheus, { mode: 0o644 });
+  const grafanaDashboardTemplate = await readFile(
+    resolve("monitoring/grafana/dashboards/outbound-dialer-overview.json"),
+    "utf8"
+  );
+  const grafanaDashboard = grafanaDashboardTemplate.replaceAll("__APP_DOMAIN__", appDomain);
+  await writeFile(resolve(outputDirectory, "outbound-dialer-overview.json"), grafanaDashboard, {
+    mode: 0o644
+  });
+  const alertmanagerPath = resolve(outputDirectory, "alertmanager.yml");
+  await writeFile(alertmanagerPath, renderAlertmanager(), { mode: 0o640 });
+  await chmod(alertmanagerPath, 0o640);
+
+  console.log(`Rendered monitoring configuration for ${appDomain} and ${grafanaDomain}`);
+}
+
+export function renderAlertmanager(env = process.env) {
+  const repeatInterval = env.ALERTMANAGER_REPEAT_INTERVAL?.trim() || "4h";
   const integrations = [];
-  const webhookUrl = process.env.ALERTMANAGER_WEBHOOK_URL?.trim();
-  const telegramToken = process.env.ALERTMANAGER_TELEGRAM_BOT_TOKEN?.trim();
-  const telegramChatId = process.env.ALERTMANAGER_TELEGRAM_CHAT_ID?.trim();
+  const webhookUrl = env.ALERTMANAGER_WEBHOOK_URL?.trim();
+  const slackWebhookUrl = env.ALERTMANAGER_SLACK_WEBHOOK_URL?.trim();
+  const slackChannel = env.ALERTMANAGER_SLACK_CHANNEL?.trim();
+  const telegramToken = env.ALERTMANAGER_TELEGRAM_BOT_TOKEN?.trim();
+  const telegramChatId = env.ALERTMANAGER_TELEGRAM_CHAT_ID?.trim();
 
   if (webhookUrl) {
     const parsed = new URL(webhookUrl);
@@ -52,6 +61,17 @@ function renderAlertmanager() {
     integrations.push(
       `    webhook_configs:\n      - url: ${yamlString(webhookUrl)}\n        send_resolved: true`
     );
+  }
+
+  if (slackWebhookUrl || slackChannel) {
+    if (!slackWebhookUrl || !slackChannel) {
+      throw new Error("Set both ALERTMANAGER_SLACK_WEBHOOK_URL and ALERTMANAGER_SLACK_CHANNEL");
+    }
+    const parsed = new URL(slackWebhookUrl);
+    if (parsed.protocol !== "https:") {
+      throw new Error("ALERTMANAGER_SLACK_WEBHOOK_URL must use https");
+    }
+    integrations.push(renderSlackConfig(slackWebhookUrl, slackChannel));
   }
 
   if (telegramToken || telegramChatId) {
@@ -86,6 +106,10 @@ inhibit_rules:
       - severity="warning"
     equal: [alertname]
 `;
+}
+
+function renderSlackConfig(webhookUrl, channel) {
+  return `    slack_configs:\n      - api_url: ${yamlString(webhookUrl)}\n        channel: ${yamlString(channel)}\n        send_resolved: true\n        color: '{{ if eq .Status "firing" }}danger{{ else }}good{{ end }}'\n        title: '{{ if eq .Status "firing" }}FIRING{{ else }}RESOLVED{{ end }}: {{ .CommonLabels.alertname }}'\n        text: '{{ range .Alerts }}{{ .Annotations.summary }}{{ if .Annotations.description }} - {{ .Annotations.description }}{{ end }}{{ "\\n" }}{{ end }}'`;
 }
 
 function required(name) {

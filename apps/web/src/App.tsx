@@ -5323,6 +5323,15 @@ function SystemSettingsPanel() {
             />
             Telegram alerts
           </label>
+          <label>
+            <input
+              checked={settings.alertmanagerSlackEnabled}
+              disabled={!settings.availableAlertChannels.slack}
+              type="checkbox"
+              onChange={(e) => set("alertmanagerSlackEnabled", e.target.checked)}
+            />
+            Slack alerts
+          </label>
         </div>
         <p className="panel-note">
           Alert credentials remain deployment-managed; this screen only enables configured channels.

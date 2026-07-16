@@ -3,8 +3,37 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { renderAlertmanager } from "../scripts/render-monitoring-config.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
+
+test("monitoring config renders a native Slack receiver", () => {
+  const rendered = renderAlertmanager({
+    ALERTMANAGER_SLACK_WEBHOOK_URL: "https://hooks.slack.com/services/test/example/secret",
+    ALERTMANAGER_SLACK_CHANNEL: "#dialer-alerts"
+  });
+
+  assert.match(rendered, /slack_configs:/);
+  assert.match(rendered, /channel: "#dialer-alerts"/);
+  assert.match(rendered, /send_resolved: true/);
+  assert.match(rendered, /FIRING/);
+  assert.match(rendered, /RESOLVED/);
+});
+
+test("monitoring config rejects incomplete or insecure Slack settings", () => {
+  assert.throws(
+    () => renderAlertmanager({ ALERTMANAGER_SLACK_CHANNEL: "#dialer-alerts" }),
+    /Set both ALERTMANAGER_SLACK_WEBHOOK_URL and ALERTMANAGER_SLACK_CHANNEL/
+  );
+  assert.throws(
+    () =>
+      renderAlertmanager({
+        ALERTMANAGER_SLACK_WEBHOOK_URL: "http://hooks.slack.test/services/example",
+        ALERTMANAGER_SLACK_CHANNEL: "#dialer-alerts"
+      }),
+    /ALERTMANAGER_SLACK_WEBHOOK_URL must use https/
+  );
+});
 
 test("monitoring dashboard provisions the application link and PCAP panels", () => {
   const dashboard = JSON.parse(

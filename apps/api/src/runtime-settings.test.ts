@@ -10,7 +10,7 @@ import { RuntimeSettingsService } from "./runtime-settings.js";
 describe("RuntimeSettingsService", () => {
   it("loads persisted settings over env defaults and mutates the shared live config", async () => {
     const updatedAt = new Date("2026-07-14T12:00:00.000Z");
-    const value = settings({
+    const { alertmanagerSlackEnabled: _legacyMissing, ...value } = settings({
       contactMaxAttempts: 7,
       pcapCaptureEnabled: true,
       sipTrunkCallerId: "15551234567"
@@ -26,6 +26,7 @@ describe("RuntimeSettingsService", () => {
     assert.equal(config.CONTACT_MAX_ATTEMPTS, 7);
     assert.equal(config.PCAP_CAPTURE_ENABLED, true);
     assert.equal(config.SIP_TRUNK_CALLER_ID, "15551234567");
+    assert.equal(service.get().alertmanagerSlackEnabled, false);
     assert.equal(service.get().updatedAt, updatedAt.toISOString());
   });
 
@@ -36,6 +37,37 @@ describe("RuntimeSettingsService", () => {
       service.update(settings({ alertmanagerWebhookEnabled: true })),
       /Configure ALERTMANAGER_WEBHOOK_URL/
     );
+    await assert.rejects(
+      service.update(settings({ alertmanagerSlackEnabled: true })),
+      /Configure Slack webhook URL and channel/
+    );
+  });
+
+  it("renders an enabled Slack receiver with firing and resolved notifications", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "outbound-dialer-slack-settings-"));
+    const configPath = join(directory, "alertmanager.yml");
+    const pool = {
+      query: async () => ({ rows: [{ updated_at: new Date("2026-07-16T12:00:00.000Z") }], rowCount: 1 })
+    } as unknown as pg.Pool;
+    const config = Object.assign(baseConfig(), {
+      ALERTMANAGER_CONFIG_PATH: configPath,
+      ALERTMANAGER_URL: "http://127.0.0.1:1",
+      ALERTMANAGER_SLACK_WEBHOOK_URL: "https://hooks.slack.com/services/test/example/secret",
+      ALERTMANAGER_SLACK_CHANNEL: "#dialer-alerts"
+    });
+    const service = new RuntimeSettingsService(pool, config);
+
+    try {
+      await service.update(settings({ alertmanagerSlackEnabled: true }));
+      const rendered = await readFile(configPath, "utf8");
+      assert.match(rendered, /slack_configs:/);
+      assert.match(rendered, /channel: "#dialer-alerts"/);
+      assert.match(rendered, /send_resolved: true/);
+      assert.match(rendered, /FIRING/);
+      assert.match(rendered, /RESOLVED/);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 
   it("persists settings even while Alertmanager is temporarily unavailable", async () => {
@@ -75,6 +107,7 @@ function settings(overrides: Record<string, unknown> = {}) {
     sipTrunkCallerId: null,
     alertmanagerRepeatInterval: "4h",
     alertmanagerWebhookEnabled: false,
+    alertmanagerSlackEnabled: false,
     alertmanagerTelegramEnabled: false,
     ...overrides
   };
@@ -93,6 +126,7 @@ function baseConfig(): AppConfig {
     PCAP_CAPTURE_ENABLED: false,
     ALERTMANAGER_REPEAT_INTERVAL: "4h",
     ALERTMANAGER_WEBHOOK_ENABLED: true,
+    ALERTMANAGER_SLACK_ENABLED: true,
     ALERTMANAGER_TELEGRAM_ENABLED: true
   } as AppConfig;
 }

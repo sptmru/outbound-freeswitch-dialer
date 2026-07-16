@@ -22,8 +22,13 @@ export const updateSystemSettingsSchema = z.object({
   sipTrunkCallerId: z.string().trim().max(80).nullable(),
   alertmanagerRepeatInterval: z.string().regex(/^\d+(?:s|m|h|d)$/),
   alertmanagerWebhookEnabled: z.boolean(),
+  alertmanagerSlackEnabled: z.boolean(),
   alertmanagerTelegramEnabled: z.boolean()
 }) satisfies z.ZodType<UpdateAdminSystemSettingsRequest>;
+
+const persistedSystemSettingsSchema = updateSystemSettingsSchema.extend({
+  alertmanagerSlackEnabled: z.boolean().default(false)
+});
 
 const SETTINGS_KEY = "admin.runtime_settings";
 
@@ -41,7 +46,7 @@ export class RuntimeSettingsService {
       [SETTINGS_KEY]
     );
     if (result.rows[0]) {
-      this.apply(updateSystemSettingsSchema.parse(result.rows[0].value_json));
+      this.apply(persistedSystemSettingsSchema.parse(result.rows[0].value_json));
       this.updatedAt = result.rows[0].updated_at.toISOString();
     }
     await this.writeAlertmanagerConfig();
@@ -62,9 +67,11 @@ export class RuntimeSettingsService {
       sipTrunkCallerId: this.config.SIP_TRUNK_CALLER_ID ?? null,
       alertmanagerRepeatInterval: this.config.ALERTMANAGER_REPEAT_INTERVAL,
       alertmanagerWebhookEnabled: this.config.ALERTMANAGER_WEBHOOK_ENABLED,
+      alertmanagerSlackEnabled: this.config.ALERTMANAGER_SLACK_ENABLED,
       alertmanagerTelegramEnabled: this.config.ALERTMANAGER_TELEGRAM_ENABLED,
       availableAlertChannels: {
         webhook: Boolean(this.config.ALERTMANAGER_WEBHOOK_URL),
+        slack: Boolean(this.config.ALERTMANAGER_SLACK_WEBHOOK_URL && this.config.ALERTMANAGER_SLACK_CHANNEL),
         telegram: Boolean(
           this.config.ALERTMANAGER_TELEGRAM_BOT_TOKEN && this.config.ALERTMANAGER_TELEGRAM_CHAT_ID
         )
@@ -79,6 +86,11 @@ export class RuntimeSettingsService {
     const available = this.get().availableAlertChannels;
     if (value.alertmanagerWebhookEnabled && !available.webhook) {
       throw Object.assign(new Error("Configure ALERTMANAGER_WEBHOOK_URL before enabling webhook alerts"), {
+        statusCode: 409
+      });
+    }
+    if (value.alertmanagerSlackEnabled && !available.slack) {
+      throw Object.assign(new Error("Configure Slack webhook URL and channel before enabling Slack alerts"), {
         statusCode: 409
       });
     }
@@ -123,6 +135,9 @@ export class RuntimeSettingsService {
       ALERTMANAGER_REPEAT_INTERVAL: value.alertmanagerRepeatInterval,
       ALERTMANAGER_WEBHOOK_ENABLED:
         value.alertmanagerWebhookEnabled && Boolean(this.config.ALERTMANAGER_WEBHOOK_URL),
+      ALERTMANAGER_SLACK_ENABLED:
+        value.alertmanagerSlackEnabled &&
+        Boolean(this.config.ALERTMANAGER_SLACK_WEBHOOK_URL && this.config.ALERTMANAGER_SLACK_CHANNEL),
       ALERTMANAGER_TELEGRAM_ENABLED:
         value.alertmanagerTelegramEnabled &&
         Boolean(this.config.ALERTMANAGER_TELEGRAM_BOT_TOKEN && this.config.ALERTMANAGER_TELEGRAM_CHAT_ID)
@@ -162,6 +177,15 @@ function renderAlertmanager(config: AppConfig): string {
     );
   }
   if (
+    config.ALERTMANAGER_SLACK_ENABLED &&
+    config.ALERTMANAGER_SLACK_WEBHOOK_URL &&
+    config.ALERTMANAGER_SLACK_CHANNEL
+  ) {
+    integrations.push(
+      renderSlackConfig(config.ALERTMANAGER_SLACK_WEBHOOK_URL, config.ALERTMANAGER_SLACK_CHANNEL)
+    );
+  }
+  if (
     config.ALERTMANAGER_TELEGRAM_ENABLED &&
     config.ALERTMANAGER_TELEGRAM_BOT_TOKEN &&
     config.ALERTMANAGER_TELEGRAM_CHAT_ID
@@ -171,4 +195,8 @@ function renderAlertmanager(config: AppConfig): string {
     );
   }
   return `global:\n  resolve_timeout: 5m\n\nroute:\n  receiver: default\n  group_by: [alertname, severity]\n  group_wait: 30s\n  group_interval: 5m\n  repeat_interval: ${config.ALERTMANAGER_REPEAT_INTERVAL}\n\nreceivers:\n  - name: default\n${integrations.length ? `${integrations.join("\n")}\n` : ""}\ninhibit_rules:\n  - source_matchers:\n      - severity="critical"\n    target_matchers:\n      - severity="warning"\n    equal: [alertname]\n`;
+}
+
+function renderSlackConfig(webhookUrl: string, channel: string): string {
+  return `    slack_configs:\n      - api_url: ${JSON.stringify(webhookUrl)}\n        channel: ${JSON.stringify(channel)}\n        send_resolved: true\n        color: '{{ if eq .Status "firing" }}danger{{ else }}good{{ end }}'\n        title: '{{ if eq .Status "firing" }}FIRING{{ else }}RESOLVED{{ end }}: {{ .CommonLabels.alertname }}'\n        text: '{{ range .Alerts }}{{ .Annotations.summary }}{{ if .Annotations.description }} - {{ .Annotations.description }}{{ end }}{{ "\\n" }}{{ end }}'`;
 }

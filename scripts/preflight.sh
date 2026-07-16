@@ -170,7 +170,14 @@ elif [[ ! "${SIP_TRUNK_MODE:-registration}" =~ ^(registration|ip_auth)$ ]]; then
   fail "SIP_TRUNK_MODE must be registration or ip_auth"
 fi
 
-if [[ -z "${ALERTMANAGER_WEBHOOK_URL:-}" && -z "${ALERTMANAGER_TELEGRAM_BOT_TOKEN:-}" ]]; then
+if [[ -n "${ALERTMANAGER_SLACK_WEBHOOK_URL:-}" || -n "${ALERTMANAGER_SLACK_CHANNEL:-}" ]]; then
+  [[ -n "${ALERTMANAGER_SLACK_WEBHOOK_URL:-}" && -n "${ALERTMANAGER_SLACK_CHANNEL:-}" ]] \
+    || fail "set both ALERTMANAGER_SLACK_WEBHOOK_URL and ALERTMANAGER_SLACK_CHANNEL"
+fi
+
+if [[ -z "${ALERTMANAGER_WEBHOOK_URL:-}" \
+  && -z "${ALERTMANAGER_SLACK_WEBHOOK_URL:-}" \
+  && -z "${ALERTMANAGER_TELEGRAM_BOT_TOKEN:-}" ]]; then
   [[ "${ALLOW_NO_ALERT_RECEIVER:-false}" == "true" ]] || fail "configure an Alertmanager receiver or explicitly set ALLOW_NO_ALERT_RECEIVER=true"
 fi
 

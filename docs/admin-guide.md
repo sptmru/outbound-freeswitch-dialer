@@ -57,6 +57,7 @@
 
 ## Operations
 
+- In Settings, enable Slack alerts only after the deployment owner configures both `ALERTMANAGER_SLACK_WEBHOOK_URL` and `ALERTMANAGER_SLACK_CHANNEL`. The webhook URL remains secret and is never returned to the browser.
 - Review Grafana/Alertmanager, API latency/error rate, DB/ESL/trunk readiness, ESL queue health, registration and active-call drift, media coverage/suspected one-way flags, terminal finalization, stuck calls and voicemail jobs, recording finalization, retention status, backup freshness, TLS, disk, and restarts.
 - Confirm that an authenticated backup reached the off-host destination. A local `.enc` file alone is not disaster-recovery acceptance.
 - Follow the runbooks for deploy/rollback, backup/restore, incidents, and captures; preserve call ID, both leg UUIDs, UTC time, and deployed SHA.

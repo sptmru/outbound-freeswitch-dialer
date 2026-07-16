@@ -334,13 +334,15 @@ describe("App Agent Desk empty states", () => {
     expect(attempts).toHaveValue("");
     fireEvent.change(attempts, { target: { value: "50" } });
     expect(attempts).toHaveValue("50");
+    fireEvent.click(screen.getByLabelText("Slack alerts"));
     fireEvent.click(screen.getByRole("button", { name: "Save settings" }));
 
     await waitFor(() => expect(apiMocks.updateSystemSettings).toHaveBeenCalled());
     expect(apiMocks.updateSystemSettings.mock.calls[0]?.[0]).toMatchObject({
       contactMaxAttempts: 50,
       defaultPhoneCountryCode: "US",
-      pcapCaptureEnabled: false
+      pcapCaptureEnabled: false,
+      alertmanagerSlackEnabled: true
     });
     expect(await screen.findByText("Settings applied")).toBeInTheDocument();
   });
@@ -1095,8 +1097,9 @@ function systemSettings() {
     sipTrunkCallerId: null,
     alertmanagerRepeatInterval: "4h",
     alertmanagerWebhookEnabled: false,
+    alertmanagerSlackEnabled: false,
     alertmanagerTelegramEnabled: false,
-    availableAlertChannels: { webhook: true, telegram: true },
+    availableAlertChannels: { webhook: true, slack: true, telegram: true },
     updatedAt: null
   };
 }

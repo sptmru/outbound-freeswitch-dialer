@@ -827,8 +827,9 @@ export interface AdminSystemSettings {
   sipTrunkCallerId: string | null;
   alertmanagerRepeatInterval: string;
   alertmanagerWebhookEnabled: boolean;
+  alertmanagerSlackEnabled: boolean;
   alertmanagerTelegramEnabled: boolean;
-  availableAlertChannels: { webhook: boolean; telegram: boolean };
+  availableAlertChannels: { webhook: boolean; slack: boolean; telegram: boolean };
   updatedAt: string | null;
 }
 

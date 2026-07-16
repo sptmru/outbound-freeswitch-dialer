@@ -87,12 +87,22 @@ const envSchema = z.object({
     .regex(/^\d+(?:s|m|h|d)$/)
     .default("4h"),
   ALERTMANAGER_WEBHOOK_URL: z.string().url().optional(),
+  ALERTMANAGER_SLACK_WEBHOOK_URL: z
+    .string()
+    .url()
+    .refine((value) => new URL(value).protocol === "https:", "Slack webhook URL must use HTTPS")
+    .optional(),
+  ALERTMANAGER_SLACK_CHANNEL: z.string().trim().min(1).optional(),
   ALERTMANAGER_TELEGRAM_BOT_TOKEN: z.string().optional(),
   ALERTMANAGER_TELEGRAM_CHAT_ID: z
     .string()
     .regex(/^-?\d+$/)
     .optional(),
   ALERTMANAGER_WEBHOOK_ENABLED: z
+    .string()
+    .optional()
+    .transform((value) => value !== "false"),
+  ALERTMANAGER_SLACK_ENABLED: z
     .string()
     .optional()
     .transform((value) => value !== "false"),
@@ -116,6 +126,9 @@ export function loadConfig(): AppConfig {
     ...parsed,
     ALERTMANAGER_WEBHOOK_ENABLED:
       parsed.ALERTMANAGER_WEBHOOK_ENABLED && Boolean(parsed.ALERTMANAGER_WEBHOOK_URL),
+    ALERTMANAGER_SLACK_ENABLED:
+      parsed.ALERTMANAGER_SLACK_ENABLED &&
+      Boolean(parsed.ALERTMANAGER_SLACK_WEBHOOK_URL && parsed.ALERTMANAGER_SLACK_CHANNEL),
     ALERTMANAGER_TELEGRAM_ENABLED:
       parsed.ALERTMANAGER_TELEGRAM_ENABLED &&
       Boolean(parsed.ALERTMANAGER_TELEGRAM_BOT_TOKEN && parsed.ALERTMANAGER_TELEGRAM_CHAT_ID),
