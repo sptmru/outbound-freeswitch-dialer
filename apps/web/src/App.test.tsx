@@ -275,6 +275,12 @@ describe("App Agent Desk empty states", () => {
           id: "88888888-8888-4888-8888-888888888888",
           name: "Offline Agent",
           registered: false
+        },
+        {
+          ...analytics.agentPerformance[0]!,
+          id: "77777777-7777-4777-8777-777777777777",
+          name: "Calling Agent",
+          activeCall: true
         }
       ]
     });
@@ -290,6 +296,7 @@ describe("App Agent Desk empty states", () => {
     expect(screen.getByText("Registration count drift")).toBeInTheDocument();
     expect(screen.getByText("Online")).toBeInTheDocument();
     expect(screen.getByText("Offline")).toBeInTheDocument();
+    expect(screen.getByText("On call")).toBeInTheDocument();
     expect(screen.queryByText("Available")).not.toBeInTheDocument();
     expect(apiMocks.fetchAdminAnalytics).toHaveBeenCalledWith(
       expect.objectContaining({
