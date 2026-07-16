@@ -822,6 +822,25 @@ describe("App Agent Desk empty states", () => {
     await waitFor(() => expect(apiMocks.useSoftphoneRegistration).toHaveBeenLastCalledWith(null));
     expect(screen.queryByText("Phone offline")).not.toBeInTheDocument();
     expect(screen.queryByText("Mic ready")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Phone connecting/)).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["Suppression", "/suppression", "Suppression"],
+    ["Call history", "/call-history", "Call history"],
+    ["Recordings", "/recordings", "Voicemail recordings"]
+  ])("does not show phone connection status on %s", async (_page, path, heading) => {
+    const admin = userRow({ role: "admin" });
+    window.history.replaceState({}, "", path);
+    apiMocks.fetchMe.mockResolvedValue({ user: admin });
+    apiMocks.fetchAgentDesk.mockResolvedValue(deskResponse({ user: admin }));
+
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { level: 1, name: heading })).toBeInTheDocument();
+    await waitFor(() => expect(apiMocks.useSoftphoneRegistration).toHaveBeenLastCalledWith(null));
+    expect(screen.queryByText(/Phone connecting/)).not.toBeInTheDocument();
+    expect(screen.getByText("● Ready")).toBeInTheDocument();
   });
 
   it("keeps admin on Agent Desk while a call is active", async () => {

@@ -470,11 +470,15 @@ export function App() {
           <div className="sidebar-foot">
             <span>{user.name}</span>
             <strong>
-              {desk.availability.status === "paused"
-                ? `● Paused · ${softphoneRuntime.registered ? "Phone connected" : "Phone connecting"}`
-                : softphoneRuntime.registered
-                  ? "● Ready · Phone connected"
-                  : "● Phone connecting"}
+              {activeView === "desk"
+                ? desk.availability.status === "paused"
+                  ? `● Paused · ${softphoneRuntime.registered ? "Phone connected" : "Phone connecting"}`
+                  : softphoneRuntime.registered
+                    ? "● Ready · Phone connected"
+                    : "● Phone connecting"
+                : desk.availability.status === "paused"
+                  ? "● Paused"
+                  : "● Ready"}
             </strong>
             <small>
               {desk.metrics.todayCalls} calls · {desk.metrics.voicemailsDropped} VM drops
