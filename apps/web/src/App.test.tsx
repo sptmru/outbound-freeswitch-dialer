@@ -265,6 +265,19 @@ describe("App Agent Desk empty states", () => {
     apiMocks.fetchMe.mockResolvedValue({ user: admin });
     apiMocks.fetchAgentDesk.mockResolvedValue(deskResponse({ user: admin }));
     apiMocks.fetchAdminOverview.mockResolvedValue(adminResponse({ campaigns: [campaign] }));
+    const analytics = adminAnalyticsResponse();
+    apiMocks.fetchAdminAnalytics.mockResolvedValue({
+      ...analytics,
+      agentPerformance: [
+        ...analytics.agentPerformance,
+        {
+          ...analytics.agentPerformance[0]!,
+          id: "88888888-8888-4888-8888-888888888888",
+          name: "Offline Agent",
+          registered: false
+        }
+      ]
+    });
 
     render(<App />);
 
@@ -275,6 +288,9 @@ describe("App Agent Desk empty states", () => {
     expect(screen.getByText("AVMD review evidence")).toBeInTheDocument();
     expect(screen.getByText("Provider observations")).toBeInTheDocument();
     expect(screen.getByText("Registration count drift")).toBeInTheDocument();
+    expect(screen.getByText("Online")).toBeInTheDocument();
+    expect(screen.getByText("Offline")).toBeInTheDocument();
+    expect(screen.queryByText("Available")).not.toBeInTheDocument();
     expect(apiMocks.fetchAdminAnalytics).toHaveBeenCalledWith(
       expect.objectContaining({
         campaignId: campaign.id,

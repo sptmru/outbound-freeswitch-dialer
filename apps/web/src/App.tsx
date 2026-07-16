@@ -2055,14 +2055,8 @@ function AnalyticsAgentTable({ items }: { items: AdminAnalyticsResponse["agentPe
                   </td>
                   <td>
                     <StatusBadge
-                      label={
-                        !item.isActive ? "Inactive" : item.activeCall ? "On call" : item.availabilityStatus
-                      }
-                      tone={
-                        item.isActive && (item.activeCall || item.availabilityStatus === "available")
-                          ? "good"
-                          : "neutral"
-                      }
+                      label={item.isActive && item.registered ? "Online" : "Offline"}
+                      tone={item.isActive && item.registered ? "good" : "neutral"}
                     />
                   </td>
                   <td>{item.attempts.toLocaleString()}</td>
