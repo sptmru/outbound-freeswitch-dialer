@@ -761,7 +761,7 @@ export async function getCallDetail(pool: pg.Pool, callId: string): Promise<Call
     return null;
   }
 
-  const [events, legs, reviews, mediaQuality] = await Promise.all([
+  const [events, legs, reviews, mediaQuality, browserMedia] = await Promise.all([
     pool.query<CallDetailEventRow>(
       `
         select
@@ -867,7 +867,43 @@ export async function getCallDetail(pool: pg.Pool, callId: string): Promise<Call
         order by case leg_type when 'agent' then 0 else 1 end
       `,
       [callId]
-    )
+    ),
+    pool.query<{
+      schema_version: 1;
+      started_at: Date;
+      ended_at: Date;
+      captured_at: Date;
+      sample_count: number;
+      microphone_sample_rate: number | null;
+      microphone_sample_size: number | null;
+      microphone_channel_count: number | null;
+      microphone_echo_cancellation: boolean | null;
+      microphone_noise_suppression: boolean | null;
+      microphone_auto_gain_control: boolean | null;
+      microphone_latency_seconds: string | number | null;
+      inbound_codec: string | null;
+      inbound_packets_received: string | number | null;
+      inbound_packets_lost: string | number | null;
+      inbound_packets_discarded: string | number | null;
+      inbound_jitter_seconds_max: string | number | null;
+      inbound_jitter_buffer_delay_seconds: string | number | null;
+      inbound_jitter_buffer_emitted_count: string | number | null;
+      inbound_concealed_samples: string | number | null;
+      inbound_total_samples_received: string | number | null;
+      inbound_concealment_events: string | number | null;
+      inbound_audio_energy: string | number | null;
+      inbound_audio_duration_seconds: string | number | null;
+      outbound_codec: string | null;
+      outbound_packets_sent: string | number | null;
+      outbound_bytes_sent: string | number | null;
+      outbound_remote_packets_lost: string | number | null;
+      outbound_remote_jitter_seconds_max: string | number | null;
+      outbound_round_trip_time_seconds_max: string | number | null;
+      local_candidate_type: string | null;
+      remote_candidate_type: string | null;
+      transport_protocol: string | null;
+      relay_protocol: string | null;
+    }>(`select * from call_browser_media_stats where call_id = $1`, [callId])
   ]);
 
   const lastReasonCode = [...events.rows].reverse().find((event) => event.reason_code)?.reason_code ?? null;
@@ -958,6 +994,56 @@ export async function getCallDetail(pool: pg.Pool, callId: string): Promise<Call
       inboundQualityPercentage: nullableNumber(media.inbound_quality_percentage),
       suspectedOneWayAudio: isSuspectedOneWayAudio(media, row.duration_seconds ?? 0)
     })),
+    browserMedia: browserMedia.rows[0]
+      ? {
+          schemaVersion: browserMedia.rows[0].schema_version,
+          startedAt: browserMedia.rows[0].started_at.toISOString(),
+          endedAt: browserMedia.rows[0].ended_at.toISOString(),
+          capturedAt: browserMedia.rows[0].captured_at.toISOString(),
+          sampleCount: browserMedia.rows[0].sample_count,
+          microphone: {
+            sampleRate: browserMedia.rows[0].microphone_sample_rate,
+            sampleSize: browserMedia.rows[0].microphone_sample_size,
+            channelCount: browserMedia.rows[0].microphone_channel_count,
+            echoCancellation: browserMedia.rows[0].microphone_echo_cancellation,
+            noiseSuppression: browserMedia.rows[0].microphone_noise_suppression,
+            autoGainControl: browserMedia.rows[0].microphone_auto_gain_control,
+            latencySeconds: nullableNumber(browserMedia.rows[0].microphone_latency_seconds)
+          },
+          inbound: {
+            codec: browserMedia.rows[0].inbound_codec,
+            packetsReceived: nullableNumber(browserMedia.rows[0].inbound_packets_received),
+            packetsLost: nullableNumber(browserMedia.rows[0].inbound_packets_lost),
+            packetsDiscarded: nullableNumber(browserMedia.rows[0].inbound_packets_discarded),
+            jitterSecondsMax: nullableNumber(browserMedia.rows[0].inbound_jitter_seconds_max),
+            jitterBufferDelaySeconds: nullableNumber(
+              browserMedia.rows[0].inbound_jitter_buffer_delay_seconds
+            ),
+            jitterBufferEmittedCount: nullableNumber(
+              browserMedia.rows[0].inbound_jitter_buffer_emitted_count
+            ),
+            concealedSamples: nullableNumber(browserMedia.rows[0].inbound_concealed_samples),
+            totalSamplesReceived: nullableNumber(browserMedia.rows[0].inbound_total_samples_received),
+            concealmentEvents: nullableNumber(browserMedia.rows[0].inbound_concealment_events),
+            audioEnergy: nullableNumber(browserMedia.rows[0].inbound_audio_energy),
+            audioDurationSeconds: nullableNumber(browserMedia.rows[0].inbound_audio_duration_seconds)
+          },
+          outbound: {
+            codec: browserMedia.rows[0].outbound_codec,
+            packetsSent: nullableNumber(browserMedia.rows[0].outbound_packets_sent),
+            bytesSent: nullableNumber(browserMedia.rows[0].outbound_bytes_sent),
+            remotePacketsLost: nullableNumber(browserMedia.rows[0].outbound_remote_packets_lost),
+            remoteJitterSecondsMax: nullableNumber(browserMedia.rows[0].outbound_remote_jitter_seconds_max),
+            roundTripTimeSecondsMax: nullableNumber(browserMedia.rows[0].outbound_round_trip_time_seconds_max)
+          },
+          connection: {
+            localCandidateType: browserMedia.rows[0].local_candidate_type,
+            remoteCandidateType: browserMedia.rows[0].remote_candidate_type,
+            protocol: browserMedia.rows[0].transport_protocol,
+            relayProtocol: browserMedia.rows[0].relay_protocol
+          }
+        }
+      : null,
     legs: legs.rows.map((leg) => {
       const legEvents = events.rows.filter((event) => eventBelongsToLeg(event, leg.freeswitch_uuid));
       return {

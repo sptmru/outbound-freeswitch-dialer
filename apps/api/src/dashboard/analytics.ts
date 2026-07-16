@@ -125,6 +125,17 @@ type MediaLegRow = {
   codecs: Array<{ codec: string; count: number }>;
 };
 
+type BrowserMediaRow = {
+  answered_calls: string | number;
+  observed_calls: string | number;
+  average_inbound_loss_rate: string | number | null;
+  average_concealed_sample_rate: string | number | null;
+  average_jitter_buffer_ms: string | number | null;
+  p95_jitter_ms: string | number | null;
+  p95_round_trip_time_ms: string | number | null;
+  paths: Array<{ path: string; count: number }>;
+};
+
 type TelephonyReliabilityRow = {
   finalization_samples: string | number;
   average_finalization_ms: string | number | null;
@@ -170,17 +181,19 @@ export async function getAdminAnalytics(
   const dailyParams = [...rangeParams, filters.timeZone];
   const snapshotParams = [...rangeParams, retryPolicy.maxAttempts, retryPolicy.retryDelaySeconds, snapshotAt];
 
-  const [overview, daily, campaigns, agents, quality, avmd, media, mediaLegs, telephony] = await Promise.all([
-    pool.query<OverviewRow>(overviewSql, rangeParams),
-    pool.query<DailyRow>(dailySql, dailyParams),
-    pool.query<CampaignRow>(campaignSql, snapshotParams),
-    pool.query<AgentRow>(agentSql, rangeParams),
-    pool.query<DataQualityRow>(dataQualitySql, snapshotParams),
-    pool.query<AvmdQualityRow>(avmdQualitySql, rangeParams),
-    pool.query<MediaOverviewRow>(mediaOverviewSql, rangeParams),
-    pool.query<MediaLegRow>(mediaLegsSql, rangeParams),
-    pool.query<TelephonyReliabilityRow>(telephonyReliabilitySql, rangeParams)
-  ]);
+  const [overview, daily, campaigns, agents, quality, avmd, media, mediaLegs, browserMedia, telephony] =
+    await Promise.all([
+      pool.query<OverviewRow>(overviewSql, rangeParams),
+      pool.query<DailyRow>(dailySql, dailyParams),
+      pool.query<CampaignRow>(campaignSql, snapshotParams),
+      pool.query<AgentRow>(agentSql, rangeParams),
+      pool.query<DataQualityRow>(dataQualitySql, snapshotParams),
+      pool.query<AvmdQualityRow>(avmdQualitySql, rangeParams),
+      pool.query<MediaOverviewRow>(mediaOverviewSql, rangeParams),
+      pool.query<MediaLegRow>(mediaLegsSql, rangeParams),
+      pool.query<BrowserMediaRow>(browserMediaSql, rangeParams),
+      pool.query<TelephonyReliabilityRow>(telephonyReliabilitySql, rangeParams)
+    ]);
 
   return buildAdminAnalyticsResponse(
     filters,
@@ -193,6 +206,7 @@ export async function getAdminAnalytics(
     avmd.rows[0],
     media.rows[0],
     mediaLegs.rows,
+    browserMedia.rows[0],
     telephony.rows[0]
   );
 }
@@ -208,6 +222,7 @@ function buildAdminAnalyticsResponse(
   avmdRow: AvmdQualityRow | undefined,
   mediaRow: MediaOverviewRow | undefined,
   mediaLegRows: MediaLegRow[],
+  browserMediaRow: BrowserMediaRow | undefined,
   telephonyRow: TelephonyReliabilityRow | undefined
 ): AdminAnalyticsResponse {
   const attempts = integer(overviewRow?.attempts);
@@ -341,6 +356,19 @@ function buildAdminAnalyticsResponse(
       p95JitterLossRate: nullableNumber(mediaRow?.p95_jitter_loss_rate),
       averageQualityPercentage: nullableNumber(mediaRow?.average_quality_percentage),
       providers: mediaRow?.providers ?? [],
+      browser: {
+        observedCalls: integer(browserMediaRow?.observed_calls),
+        coverageRate: percent(
+          integer(browserMediaRow?.observed_calls),
+          integer(browserMediaRow?.answered_calls)
+        ),
+        averageInboundLossRate: nullableNumber(browserMediaRow?.average_inbound_loss_rate),
+        averageConcealedSampleRate: nullableNumber(browserMediaRow?.average_concealed_sample_rate),
+        averageJitterBufferMs: nullableNumber(browserMediaRow?.average_jitter_buffer_ms),
+        p95JitterMs: nullableNumber(browserMediaRow?.p95_jitter_ms),
+        p95RoundTripTimeMs: nullableNumber(browserMediaRow?.p95_round_trip_time_ms),
+        paths: browserMediaRow?.paths ?? []
+      },
       legs: mediaLegRows.map((row) => ({
         legType: row.leg_type,
         observedCalls: integer(row.observed_calls),
@@ -763,6 +791,54 @@ const mediaLegsSql = `
   order by case leg_type when 'agent' then 0 else 1 end
 `;
 
+const browserMediaSql = `
+  with filtered_calls as (
+    select id
+    from calls
+    where calls.created_at >= $1
+      and calls.created_at <= $2
+      and ($3::uuid is null or calls.campaign_id = $3)
+      and calls.answered_at is not null
+  ), observed as (
+    select call_browser_media_stats.*
+    from call_browser_media_stats
+    join filtered_calls on filtered_calls.id = call_browser_media_stats.call_id
+  )
+  select
+    (select count(*) from filtered_calls) as answered_calls,
+    count(*) as observed_calls,
+    avg(
+      100.0 * inbound_packets_lost
+      / nullif(inbound_packets_received + inbound_packets_lost, 0)
+    ) as average_inbound_loss_rate,
+    avg(
+      100.0 * inbound_concealed_samples
+      / nullif(inbound_total_samples_received, 0)
+    ) as average_concealed_sample_rate,
+    avg(
+      1000.0 * inbound_jitter_buffer_delay_seconds
+      / nullif(inbound_jitter_buffer_emitted_count, 0)
+    ) as average_jitter_buffer_ms,
+    percentile_cont(0.95) within group (order by inbound_jitter_seconds_max * 1000.0)
+      filter (where inbound_jitter_seconds_max is not null) as p95_jitter_ms,
+    percentile_cont(0.95) within group (order by outbound_round_trip_time_seconds_max * 1000.0)
+      filter (where outbound_round_trip_time_seconds_max is not null) as p95_round_trip_time_ms,
+    coalesce((
+      select jsonb_agg(
+        jsonb_build_object('path', path, 'count', count)
+        order by count desc, path
+      )
+      from (
+        select
+          concat_ws(' -> ', coalesce(local_candidate_type, 'unknown'), coalesce(remote_candidate_type, 'unknown')) as path,
+          count(*)::int as count
+        from observed path_stats
+        group by local_candidate_type, remote_candidate_type
+      ) path_counts
+    ), '[]'::jsonb) as paths
+  from observed
+`;
+
 const telephonyReliabilitySql = `
   with filtered_calls as (
     select *
@@ -803,6 +879,7 @@ export const __testing = {
   avmdQualitySql,
   mediaOverviewSql,
   mediaLegsSql,
+  browserMediaSql,
   telephonyReliabilitySql,
   nullablePercent
 };

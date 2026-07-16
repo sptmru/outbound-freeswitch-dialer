@@ -6,6 +6,7 @@ import type {
   AdminRecordingListResponse,
   AdminUserListResponse,
   AdminSystemSettings,
+  BrowserMediaTelemetryRequest,
   UpdateAdminSystemSettingsRequest,
   AgentDeskResponse,
   CampaignContactListItem,
@@ -150,6 +151,17 @@ export async function updateAgentAvailability(
 
 export async function fetchSoftphoneProvisioning(): Promise<SoftphoneProvisioningResponse> {
   return apiFetch<SoftphoneProvisioningResponse>("/agent/softphone/provisioning");
+}
+
+export async function submitBrowserMediaTelemetry(
+  callId: string,
+  input: BrowserMediaTelemetryRequest
+): Promise<void> {
+  return apiFetch<void>(`/agent/calls/${encodeURIComponent(callId)}/browser-media`, {
+    method: "PUT",
+    body: JSON.stringify(input),
+    keepalive: true
+  });
 }
 
 export async function fetchAdminOverview(): Promise<AdminOverviewResponse> {

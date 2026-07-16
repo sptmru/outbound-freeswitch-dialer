@@ -6,6 +6,8 @@ export type {
   AdminRecordingListResponse,
   AdminUserListResponse,
   AdminSystemSettings,
+  BrowserMediaTelemetry,
+  BrowserMediaTelemetryRequest,
   AgentDeskResponse,
   CampaignContactsResponse,
   CampaignContactListItem,

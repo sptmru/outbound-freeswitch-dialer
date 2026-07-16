@@ -47,6 +47,7 @@ describe("ESL helpers", () => {
     });
 
     assert.match(command, /bridge_early_media=true/);
+    assert.match(command, /sip_h_X-Outbound-Dialer-Call-ID=22222222-2222-4222-8222-222222222222/);
     assert.match(command, /ignore_early_media=false,media_bug_answer_req=false/);
   });
 

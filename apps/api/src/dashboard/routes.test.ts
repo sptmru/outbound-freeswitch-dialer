@@ -579,6 +579,9 @@ describe("dashboard route helpers", () => {
       if (sql.includes("from call_media_stats")) {
         return rows([]);
       }
+      if (sql.includes("from call_browser_media_stats")) {
+        return rows([]);
+      }
       throw new Error(`Unexpected query: ${sql}`);
     });
 
@@ -592,6 +595,7 @@ describe("dashboard route helpers", () => {
     assert.equal(detail?.timelineTotal, 125);
     assert.equal(detail?.timelineTruncated, true);
     assert.deepEqual(detail?.mediaQuality, []);
+    assert.equal(detail?.browserMedia, null);
     assert.deepEqual(detail?.timeline, [
       {
         at: createdAt.toISOString(),

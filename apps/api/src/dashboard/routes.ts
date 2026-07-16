@@ -67,6 +67,7 @@ import { ensureAgentForUser, getSoftphoneProvisioningForUser, toPublicUser } fro
 import { getCsvImportsPage, getUsersPage } from "./admin-libraries.js";
 import { getAdminAnalytics, parseAnalyticsFilters } from "./analytics.js";
 import { upsertCallAvmdReview } from "./avmd-reviews.js";
+import { browserMediaTelemetrySchema, upsertBrowserMediaTelemetry } from "./browser-media.js";
 import {
   campaignExists,
   deleteCampaign,
@@ -368,6 +369,25 @@ export function registerDashboardRoutes(
       return getSoftphoneProvisioningForUser(pool, config, toPublicUser(user));
     }
   );
+
+  app.put("/agent/calls/:callId/browser-media", async (request, reply): Promise<void> => {
+    const user = await requireUser(request, config, pool);
+    if (!user) {
+      return reply.code(401).send({ message: "Unauthorized" });
+    }
+
+    const params = z.object({ callId: z.string().uuid() }).parse(request.params);
+    const telemetry = browserMediaTelemetrySchema.parse(request.body);
+    const saved = await upsertBrowserMediaTelemetry(pool, {
+      callId: params.callId,
+      userId: user.id,
+      telemetry
+    });
+    if (!saved) {
+      return reply.code(404).send({ message: "Call not found" });
+    }
+    return reply.code(204).send();
+  });
 
   app.get("/admin/overview", async (request, reply): Promise<AdminOverviewResponse | void> => {
     const user = await requireUser(request, config, pool);

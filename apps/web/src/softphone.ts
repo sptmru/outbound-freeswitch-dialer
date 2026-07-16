@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Invitation, Registerer, RegistererState, SessionState, UserAgent } from "sip.js";
-import { fetchSoftphoneProvisioning } from "./api";
+import { fetchSoftphoneProvisioning, submitBrowserMediaTelemetry } from "./api";
+import { BrowserMediaTelemetryCollector, microphoneConstraints } from "./browser-media";
 import type { PublicUser } from "./types";
 
 export type SoftphoneRuntimeState =
@@ -35,7 +36,17 @@ const idleRuntime: SoftphoneRuntime = {
 };
 
 const registrationTimeoutMs = 20_000;
+const mediaTelemetrySampleIntervalMs = 5_000;
+const mediaTelemetryUploadEverySamples = 6;
 const sipDiagnosticsEnabled = import.meta.env.DEV || import.meta.env.VITE_SIP_DIAGNOSTICS === "true";
+const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+type ActiveBrowserMediaTelemetry = {
+  callId: string;
+  collector: BrowserMediaTelemetryCollector;
+  intervalId: number;
+  sampling: boolean;
+};
 
 function toRegistrationFailureRuntime(
   current: SoftphoneRuntime,
@@ -83,6 +94,7 @@ async function stopSoftphoneRegistration(
 export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRuntime {
   const invitationRef = useRef<Invitation | null>(null);
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
+  const browserMediaTelemetryRef = useRef<ActiveBrowserMediaTelemetry | null>(null);
   const [runtime, setRuntime] = useState<SoftphoneRuntime>(idleRuntime);
 
   async function answerIncomingCall() {
@@ -104,7 +116,7 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
     await invitation.accept({
       sessionDescriptionHandlerOptions: {
         constraints: {
-          audio: true,
+          audio: microphoneConstraints,
           video: false
         }
       }
@@ -193,7 +205,10 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
           throw new Error("Browser microphone access is unavailable");
         }
 
-        mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        mediaStream = await navigator.mediaDevices.getUserMedia({
+          audio: microphoneConstraints,
+          video: false
+        });
         microphoneAllowed = true;
         if (cancelled) {
           return;
@@ -237,6 +252,7 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
               invitation.stateChange.addListener((state) => {
                 if (state === SessionState.Established) {
                   attachRemoteAudio(invitation);
+                  startBrowserMediaTelemetry(invitation);
                   setRuntime((current) => ({
                     ...current,
                     callState: "active",
@@ -247,6 +263,7 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
                   }));
                 }
                 if (state === SessionState.Terminated) {
+                  finalizeBrowserMediaTelemetry();
                   invitationRef.current = null;
                   clearRemoteAudio();
                   setRuntime((current) =>
@@ -285,7 +302,7 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
               iceServers: provisioning.iceServers
             },
             constraints: {
-              audio: true,
+              audio: microphoneConstraints,
               video: false
             }
           }
@@ -415,6 +432,7 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
     return () => {
       cancelled = true;
       clearRegistrationTimer();
+      finalizeBrowserMediaTelemetry();
       void invitationRef.current?.bye().catch(() => undefined);
       invitationRef.current = null;
       mediaStream?.getTracks().forEach((track) => track.stop());
@@ -464,6 +482,64 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
     remoteAudioRef.current.remove();
     remoteAudioRef.current = null;
   }
+
+  function startBrowserMediaTelemetry(invitation: Invitation) {
+    finalizeBrowserMediaTelemetry();
+    const callId = invitation.request.getHeader("X-Outbound-Dialer-Call-ID");
+    const peerConnection = getPeerConnection(invitation);
+    if (!callId || !uuidPattern.test(callId) || !peerConnection) {
+      return;
+    }
+
+    const active: ActiveBrowserMediaTelemetry = {
+      callId,
+      collector: new BrowserMediaTelemetryCollector(peerConnection),
+      intervalId: 0,
+      sampling: false
+    };
+    const sample = async () => {
+      if (active.sampling || browserMediaTelemetryRef.current !== active) return;
+      active.sampling = true;
+      try {
+        await active.collector.sample();
+        const snapshot = active.collector.snapshot();
+        if (snapshot && snapshot.sampleCount % mediaTelemetryUploadEverySamples === 0) {
+          void submitBrowserMediaTelemetry(active.callId, snapshot).catch(() => undefined);
+        }
+      } finally {
+        active.sampling = false;
+      }
+    };
+    active.intervalId = window.setInterval(() => void sample(), mediaTelemetrySampleIntervalMs);
+    browserMediaTelemetryRef.current = active;
+    void sample();
+  }
+
+  function finalizeBrowserMediaTelemetry() {
+    const active = browserMediaTelemetryRef.current;
+    if (!active) return;
+    browserMediaTelemetryRef.current = null;
+    window.clearInterval(active.intervalId);
+    void active.collector
+      .sample()
+      .catch(() => undefined)
+      .then(() => {
+        const snapshot = active.collector.snapshot();
+        if (snapshot) {
+          return submitBrowserMediaTelemetry(active.callId, snapshot).catch(() => undefined);
+        }
+        return undefined;
+      });
+  }
+}
+
+function getPeerConnection(invitation: Invitation): RTCPeerConnection | null {
+  const handler = invitation.sessionDescriptionHandler as
+    | {
+        peerConnection?: RTCPeerConnection;
+      }
+    | undefined;
+  return handler?.peerConnection ?? null;
 }
 
 export const __testing = {

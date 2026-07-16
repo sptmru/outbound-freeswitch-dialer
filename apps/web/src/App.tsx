@@ -104,6 +104,7 @@ import type {
   CsvImportHistoryResponse,
   CsvImportSummary,
   CallDetailResponse,
+  BrowserMediaTelemetry,
   CallMediaQuality,
   CallHistoryResponse,
   FreeSwitchDiagnosticsResponse,
@@ -2327,12 +2328,49 @@ function AnalyticsMediaQuality({ data }: { data: AdminAnalyticsResponse["mediaQu
           )}
         </div>
       </div>
+      <div className="media-leg-breakdown">
+        <div className="media-leg-summary">
+          <div>
+            <strong>Browser playout</strong>
+            <span>
+              {data.browser.observedCalls.toLocaleString()} observed ·{" "}
+              {formatPercent(data.browser.coverageRate)}
+            </span>
+          </div>
+          <small>
+            Loss {formatNullablePercent(data.browser.averageInboundLossRate)} · concealed samples{" "}
+            {formatNullablePercent(data.browser.averageConcealedSampleRate)} · jitter buffer{" "}
+            {data.browser.averageJitterBufferMs === null
+              ? "—"
+              : `${data.browser.averageJitterBufferMs.toLocaleString(undefined, { maximumFractionDigits: 1 })} ms`}
+          </small>
+          <small>
+            p95 jitter {formatBrowserMilliseconds(data.browser.p95JitterMs)} · p95 RTT{" "}
+            {formatBrowserMilliseconds(data.browser.p95RoundTripTimeMs)}
+          </small>
+          <div className="codec-breakdown">
+            {data.browser.paths.length ? (
+              data.browser.paths.map((path) => (
+                <span key={path.path}>
+                  {path.path} <b>{path.count}</b>
+                </span>
+              ))
+            ) : (
+              <span>Browser path not observed</span>
+            )}
+          </div>
+        </div>
+      </div>
       <p className="analytics-note">
         Suspected one-way means captured RTP counters showed media in only one direction. It is a diagnostic
         flag, not confirmation of what either party heard.
       </p>
     </section>
   );
+}
+
+function formatBrowserMilliseconds(value: number | null): string {
+  return value === null ? "—" : `${value.toLocaleString(undefined, { maximumFractionDigits: 1 })} ms`;
 }
 
 function AnalyticsTelephonyReliability({ data }: { data: AdminAnalyticsResponse["telephonyReliability"] }) {
@@ -4794,6 +4832,106 @@ function MediaQualityCard({ item }: { item: CallMediaQuality }) {
   );
 }
 
+function browserRate(numerator: number | null, denominator: number | null): number | null {
+  if (numerator === null || denominator === null || denominator <= 0) return null;
+  return (numerator / denominator) * 100;
+}
+
+function BrowserMediaQualityCard({ item }: { item: BrowserMediaTelemetry }) {
+  const lossRate = browserRate(
+    item.inbound.packetsLost,
+    item.inbound.packetsReceived === null || item.inbound.packetsLost === null
+      ? null
+      : item.inbound.packetsReceived + item.inbound.packetsLost
+  );
+  const concealedRate = browserRate(item.inbound.concealedSamples, item.inbound.totalSamplesReceived);
+  const jitterBufferMs =
+    item.inbound.jitterBufferDelaySeconds !== null &&
+    item.inbound.jitterBufferEmittedCount !== null &&
+    item.inbound.jitterBufferEmittedCount > 0
+      ? (item.inbound.jitterBufferDelaySeconds / item.inbound.jitterBufferEmittedCount) * 1000
+      : null;
+  return (
+    <div className="call-media-quality-card">
+      <div>
+        <strong>Browser WebRTC</strong>
+        <StatusBadge label={`${item.sampleCount} samples`} tone="neutral" />
+      </div>
+      <dl>
+        <div>
+          <dt>Inbound / outbound codec</dt>
+          <dd>
+            {item.inbound.codec ?? "—"} / {item.outbound.codec ?? "—"}
+          </dd>
+        </div>
+        <div>
+          <dt>Packet loss</dt>
+          <dd>{formatNullablePercent(lossRate)}</dd>
+        </div>
+        <div>
+          <dt>Concealed samples</dt>
+          <dd>{formatNullablePercent(concealedRate)}</dd>
+        </div>
+        <div>
+          <dt>Maximum jitter</dt>
+          <dd>
+            {formatBrowserMilliseconds(
+              item.inbound.jitterSecondsMax === null ? null : item.inbound.jitterSecondsMax * 1000
+            )}
+          </dd>
+        </div>
+        <div>
+          <dt>Average jitter buffer</dt>
+          <dd>{formatBrowserMilliseconds(jitterBufferMs)}</dd>
+        </div>
+        <div>
+          <dt>Maximum RTT</dt>
+          <dd>
+            {formatBrowserMilliseconds(
+              item.outbound.roundTripTimeSecondsMax === null
+                ? null
+                : item.outbound.roundTripTimeSecondsMax * 1000
+            )}
+          </dd>
+        </div>
+        <div>
+          <dt>ICE path</dt>
+          <dd>
+            {item.connection.localCandidateType ?? "—"} → {item.connection.remoteCandidateType ?? "—"}
+          </dd>
+        </div>
+        <div>
+          <dt>Microphone DSP</dt>
+          <dd>
+            AEC{" "}
+            {item.microphone.echoCancellation === null
+              ? "—"
+              : item.microphone.echoCancellation
+                ? "on"
+                : "off"}{" "}
+            · NS{" "}
+            {item.microphone.noiseSuppression === null
+              ? "—"
+              : item.microphone.noiseSuppression
+                ? "on"
+                : "off"}{" "}
+            · AGC{" "}
+            {item.microphone.autoGainControl === null ? "—" : item.microphone.autoGainControl ? "on" : "off"}
+          </dd>
+        </div>
+        <div>
+          <dt>Capture format</dt>
+          <dd>
+            {item.microphone.sampleRate?.toLocaleString() ?? "—"} Hz · {item.microphone.channelCount ?? "—"}{" "}
+            ch
+          </dd>
+        </div>
+      </dl>
+      <small>Captured {formatDateTime(item.capturedAt)}</small>
+    </div>
+  );
+}
+
 function CallTechnicalEvidence({ detail }: { detail: CallDetailResponse }) {
   const terminalMeasured = detail.call.finalizationLatencyMs !== null;
   return (
@@ -4831,7 +4969,7 @@ function CallTechnicalEvidence({ detail }: { detail: CallDetailResponse }) {
       </section>
       <section>
         <h4>Media observations</h4>
-        <p>FreeSWITCH RTP counters captured at hangup. They do not prove what either party heard.</p>
+        <p>FreeSWITCH counters and browser playout evidence are shown separately.</p>
         {detail.mediaQuality.length ? (
           <div className="call-media-quality-grid">
             {detail.mediaQuality.map((item) => (
@@ -4840,6 +4978,13 @@ function CallTechnicalEvidence({ detail }: { detail: CallDetailResponse }) {
           </div>
         ) : (
           <div className="quality-unavailable">No FreeSWITCH media telemetry was captured.</div>
+        )}
+        {detail.browserMedia ? (
+          <div className="call-media-quality-grid">
+            <BrowserMediaQualityCard item={detail.browserMedia} />
+          </div>
+        ) : (
+          <div className="quality-unavailable">No browser WebRTC telemetry was captured.</div>
         )}
       </section>
     </div>

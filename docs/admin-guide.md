@@ -43,7 +43,7 @@
 - Filter call history by search text, campaign, agent, outcome, date, voicemail drop/signal, and recording availability.
 - Open call detail for leg UUIDs, state events, commands, hangup causes, AVMD/voicemail lifecycle, and media availability. Technical history shows the latest 100 events and explicitly reports when older events were omitted.
 - For an answered call with a playable recording, use **AVMD review** to label what actually answered as Human, Voicemail / machine, or Uncertain. Listen before labeling; the detector result alone is not ground truth. Analytics always shows reviewed-sample coverage next to precision/recall.
-- Technical media cards report FreeSWITCH RTP counters captured at hangup separately for the agent and customer legs. A suspected one-way flag is diagnostic evidence, not confirmation of what either party heard.
+- Technical media cards report FreeSWITCH RTP counters captured at hangup separately for the agent and customer legs. Browser WebRTC evidence is shown separately and includes packet loss, concealed samples, maximum jitter/RTT, average playout jitter-buffer delay, ICE candidate path, codecs, and applied microphone DSP. A suspected one-way flag is diagnostic evidence, not confirmation of what either party heard.
 - CSV export uses the active filters and is rejected above `CALL_HISTORY_EXPORT_MAX_ROWS` (50,000 by default).
 - Successful mutating admin requests are recorded in the administrative audit log. Use actor/method/date filters when investigating; request bodies/secrets are intentionally not stored.
 

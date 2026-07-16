@@ -169,6 +169,20 @@ describe("admin analytics", () => {
             }
           ]);
         }
+        if (sql === __testing.browserMediaSql) {
+          return rows([
+            {
+              answered_calls: "6",
+              observed_calls: "3",
+              average_inbound_loss_rate: "0.24",
+              average_concealed_sample_rate: "0.11",
+              average_jitter_buffer_ms: "22.4",
+              p95_jitter_ms: "31.8",
+              p95_round_trip_time_ms: "104.6",
+              paths: [{ path: "host -> host", count: 3 }]
+            }
+          ]);
+        }
         if (sql === __testing.telephonyReliabilitySql) {
           return rows([
             {
@@ -200,7 +214,7 @@ describe("admin analytics", () => {
       snapshotAt
     );
 
-    assert.equal(queries.length, 9);
+    assert.equal(queries.length, 10);
     assert.deepEqual(
       queries.map((query) => query.params),
       [
@@ -209,6 +223,7 @@ describe("admin analytics", () => {
         [from, to, campaignId, 3, 60, snapshotAt],
         [from, to, campaignId],
         [from, to, campaignId, 3, 60, snapshotAt],
+        [from, to, campaignId],
         [from, to, campaignId],
         [from, to, campaignId],
         [from, to, campaignId],
@@ -272,6 +287,9 @@ describe("admin analytics", () => {
     assert.equal(result.mediaQuality.averageMos, 4.1);
     assert.equal(result.mediaQuality.providers[0]?.provider, "sip-trunk");
     assert.equal(result.mediaQuality.legs[0]?.codecs[0]?.codec, "PCMU");
+    assert.equal(result.mediaQuality.browser.coverageRate, 50);
+    assert.equal(result.mediaQuality.browser.averageJitterBufferMs, 22.4);
+    assert.equal(result.mediaQuality.browser.paths[0]?.path, "host -> host");
     assert.match(__testing.mediaOverviewSql, /duration_seconds >= 10/);
     assert.match(
       __testing.mediaOverviewSql,

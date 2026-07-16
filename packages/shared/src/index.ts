@@ -205,6 +205,50 @@ export interface SoftphoneProvisioningResponse {
   }>;
 }
 
+export interface BrowserMediaTelemetryRequest {
+  schemaVersion: 1;
+  startedAt: string;
+  endedAt: string;
+  sampleCount: number;
+  microphone: {
+    sampleRate: number | null;
+    sampleSize: number | null;
+    channelCount: number | null;
+    echoCancellation: boolean | null;
+    noiseSuppression: boolean | null;
+    autoGainControl: boolean | null;
+    latencySeconds: number | null;
+  };
+  inbound: {
+    codec: string | null;
+    packetsReceived: number | null;
+    packetsLost: number | null;
+    packetsDiscarded: number | null;
+    jitterSecondsMax: number | null;
+    jitterBufferDelaySeconds: number | null;
+    jitterBufferEmittedCount: number | null;
+    concealedSamples: number | null;
+    totalSamplesReceived: number | null;
+    concealmentEvents: number | null;
+    audioEnergy: number | null;
+    audioDurationSeconds: number | null;
+  };
+  outbound: {
+    codec: string | null;
+    packetsSent: number | null;
+    bytesSent: number | null;
+    remotePacketsLost: number | null;
+    remoteJitterSecondsMax: number | null;
+    roundTripTimeSecondsMax: number | null;
+  };
+  connection: {
+    localCandidateType: string | null;
+    remoteCandidateType: string | null;
+    protocol: string | null;
+    relayProtocol: string | null;
+  };
+}
+
 export interface AdminOverviewResponse {
   user: PublicUser;
   stats: {
@@ -356,6 +400,16 @@ export interface AdminAnalyticsResponse {
     p95JitterLossRate: number | null;
     averageQualityPercentage: number | null;
     providers: Array<{ provider: string; count: number }>;
+    browser: {
+      observedCalls: number;
+      coverageRate: number;
+      averageInboundLossRate: number | null;
+      averageConcealedSampleRate: number | null;
+      averageJitterBufferMs: number | null;
+      p95JitterMs: number | null;
+      p95RoundTripTimeMs: number | null;
+      paths: Array<{ path: string; count: number }>;
+    };
     legs: Array<{
       legType: "agent" | "customer";
       observedCalls: number;
@@ -454,6 +508,7 @@ export interface CallDetailResponse {
   };
   avmdReview: CallAvmdReview | null;
   mediaQuality: Array<CallMediaQuality>;
+  browserMedia: BrowserMediaTelemetry | null;
   legs: Array<{
     type: "agent" | "customer";
     state: string;
@@ -478,6 +533,10 @@ export interface CallDetailResponse {
   }>;
   timelineTotal: number;
   timelineTruncated: boolean;
+}
+
+export interface BrowserMediaTelemetry extends BrowserMediaTelemetryRequest {
+  capturedAt: string;
 }
 
 export type AvmdActualParty = "human" | "machine" | "uncertain";

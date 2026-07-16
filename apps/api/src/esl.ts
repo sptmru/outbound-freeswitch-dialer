@@ -81,6 +81,7 @@ function buildAgentBridgeOriginateCommand(config: AppConfig, input: OriginateAge
     `origination_uuid=${input.agentLegUuid}`,
     `outbound_dialer_call_id=${input.callId}`,
     "outbound_dialer_leg_type=agent",
+    `sip_h_X-Outbound-Dialer-Call-ID=${input.callId}`,
     "originate_timeout=30",
     "bridge_early_media=true",
     "instant_ringback=true",

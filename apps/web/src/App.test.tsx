@@ -293,6 +293,8 @@ describe("App Agent Desk empty states", () => {
     expect(screen.getByRole("heading", { name: "Quality evidence" })).toBeInTheDocument();
     expect(screen.getByText("AVMD review evidence")).toBeInTheDocument();
     expect(screen.getByText("Provider observations")).toBeInTheDocument();
+    expect(screen.getByText("Browser playout")).toBeInTheDocument();
+    expect(screen.getByText("host -> host")).toBeInTheDocument();
     expect(screen.getByText("Registration count drift")).toBeInTheDocument();
     expect(screen.getByText("Online")).toBeInTheDocument();
     expect(screen.getByText("Offline")).toBeInTheDocument();
@@ -372,6 +374,16 @@ describe("App Agent Desk empty states", () => {
           p95JitterLossRate: null,
           averageQualityPercentage: null,
           providers: [],
+          browser: {
+            observedCalls: 0,
+            coverageRate: 0,
+            averageInboundLossRate: null,
+            averageConcealedSampleRate: null,
+            averageJitterBufferMs: null,
+            p95JitterMs: null,
+            p95RoundTripTimeMs: null,
+            paths: []
+          },
           legs: []
         },
         telephonyReliability: {
@@ -1311,6 +1323,16 @@ function adminAnalyticsResponse(overrides: Partial<AdminAnalyticsResponse> = {})
       p95JitterLossRate: 0.04,
       averageQualityPercentage: 91.5,
       providers: [{ provider: "primary-trunk", count: 30 }],
+      browser: {
+        observedCalls: 26,
+        coverageRate: 59.1,
+        averageInboundLossRate: 0.2,
+        averageConcealedSampleRate: 0.1,
+        averageJitterBufferMs: 24,
+        p95JitterMs: 38,
+        p95RoundTripTimeMs: 112,
+        paths: [{ path: "host -> host", count: 26 }]
+      },
       legs: [
         {
           legType: "agent",
@@ -1406,6 +1428,7 @@ function callDetailResponse(call: AdminOverviewResponse["callHistory"][number]):
     },
     avmdReview: null,
     mediaQuality: [],
+    browserMedia: null,
     legs: [],
     timeline: [],
     timelineTotal: 0,
