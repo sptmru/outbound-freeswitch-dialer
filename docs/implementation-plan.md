@@ -70,7 +70,7 @@ Firewall and host-published-port changes were excluded by instruction. They are 
 - Agent Desk with campaign selection, next lead, manual number validation, click-to-call, DTMF, hangup, call timer/state, action eligibility, and automatic outcomes.
 - Manual voicemail selection/drop with background job tray and failure/interruption visibility.
 - VM/beep/AVMD signals shown as advisory evidence, never as an automatic drop trigger.
-- Admin access to Agent Desk without starting SIP/microphone outside the desk view.
+- Admin access to Agent Desk without starting SIP/microphone outside the desk view, with active-call navigation/history/deep links forced back to the desk so the browser phone remains registered.
 - Credentialed SSE refresh hints from PostgreSQL changes, EventSource reconnect, heartbeat, debounced refresh, and periodic HTTP fallback.
 - Minimal `name` + `phone` CSV workflow and product-facing copy that hides telephony plumbing.
 
@@ -79,10 +79,10 @@ Firewall and host-published-port changes were excluded by instruction. They are 
 - Dedicated period- and campaign-filtered admin Analytics view with summary KPIs, daily movement, call funnel, campaign/agent performance, data-quality snapshot, and voicemail lifecycle reporting.
 - Explicit metric definitions separate technical answers from connected contacts and separate period-filtered facts from current queue snapshots.
 - Campaign create/edit/status/archive plus manual-dial, recording, and early-media AVMD flags.
-- Campaign contacts, import history/detail, row feedback, search, filters, and manual contact actions.
+- Paginated campaign contacts and CSV import failures, selected-campaign continuity from Agent Desk, row feedback, search, filters, and manual contact actions.
 - User create/edit/deactivate/reactivate/role/password lifecycle with preserved attribution and FreeSWITCH cleanup.
 - Suppression add/update/search/pagination/import/removal and durable change/blocked-dial events.
-- Paginated/filterable call history, detailed event timeline, bounded CSV export, and media playback.
+- Paginated/filterable call history, detailed event timeline with explicit latest-100 truncation status, bounded CSV export, and media playback.
 - Stable per-section application URLs with browser back/forward support plus URL- and browser-persisted Agent Desk campaign selection.
 - Successful mutating admin requests recorded with actor/request/route/status/source metadata and bounded route parameters; paginated audit endpoint with actor/method/date filters.
 - Database-backed admin runtime policies with `.env` fallback for dialing, phone normalization, exports, retention, PCAP, caller ID, and safe Alertmanager channel/repeat controls.
@@ -131,7 +131,7 @@ Firewall and host-published-port changes were excluded by instruction. They are 
 
 These additions should follow acceptance of the current behavior, not block it unless the client explicitly promotes them:
 
-- Outcome-specific scheduled callbacks, reason-coded pauses, and supervisor requeue controls beyond the implemented ready/pause/wrap-up flow.
+- Outcome-specific scheduled callbacks, configurable post-call wrap-up, reason-coded pauses, and supervisor requeue controls beyond the implemented ready/pause flow.
 - Representative AVMD review cohorts and runtime calibration of media-quality thresholds remain operational follow-ups. The product now persists reviewer ground truth, per-leg FreeSWITCH RTP quality/codec/provider evidence, reconciliation snapshots, and terminal finalization latency; these sources still require adequate sample coverage before policy decisions.
 - Object storage for recordings with lifecycle, immutable/legal-hold support, checksum verification, and managed key rotation.
 - Generated OpenAPI/runtime schemas so API and web share validation, not TypeScript types alone.

@@ -228,12 +228,19 @@ export function App() {
   useEffect(() => {
     const restoreNavigation = () => {
       const navigation = readNavigationState();
+      if (user && desk?.activeCall && navigation.view !== "desk") {
+        const campaignId = selectedCampaignId ?? desk.campaign?.id ?? navigation.campaignId;
+        setView("desk");
+        setSelectedCampaignId(campaignId);
+        writeNavigationState("desk", campaignId, true);
+        return;
+      }
       setView(navigation.view);
       setSelectedCampaignId(navigation.campaignId);
     };
     window.addEventListener("popstate", restoreNavigation);
     return () => window.removeEventListener("popstate", restoreNavigation);
-  }, []);
+  }, [desk?.activeCall?.id, desk?.campaign?.id, selectedCampaignId, user?.role]);
 
   function resetSession(nextError: string | null = null) {
     setUser(null);
@@ -256,8 +263,10 @@ export function App() {
       setUser(nextUser);
       setDesk(nextDesk);
       const nextCampaignId = nextDesk.campaign?.id ?? null;
+      const nextView: View = nextUser.role === "agent" || nextDesk.activeCall ? "desk" : view;
       setSelectedCampaignId(nextCampaignId);
-      writeNavigationState(nextUser.role === "agent" ? "desk" : view, nextCampaignId, true);
+      setView(nextView);
+      writeNavigationState(nextView, nextCampaignId, true);
       if (nextUser.role === "admin") {
         const [nextAdmin, nextImports] = await Promise.all([fetchAdminOverview(), fetchCsvImports()]);
         setAdmin(nextAdmin);
@@ -297,6 +306,11 @@ export function App() {
   }
 
   function navigateToView(nextView: View) {
+    if (desk?.activeCall && nextView !== "desk") {
+      setView("desk");
+      writeNavigationState("desk", selectedCampaignId, true);
+      return;
+    }
     setView(nextView);
     writeNavigationState(nextView, selectedCampaignId);
   }
@@ -2482,7 +2496,12 @@ function Campaigns({
         ))}
         {!library.items.length && <p className="empty-state">No campaigns match this search.</p>}
       </div>
-      <CampaignContacts campaigns={admin.campaigns} onChanged={onChanged} onManualDial={onManualDial} />
+      <CampaignContacts
+        campaigns={admin.campaigns}
+        onChanged={onChanged}
+        onManualDial={onManualDial}
+        selectedCampaignId={selectedCampaignId}
+      />
     </>
   );
 }
@@ -2675,15 +2694,18 @@ function CampaignCard({
 function CampaignContacts({
   campaigns,
   onChanged,
-  onManualDial
+  onManualDial,
+  selectedCampaignId
 }: {
   campaigns: AdminOverviewResponse["campaigns"];
   onChanged: () => Promise<void>;
   onManualDial: (phoneNumber: string) => void;
+  selectedCampaignId: string | null;
 }) {
-  const [campaignId, setCampaignId] = useState(campaigns[0]?.id ?? "");
+  const [campaignId, setCampaignId] = useState(getValidCampaignId(selectedCampaignId ?? "", campaigns));
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState<"all" | "ready" | "suppressed" | "completed">("all");
+  const [page, setPage] = useState(1);
   const [contacts, setContacts] = useState<CampaignContactsResponse | null>(null);
   const [pending, setPending] = useState(false);
   const [actionId, setActionId] = useState<string | null>(null);
@@ -2695,6 +2717,7 @@ function CampaignContacts({
     const nextCampaignId = getValidCampaignId(campaignId, campaigns);
     if (nextCampaignId !== campaignId) {
       setCampaignId(nextCampaignId);
+      setPage(1);
     }
   }, [campaignId, campaigns]);
 
@@ -2710,9 +2733,13 @@ function CampaignContacts({
     const timeout = window.setTimeout(() => {
       setPending(true);
       setError(null);
-      fetchCampaignContacts(campaignId, { q: query, status })
+      fetchCampaignContacts(campaignId, { q: query, status, page, pageSize: 50 })
         .then((nextContacts) => {
           if (requestId === contactsRequestRef.current) {
+            if (page > Math.max(nextContacts.totalPages, 1)) {
+              setPage(Math.max(nextContacts.totalPages, 1));
+              return;
+            }
             setContacts(nextContacts);
           }
         })
@@ -2732,7 +2759,7 @@ function CampaignContacts({
       contactsRequestRef.current += 1;
       window.clearTimeout(timeout);
     };
-  }, [campaignId, query, reloadKey, status]);
+  }, [campaignId, page, query, reloadKey, status]);
 
   async function runContactAction(
     contact: CampaignContactListItem,
@@ -2763,7 +2790,10 @@ function CampaignContacts({
           Campaign
           <select
             disabled={!campaigns.length}
-            onChange={(event) => setCampaignId(event.target.value)}
+            onChange={(event) => {
+              setCampaignId(event.target.value);
+              setPage(1);
+            }}
             value={campaignId}
           >
             {campaigns.map((campaign) => (
@@ -2776,14 +2806,23 @@ function CampaignContacts({
         <label>
           Search
           <input
-            onChange={(event) => setQuery(event.target.value)}
+            onChange={(event) => {
+              setQuery(event.target.value);
+              setPage(1);
+            }}
             placeholder="Name, phone, company"
             value={query}
           />
         </label>
         <label>
           Status
-          <select onChange={(event) => setStatus(event.target.value as typeof status)} value={status}>
+          <select
+            onChange={(event) => {
+              setStatus(event.target.value as typeof status);
+              setPage(1);
+            }}
+            value={status}
+          >
             <option value="all">all</option>
             <option value="ready">ready</option>
             <option value="suppressed">suppressed</option>
@@ -2835,6 +2874,12 @@ function CampaignContacts({
           </div>
         ))}
       </div>
+      <AdminLibraryPagination
+        onPageChange={setPage}
+        page={contacts?.page ?? page}
+        pending={pending}
+        totalPages={contacts?.totalPages ?? 0}
+      />
     </article>
   );
 }
@@ -2949,6 +2994,7 @@ function CsvImportForm({
 
 function CsvImportHistory({ imports }: { imports: CsvImportSummary[] }) {
   const [selected, setSelected] = useState<CsvImportDetailResponse | null>(null);
+  const [selectedImportId, setSelectedImportId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
@@ -2983,11 +3029,12 @@ function CsvImportHistory({ imports }: { imports: CsvImportSummary[] }) {
     };
   }, [imports, page, query]);
 
-  async function selectImport(importId: string) {
+  async function selectImport(importId: string, failurePage = 1) {
+    setSelectedImportId(importId);
     setPendingId(importId);
     setError(null);
     try {
-      setSelected(await fetchCsvImportDetail(importId));
+      setSelected(await fetchCsvImportDetail(importId, { failurePage, failurePageSize: 50 }));
     } catch (detailError) {
       setError(detailError instanceof Error ? detailError.message : "Could not load import detail");
     } finally {
@@ -3057,6 +3104,14 @@ function CsvImportHistory({ imports }: { imports: CsvImportSummary[] }) {
               </div>
             ))}
           </div>
+          <AdminLibraryPagination
+            onPageChange={(nextPage) => {
+              if (selectedImportId) void selectImport(selectedImportId, nextPage);
+            }}
+            page={selected.failurePage}
+            pending={pendingId === selectedImportId}
+            totalPages={selected.failureTotalPages}
+          />
         </div>
       )}
     </article>
@@ -4428,6 +4483,12 @@ function HistoryView({ admin }: { admin: AdminOverviewResponse }) {
                             ))}
                           </div>
                           <div className="history-timeline">
+                            {detail.timelineTruncated && (
+                              <p className="analytics-note">
+                                Showing the latest {detail.timeline.length} of {detail.timelineTotal} recorded
+                                events.
+                              </p>
+                            )}
                             {detail.timeline.map((item, index) => (
                               <div className="timeline-item" key={`${item.at}-${item.eventType}-${index}`}>
                                 <span>{formatDateTime(item.at)}</span>

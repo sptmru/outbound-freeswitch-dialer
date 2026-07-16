@@ -4,7 +4,7 @@ Figma file: https://www.figma.com/design/o8J7yyhE8vY9HWLETUZ5O9
 
 ## Purpose
 
-This first board is meant for client review before backend implementation starts. It shows the product workflow and admin surfaces implied by the confirmed requirements, not final visual polish.
+This is the historical first client-review board. It shows the original product workflow and admin surfaces; the implemented application and current requirements are now the source of truth where they differ from the board.
 
 ## Screens Included
 
@@ -22,7 +22,7 @@ This first board is meant for client review before backend implementation starts
 ## Product Story Shown
 
 1. Admin imports a CSV.
-2. Admin maps CSV fields to lead fields.
+2. Admin validates the required `name` and `phone` columns and reviews row errors.
 3. Agent calls a lead from a campaign queue.
 4. UI surfaces VM/beep detection as a signal.
 5. Agent manually starts Drop Voicemail.
@@ -39,13 +39,12 @@ This first board is meant for client review before backend implementation starts
 - VM/beep detection shown as an informational signal, not automation.
 - Suppression and support artifacts visible as first-class operational concerns.
 
-## Known Follow-Ups
+## Current Follow-Ups And Resolved Scope
 
-- Review with client and collect feedback.
-- Decide whether call recording controls are global or campaign-level.
-- Decide exact VM/beep confidence labels.
-- Add final branding if client provides any.
-- Refine visual details before frontend implementation.
+- Review the implemented UI with the client, collect feedback, and add final branding if provided.
+- CSV import is a direct `name` + `phone` workflow; interactive field mapping remains deferred.
+- Call recording and manual dialing controls are campaign-level.
+- VM/beep evidence remains advisory; runtime validation should determine whether the visible labels need further calibration.
 
 ## Applied Revisions
 

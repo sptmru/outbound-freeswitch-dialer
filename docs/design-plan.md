@@ -49,7 +49,7 @@ Figma will be used as the source for visual design before implementation of prod
    - Call history.
    - Per-call event timeline.
    - Suppression list.
-   - System settings for manual dialing and call recording.
+   - Campaign controls and bounded runtime product policies.
 6. Review designs against implementation constraints:
    - The frontend cannot directly originate PSTN calls.
    - UI actions must map to backend-authorized state transitions.
@@ -108,15 +108,15 @@ The UI should expose these states as operational signals, not as developer jargo
 
 - Create/edit/pause/archive campaigns.
 - See campaign call counts and outcomes.
-- Configure whether manual dialing is allowed if the setting is campaign-scoped.
-- Configure whether call recording is enabled if the setting is campaign-scoped.
+- Configure whether manual dialing is allowed for the campaign.
+- Configure whether call recording is enabled for the campaign.
 
 ### CSV Imports
 
 - Upload CSV files.
 - Import the current `name` and `phone` contract directly.
 - Validate phone numbers.
-- Review import errors.
+- Review all import errors through paginated failure details.
 - Defer preview, interactive field mapping, and reusable mappings until client CSV samples require them.
 
 ### Recordings
@@ -143,6 +143,7 @@ The UI should expose these states as operational signals, not as developer jargo
 
 - Filter by campaign, agent, date, outcome, voicemail drop, VM/beep detected, and suppressed calls.
 - Open per-call timeline.
+- Show when the technical timeline contains only the latest 100 events and how many events exist in total.
 - Inspect failure reason and leg-level hangup causes.
 - Inspect call recording metadata when enabled.
 
@@ -155,9 +156,8 @@ The UI should expose these states as operational signals, not as developer jargo
 
 ### System Settings
 
-- Enable/disable manual dialing.
-- Enable/disable call recording if global.
-- Show trunk status and deployment/runtime health without exposing secrets.
+- Configure bounded, non-secret runtime policies for phone normalization, contact retry, export limits, retention, per-call PCAP capture, global caller ID, and alert routing/repeat behavior.
+- Show deployment/runtime health without exposing provider credentials, alert credentials, or routing secrets.
 
 ## UX Rules
 
@@ -176,7 +176,7 @@ The UI should expose these states as operational signals, not as developer jargo
 - Figma file URL: https://www.figma.com/design/o8J7yyhE8vY9HWLETUZ5O9
 - Agent dashboard frame.
 - Admin frames.
-- Campaign and CSV mapping frames.
+- Campaign and CSV import frames.
 - Component set for buttons, inputs, badges, status indicators, and call controls.
 - State matrix matching backend call states.
 - Implementation notes for frontend components.
@@ -214,4 +214,4 @@ Applied revisions before client review:
 - UI state maps directly to backend call-state transitions.
 - Admin can manage recordings without filesystem access.
 - Admin can import CSV leads containing `name` and `phone` without developer help.
-- Admin can manage campaigns, suppression entries, users, and call-recording/manual-dialing settings.
+- Admin can manage campaigns, suppression entries, users, campaign call-recording/manual-dialing controls, and bounded runtime policies.

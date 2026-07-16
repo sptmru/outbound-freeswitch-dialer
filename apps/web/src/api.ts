@@ -311,13 +311,22 @@ export async function fetchCsvImports(filters: AdminLibraryFilters = {}): Promis
   return apiFetch<CsvImportHistoryResponse>(`/admin/csv-imports${query ? `?${query}` : ""}`);
 }
 
-export async function fetchCsvImportDetail(importId: string): Promise<CsvImportDetailResponse> {
-  return apiFetch<CsvImportDetailResponse>(`/admin/csv-imports/${importId}`);
+export async function fetchCsvImportDetail(
+  importId: string,
+  filters: { failurePage?: number; failurePageSize?: number } = {}
+): Promise<CsvImportDetailResponse> {
+  const query = toQuery(filters);
+  return apiFetch<CsvImportDetailResponse>(`/admin/csv-imports/${importId}${query ? `?${query}` : ""}`);
 }
 
 export async function fetchCampaignContacts(
   campaignId: string,
-  filters: { q?: string; status?: "all" | "ready" | "suppressed" | "completed" } = {}
+  filters: {
+    q?: string;
+    status?: "all" | "ready" | "suppressed" | "completed";
+    page?: number;
+    pageSize?: number;
+  } = {}
 ): Promise<CampaignContactsResponse> {
   const params = new URLSearchParams();
   if (filters.q) {
@@ -325,6 +334,12 @@ export async function fetchCampaignContacts(
   }
   if (filters.status && filters.status !== "all") {
     params.set("status", filters.status);
+  }
+  if (filters.page) {
+    params.set("page", String(filters.page));
+  }
+  if (filters.pageSize) {
+    params.set("pageSize", String(filters.pageSize));
   }
   const query = params.toString();
   return apiFetch<CampaignContactsResponse>(

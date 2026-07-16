@@ -9,9 +9,9 @@ The repository now contains the planned operational MVP: agent calling, manual v
 - Agent Desk with SIP.js registration over WSS, campaign leads, manual dialing, DTMF, backend-owned call controls, automatic outcomes, and background voicemail jobs.
 - Event-driven voicemail lifecycle: `voicemail_drop_requested`, `voicemail_playback_started`, `agent_released`, and terminal completed/failed/interrupted events. Active calls are reconciled against FreeSWITCH after ESL reconnect.
 - Retry-safe contact selection with row locking, three attempts and a 15-minute retry delay by default (`CONTACT_MAX_ATTEMPTS=3`, `CONTACT_RETRY_DELAY_SECONDS=900`).
-- Campaign create/edit/pause/archive, narrow `name` + `phone` CSV import, contact search/status, and suppression checks before originate.
+- Campaign create/edit/pause/archive, narrow `name` + `phone` CSV import with paginated failure review, paginated contact search/status, and suppression checks before originate.
 - Admin user lifecycle with edit, deactivate/reactivate, password reset, session revocation, preserved historical attribution, and administrative mutation audit.
-- Paginated/filterable call history, detail timelines, bounded CSV export, call-recording playback, suppression search/import/removal, and suppression event history.
+- Paginated/filterable call history, detail timelines with explicit truncation status, bounded CSV export, call-recording playback, suppression search/import/removal, and suppression event history.
 - Dedicated admin Analytics with date/campaign filters, business KPIs, AVMD review evidence, per-leg RTP quality coverage, codec/provider breakdowns, and telephony reconciliation/finalization reporting.
 - WAV/MP3 voicemail uploads transcoded by ffmpeg to mono 8 kHz signed 16-bit PCM WAV with loudness normalization and a five-minute limit.
 - HttpOnly `SameSite=Strict` browser session cookie, Origin-based CSRF protection for cookie-authenticated mutations, login rate limiting, and Bearer compatibility for non-browser API clients.

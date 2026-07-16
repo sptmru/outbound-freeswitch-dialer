@@ -11,6 +11,7 @@ Record evidence URL/path, UTC date, environment, operator, and deployed SHA for 
 - [x] Voicemail uploads are probed/transcoded to canonical mono 8 kHz PCM WAV and invalid/over-five-minute inputs are rejected.
 - [x] Media access uses scoped short-lived hashed tickets and byte-range streaming instead of JWT query parameters.
 - [x] Campaign archive/history, user deactivate/reactivate/password/role lifecycle, suppression import/history, call-history filters/export/detail, and admin mutation audit exist.
+- [x] Active interactive calls keep the authenticated user on Agent Desk; campaign contacts and CSV failure details are paginated; bounded call timelines report omitted older events.
 - [x] Scheduled retention uses advisory locking and preserves call/recording metadata after non-`ENOENT` unlink failures.
 - [x] Backup uses an authenticated `ODBACKUP2` AES-256-GCM envelope; restore requires confirmation and uses transactional PostgreSQL restore.
 - [x] Deployment uses preflight, quality gates, active-call guard, pre-deploy backup, SHA images, health waits, smoke test, state record, and explicit rollback.

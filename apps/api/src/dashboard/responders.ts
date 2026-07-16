@@ -773,7 +773,8 @@ export async function getCallDetail(pool: pg.Pool, callId: string): Promise<Call
           agent_leg_uuid,
           customer_leg_uuid,
           raw_json,
-          created_at
+          created_at,
+          total_count
         from (
           select
             id,
@@ -785,7 +786,8 @@ export async function getCallDetail(pool: pg.Pool, callId: string): Promise<Call
             agent_leg_uuid,
             customer_leg_uuid,
             raw_json,
-            created_at
+            created_at,
+            count(*) over() as total_count
           from call_events
           where call_id = $1
           order by created_at desc, id desc
@@ -870,6 +872,7 @@ export async function getCallDetail(pool: pg.Pool, callId: string): Promise<Call
 
   const lastReasonCode = [...events.rows].reverse().find((event) => event.reason_code)?.reason_code ?? null;
   const hangupCause = findHangupCause(events.rows);
+  const timelineTotal = Number(events.rows[0]?.total_count ?? events.rows.length);
   const recordingStatus: CallDetailResponse["call"]["recordingStatus"] = !row.call_recording_enabled
     ? "disabled"
     : (row.call_recording_status ?? "pending");
@@ -979,7 +982,9 @@ export async function getCallDetail(pool: pg.Pool, callId: string): Promise<Call
       apiCommandName: event.api_command_name,
       agentLegUuid: event.agent_leg_uuid,
       customerLegUuid: event.customer_leg_uuid
-    }))
+    })),
+    timelineTotal,
+    timelineTruncated: timelineTotal > events.rows.length
   };
 }
 
@@ -993,6 +998,7 @@ type CallDetailEventRow = {
   customer_leg_uuid: string | null;
   raw_json: Record<string, unknown>;
   created_at: Date;
+  total_count?: string | number;
 };
 
 function nullableNumber(value: string | number | null | undefined): number | null {

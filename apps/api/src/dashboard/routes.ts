@@ -193,7 +193,9 @@ const importCsvSchema = z.object({
 
 const contactsQuerySchema = z.object({
   q: z.string().default(""),
-  status: z.enum(["all", "ready", "suppressed", "completed"]).default("all")
+  status: z.enum(["all", "ready", "suppressed", "completed"]).default("all"),
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce.number().int().min(1).max(100).default(50)
 });
 
 const campaignParamsSchema = z.object({
@@ -257,6 +259,11 @@ const adminLibraryQuerySchema = z.object({
 
 const csvImportLibraryQuerySchema = adminLibraryQuerySchema.extend({
   pageSize: z.coerce.number().int().min(1).max(100).default(20)
+});
+
+const csvImportFailuresQuerySchema = z.object({
+  failurePage: z.coerce.number().int().min(1).default(1),
+  failurePageSize: z.coerce.number().int().min(1).max(100).default(50)
 });
 
 const retentionRunSchema = z.object({
@@ -729,7 +736,8 @@ export function registerDashboardRoutes(
     }
 
     const params = z.object({ importId: z.string().uuid() }).parse(request.params);
-    const detail = await getCsvImportDetail(pool, params.importId);
+    const query = csvImportFailuresQuerySchema.parse(request.query);
+    const detail = await getCsvImportDetail(pool, params.importId, query);
     if (!detail) {
       return reply.code(404).send({ message: "CSV import not found" });
     }
@@ -1949,7 +1957,11 @@ function isCsvImportCampaignForeignKeyError(error: unknown): error is { code: st
   );
 }
 
-async function getCsvImportDetail(pool: pg.Pool, importId: string): Promise<CsvImportDetailResponse | null> {
+async function getCsvImportDetail(
+  pool: pg.Pool,
+  importId: string,
+  query: { failurePage: number; failurePageSize: number } = { failurePage: 1, failurePageSize: 50 }
+): Promise<CsvImportDetailResponse | null> {
   const imports = await pool.query<{
     id: string;
     campaign_id: string;
@@ -1988,6 +2000,7 @@ async function getCsvImportDetail(pool: pg.Pool, importId: string): Promise<CsvI
     return null;
   }
 
+  const failedRows = Number(row.failed_rows);
   return {
     import: {
       id: row.id,
@@ -1997,16 +2010,23 @@ async function getCsvImportDetail(pool: pg.Pool, importId: string): Promise<CsvI
       status: row.status,
       totalRows: Number(row.total_rows),
       importedRows: Number(row.imported_rows),
-      failedRows: Number(row.failed_rows),
+      failedRows,
       duplicateRows: Number(row.field_mapping_json?.duplicateRows ?? 0),
       createdAt: row.created_at.toISOString(),
       completedAt: row.completed_at?.toISOString()
     },
-    failures: await getCsvImportFailures(pool, importId)
+    failures: await getCsvImportFailures(pool, importId, query),
+    failurePage: query.failurePage,
+    failurePageSize: query.failurePageSize,
+    failureTotalPages: failedRows ? Math.ceil(failedRows / query.failurePageSize) : 0
   };
 }
 
-async function getCsvImportFailures(pool: pg.Pool, importId: string): Promise<CsvImportFailure[]> {
+async function getCsvImportFailures(
+  pool: pg.Pool,
+  importId: string,
+  query: { failurePage: number; failurePageSize: number }
+): Promise<CsvImportFailure[]> {
   const result = await pool.query<{
     id: string;
     row_number: number;
@@ -2018,9 +2038,9 @@ async function getCsvImportFailures(pool: pg.Pool, importId: string): Promise<Cs
       from csv_import_failures
       where import_id = $1
       order by row_number asc
-      limit 50
+      limit $2 offset $3
     `,
-    [importId]
+    [importId, query.failurePageSize, (query.failurePage - 1) * query.failurePageSize]
   );
 
   return result.rows.map((row) => ({
@@ -2084,9 +2104,15 @@ async function getContactListItem(pool: pg.Pool, contactId: string): Promise<Cam
 async function getCampaignContacts(
   pool: pg.Pool,
   campaignId: string,
-  query: { q: string; status: "all" | "ready" | "suppressed" | "completed" }
+  query: {
+    q: string;
+    status: "all" | "ready" | "suppressed" | "completed";
+    page: number;
+    pageSize: number;
+  }
 ): Promise<CampaignContactsResponse> {
   const search = query.q.trim();
+  const offset = (query.page - 1) * query.pageSize;
   const result = await pool.query<{
     id: string;
     display_name: string | null;
@@ -2125,13 +2151,17 @@ async function getCampaignContacts(
       select *, count(*) over() as total_count
       from filtered
       order by created_at desc
-      limit 50
+      limit $4 offset $5
     `,
-    [campaignId, search, query.status]
+    [campaignId, search, query.status, query.pageSize, offset]
   );
 
+  const total = Number(result.rows[0]?.total_count ?? 0);
   return {
-    total: Number(result.rows[0]?.total_count ?? 0),
+    page: query.page,
+    pageSize: query.pageSize,
+    total,
+    totalPages: total ? Math.ceil(total / query.pageSize) : 0,
     contacts: result.rows.map((row) => ({
       id: row.id,
       name: row.display_name ?? "Unknown contact",
@@ -2154,6 +2184,8 @@ export const __testing = {
   getActiveCallActions,
   getCallDetail,
   getCallRecordingAudioFile,
+  getCampaignContacts,
+  getCsvImportDetail,
   getAgentCampaign,
   getAgentCampaignForDialerAction,
   inferAgentEndOutcome,

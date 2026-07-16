@@ -5,6 +5,8 @@ import {
   fetchAdminCampaigns,
   fetchAdminRecordings,
   fetchAdminUsers,
+  fetchCampaignContacts,
+  fetchCsvImportDetail,
   fetchCsvImports,
   fetchMe,
   logout,
@@ -96,6 +98,34 @@ describe("cookie-authenticated API client", () => {
         expect.objectContaining({ credentials: "include" })
       );
     }
+  });
+
+  it("encodes contact and CSV failure pagination", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      json: async () => ({}),
+      ok: true,
+      status: 200
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await fetchCampaignContacts("campaign-1", {
+      q: "alex smith",
+      status: "ready",
+      page: 2,
+      pageSize: 50
+    });
+    await fetchCsvImportDetail("import-1", { failurePage: 3, failurePageSize: 25 });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/admin/campaigns/campaign-1/contacts?q=alex+smith&status=ready&page=2&pageSize=50",
+      expect.objectContaining({ credentials: "include" })
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/admin/csv-imports/import-1?failurePage=3&failurePageSize=25",
+      expect.objectContaining({ credentials: "include" })
+    );
   });
 
   it("saves an AVMD review with an idempotent call-scoped PUT", async () => {

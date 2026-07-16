@@ -2,7 +2,7 @@
 
 - The product is single-tenant and the deployment is a single-host Docker topology; it is not a high-availability control plane.
 - Each agent has one interactive call at a time. A released voicemail customer leg can remain as a tracked background job while the same agent starts another interactive call.
-- Agent pause and configurable post-call wrap-up are implemented, but scheduled callbacks, supervisor-controlled requeue, reason-coded pauses, and workforce-management reporting are not.
+- Agent pause/resume is implemented and terminal calls return the agent directly to available. Configurable post-call wrap-up, scheduled callbacks, supervisor-controlled requeue, reason-coded pauses, and workforce-management reporting are not implemented.
 - VM/beep/AVMD detection is advisory. It neither decides human versus machine nor triggers an automatic voicemail drop. Admin review now supplies human/machine/uncertain ground truth, but precision and recall describe only the reviewed sample; coverage and confusion counts must be considered with the rate.
 - Admin **Contact rate** remains an operational proxy that excludes detected/dropped voicemail from technically answered calls. It is not a substitute for reviewed human-contact ground truth.
 - Per-leg RTP counters, MOS, jitter, codecs, and gateway/profile are captured from FreeSWITCH at `CHANNEL_HANGUP_COMPLETE`. They prove what the server observed, not what a browser played, whether a microphone contained speech, or what a PSTN participant heard. “Suspected one-way” is intentionally a conservative diagnostic flag.

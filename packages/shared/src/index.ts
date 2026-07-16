@@ -476,6 +476,8 @@ export interface CallDetailResponse {
     agentLegUuid: string | null;
     customerLegUuid: string | null;
   }>;
+  timelineTotal: number;
+  timelineTruncated: boolean;
 }
 
 export type AvmdActualParty = "human" | "machine" | "uncertain";
@@ -647,6 +649,9 @@ export interface CsvImportFailure {
 export interface CsvImportDetailResponse {
   import: CsvImportSummary;
   failures: CsvImportFailure[];
+  failurePage: number;
+  failurePageSize: number;
+  failureTotalPages: number;
 }
 
 export type CampaignContactStatus = "ready" | "suppressed" | "completed";
@@ -663,7 +668,10 @@ export interface CampaignContactListItem {
 
 export interface CampaignContactsResponse {
   contacts: CampaignContactListItem[];
+  page: number;
+  pageSize: number;
   total: number;
+  totalPages: number;
 }
 
 export interface SuppressContactRequest {

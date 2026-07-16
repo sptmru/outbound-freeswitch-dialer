@@ -8,6 +8,7 @@ This document is the current product and operational contract. Items described a
 - One interactive call per agent. A released voicemail customer leg may continue as a background job while the agent starts the next interactive call.
 - Browser softphone for agent media; all PSTN origination and call control remain backend-owned through FreeSWITCH ESL.
 - Local accounts with `agent` and `admin` roles. Admins may use Agent Desk, but SIP registration and microphone access start only while that view is open.
+- While an interactive call is active, the application keeps the user on Agent Desk. Sidebar navigation, browser history, deep links, and reload hydration must not leave the desk and stop the browser softphone.
 - Manual voicemail drop and automatically determined outcomes are the current product behavior. Progressive dialing, mandatory agent dispositions, and automatic voicemail drop are not part of this version.
 
 ## Authentication And Browser Security
@@ -85,6 +86,7 @@ This document is the current product and operational contract. Items described a
 - Admins can create/edit campaigns and configure manual dialing, call recording, and early-media AVMD per campaign.
 - Archived campaigns preserve operational history and are not callable.
 - Current contact import is intentionally limited to required `name` and `phone` columns. The importer normalizes numbers, reports row errors, and avoids duplicates.
+- Campaign contacts and CSV row failures are paginated. Opening Contacts follows the campaign selected on Agent Desk, and every rejected CSV row remains reviewable instead of being silently limited to the first page.
 - Manual numbers and campaign contacts both pass backend authorization and normalized suppression checks before originate.
 - Suppression supports add/update, search, pagination, CSV import, and removal.
 - Suppression changes and blocked manual-dial attempts create durable `suppression_events`.
@@ -101,13 +103,13 @@ This document is the current product and operational contract. Items described a
 
 ## History And Reporting
 
-- Authenticated application sections have stable shareable URLs. The selected Agent Desk campaign is preserved in the URL across navigation and page reloads, and browser storage restores it when the application root is opened in another tab.
+- Authenticated application sections have stable shareable URLs. The selected Agent Desk campaign is preserved in the URL across navigation and page reloads, and browser storage restores it when the application root is opened in another tab. An active interactive call overrides non-desk URLs until the call ends.
 - Admin analytics are available on a dedicated shareable `/analytics` view backed by `GET /admin/analytics`. The view supports a bounded date range, browser IANA timezone, and optional campaign filter, and presents summary, daily trend, call funnel, campaign performance, agent performance, data-quality snapshot, voicemail lifecycle, AVMD reviewer evidence, per-leg media-quality coverage, and telephony reconciliation/finalization metrics.
 - Admins can classify answered calls as human, machine, or uncertain from Call History. AVMD precision/recall and false-positive reporting use only persisted reviewer labels, expose their review coverage and confusion counts, and never present an unreviewed population as measured ground truth.
 - Reporting distinguishes technical answer rate (`answered_at` / attempts) from connected-contact rate. A connected contact has answer evidence and excludes calls classified as detected or dropped voicemail; it is an operational proxy, not independently verified human-contact ground truth.
 - Date-filtered call metrics and current contact-queue snapshots are labeled separately. Current callable/suppressed/exhausted counts must not be presented as historical values for the selected call period.
 - Admin call history is paginated and filterable by text, campaign, agent, outcome, date range, voicemail drop/signal, and recording availability.
-- Call detail includes lifecycle events and technical identifiers needed for diagnosis.
+- Call detail includes lifecycle events and technical identifiers needed for diagnosis. The technical timeline is bounded to the latest 100 events and reports the total and whether older events were omitted.
 - CSV export applies the same filters and refuses exports above `CALL_HISTORY_EXPORT_MAX_ROWS` (50,000 by default).
 - Outcomes are derived from backend call events. Agents do not select a mandatory post-call disposition in this version.
 

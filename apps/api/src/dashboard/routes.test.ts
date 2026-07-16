@@ -546,7 +546,8 @@ describe("dashboard route helpers", () => {
             agent_leg_uuid: "agent-leg",
             customer_leg_uuid: "customer-leg",
             raw_json: { headers: { "hangup-cause": "NORMAL_CLEARING" } },
-            created_at: createdAt
+            created_at: createdAt,
+            total_count: "125"
           }
         ]);
       }
@@ -588,6 +589,8 @@ describe("dashboard route helpers", () => {
     assert.equal(detail?.call.hangupCause, "NORMAL_CLEARING");
     assert.equal(detail?.call.avmdAttempted, true);
     assert.equal(detail?.call.finalizationLatencyMs, 12);
+    assert.equal(detail?.timelineTotal, 125);
+    assert.equal(detail?.timelineTruncated, true);
     assert.deepEqual(detail?.mediaQuality, []);
     assert.deepEqual(detail?.timeline, [
       {
@@ -604,6 +607,84 @@ describe("dashboard route helpers", () => {
     ]);
     assert.equal(detail?.legs.length, 2);
     assert.equal(detail?.legs[0]?.hangupCause, "NORMAL_CLEARING");
+  });
+
+  it("paginates campaign contacts and reports the complete filtered total", async () => {
+    const createdAt = new Date("2026-07-16T08:00:00.000Z");
+    const pool = createQueryPool((sql, params) => {
+      assert.match(sql, /limit \$4 offset \$5/);
+      assert.deepEqual(params, [selectedCampaignId, "alex", "ready", 25, 25]);
+      return rows([
+        {
+          id: "22222222-2222-4222-8222-222222222222",
+          display_name: "Alex Contact",
+          phone_number: "+14155550100",
+          mapped_fields_json: {},
+          company: null,
+          contact_status: "ready",
+          created_at: createdAt,
+          total_count: "53"
+        }
+      ]);
+    });
+
+    const result = await __testing.getCampaignContacts(pool, selectedCampaignId, {
+      q: " alex ",
+      status: "ready",
+      page: 2,
+      pageSize: 25
+    });
+
+    assert.equal(result.page, 2);
+    assert.equal(result.pageSize, 25);
+    assert.equal(result.total, 53);
+    assert.equal(result.totalPages, 3);
+    assert.equal(result.contacts[0]?.name, "Alex Contact");
+  });
+
+  it("paginates CSV import failures without hiding the remaining pages", async () => {
+    const createdAt = new Date("2026-07-16T08:00:00.000Z");
+    const pool = createQueryPool((sql, params) => {
+      if (sql.includes("from csv_imports")) {
+        assert.deepEqual(params, ["33333333-3333-4333-8333-333333333333"]);
+        return rows([
+          {
+            id: "33333333-3333-4333-8333-333333333333",
+            campaign_id: selectedCampaignId,
+            campaign_name: "Selected campaign",
+            filename: "contacts.csv",
+            status: "completed_with_errors",
+            total_rows: 8,
+            imported_rows: 3,
+            failed_rows: 5,
+            field_mapping_json: { duplicateRows: 0 },
+            created_at: createdAt,
+            completed_at: createdAt
+          }
+        ]);
+      }
+      assert.match(sql, /from csv_import_failures/);
+      assert.match(sql, /limit \$2 offset \$3/);
+      assert.deepEqual(params, ["33333333-3333-4333-8333-333333333333", 2, 2]);
+      return rows([
+        {
+          id: "44444444-4444-4444-8444-444444444444",
+          row_number: 4,
+          reason: "Invalid phone number",
+          row_json: { name: "Alex", phone: "invalid" }
+        }
+      ]);
+    });
+
+    const detail = await __testing.getCsvImportDetail(pool, "33333333-3333-4333-8333-333333333333", {
+      failurePage: 2,
+      failurePageSize: 2
+    });
+
+    assert.equal(detail?.failurePage, 2);
+    assert.equal(detail?.failurePageSize, 2);
+    assert.equal(detail?.failureTotalPages, 3);
+    assert.equal(detail?.failures[0]?.rowNumber, 4);
   });
 
   it("binds and maps the AVMD review call-history filter", async () => {

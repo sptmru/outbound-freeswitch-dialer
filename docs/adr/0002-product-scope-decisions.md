@@ -17,7 +17,7 @@ Build the first version with these assumptions:
 - Roles limited to `agent` and `admin`.
 - Agent SIP credentials are generated automatically when an agent is created.
 - SIP trunk supports both registration-based and IP-authenticated modes.
-- SIP trunk configuration is deployment/runtime configuration, not Web UI configuration.
+- SIP provider credentials, proxy, registration, and routing remain deployment configuration. Bounded non-secret runtime policy, such as the global caller ID, may be administered in the Web UI.
 - Manual "Drop Voicemail" is the MVP behavior.
 - VM/beep detection is visible to agents as a signal but does not automatically control voicemail drop in MVP.
 - Customer leg hangs up automatically after voicemail playback completes.
@@ -38,7 +38,7 @@ Build the first version with these assumptions:
 - Campaigns, validated CSV import, and suppression are needed for a usable outbound workflow rather than a raw dial pad. Flexible field mapping is deferred by ADR 0003.
 - Local auth and single-tenancy keep the first implementation focused.
 - Global recordings with a default reduce agent friction while preserving recording choice.
-- Runtime trunk configuration avoids exposing sensitive telephony settings in the first admin UI.
+- Deployment-owned trunk configuration avoids exposing sensitive provider credentials and routing in the admin UI while allowing bounded non-secret runtime policy there.
 
 ## Consequences
 

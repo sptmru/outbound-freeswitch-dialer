@@ -13,10 +13,13 @@ const apiMocks = vi.hoisted(() => ({
   dropVoicemail: vi.fn(),
   endCall: vi.fn(),
   fetchAdminAnalytics: vi.fn(),
+  fetchAdminCampaigns: vi.fn(),
   fetchAdminOverview: vi.fn(),
   fetchAgentDesk: vi.fn(),
+  fetchCampaignContacts: vi.fn(),
   fetchCallDetail: vi.fn(),
   fetchCallHistory: vi.fn(),
+  fetchCsvImportDetail: vi.fn(),
   fetchCsvImports: vi.fn(),
   fetchMe: vi.fn(),
   fetchSystemSettings: vi.fn(),
@@ -37,10 +40,13 @@ vi.mock("./api", async () => {
     dropVoicemail: apiMocks.dropVoicemail,
     endCall: apiMocks.endCall,
     fetchAdminAnalytics: apiMocks.fetchAdminAnalytics,
+    fetchAdminCampaigns: apiMocks.fetchAdminCampaigns,
     fetchAdminOverview: apiMocks.fetchAdminOverview,
     fetchAgentDesk: apiMocks.fetchAgentDesk,
+    fetchCampaignContacts: apiMocks.fetchCampaignContacts,
     fetchCallDetail: apiMocks.fetchCallDetail,
     fetchCallHistory: apiMocks.fetchCallHistory,
+    fetchCsvImportDetail: apiMocks.fetchCsvImportDetail,
     fetchCsvImports: apiMocks.fetchCsvImports,
     fetchMe: apiMocks.fetchMe,
     fetchSystemSettings: apiMocks.fetchSystemSettings,
@@ -78,9 +84,29 @@ describe("App Agent Desk empty states", () => {
     window.history.replaceState({}, "", "/");
     window.localStorage.removeItem("outbound_dialer_selected_campaign_id");
     apiMocks.fetchMe.mockResolvedValue({ user: userRow() });
-    apiMocks.fetchCsvImports.mockResolvedValue({ imports: [] });
+    apiMocks.fetchCsvImports.mockResolvedValue({
+      imports: [],
+      page: 1,
+      pageSize: 20,
+      total: 0,
+      totalPages: 0
+    });
     apiMocks.fetchAdminAnalytics.mockResolvedValue(adminAnalyticsResponse());
     apiMocks.fetchAdminOverview.mockResolvedValue(adminResponse());
+    apiMocks.fetchAdminCampaigns.mockResolvedValue({
+      items: adminResponse().campaigns,
+      page: 1,
+      pageSize: 25,
+      total: adminResponse().campaigns.length,
+      totalPages: 1
+    });
+    apiMocks.fetchCampaignContacts.mockResolvedValue({
+      contacts: [],
+      page: 1,
+      pageSize: 50,
+      total: 0,
+      totalPages: 0
+    });
     apiMocks.fetchSystemSettings.mockResolvedValue(systemSettings());
     apiMocks.updateSystemSettings.mockImplementation(async (input) => ({ ...systemSettings(), ...input }));
     apiMocks.fetchCallHistory.mockResolvedValue({
@@ -183,6 +209,37 @@ describe("App Agent Desk empty states", () => {
     window.history.pushState({}, "", "/settings?campaignId=11111111-1111-4111-8111-111111111111");
     window.dispatchEvent(new PopStateEvent("popstate"));
     expect(await screen.findByRole("heading", { level: 1, name: "Settings" })).toBeInTheDocument();
+  });
+
+  it("redirects an admin deep link to Agent Desk while an interactive call is active", async () => {
+    const admin = userRow({ role: "admin" });
+    window.history.replaceState({}, "", "/settings?campaignId=11111111-1111-4111-8111-111111111111");
+    apiMocks.fetchMe.mockResolvedValue({ user: admin });
+    apiMocks.fetchAgentDesk.mockResolvedValue(deskResponse({ user: admin, activeCall: activeCallRow() }));
+
+    render(<App />);
+
+    expect(await screen.findByRole("button", { name: "Campaigns" })).toBeDisabled();
+    await waitFor(() => expect(window.location.pathname).toBe("/"));
+    expect(apiMocks.useSoftphoneRegistration).toHaveBeenLastCalledWith(admin);
+  });
+
+  it("rejects browser history navigation away from an active admin call", async () => {
+    const admin = userRow({ role: "admin" });
+    apiMocks.fetchMe.mockResolvedValue({ user: admin });
+    apiMocks.fetchAgentDesk.mockResolvedValue(deskResponse({ user: admin, activeCall: activeCallRow() }));
+
+    render(<App />);
+    expect(await screen.findByRole("button", { name: "Campaigns" })).toBeDisabled();
+
+    act(() => {
+      window.history.pushState({}, "", "/settings?campaignId=11111111-1111-4111-8111-111111111111");
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
+
+    await waitFor(() => expect(window.location.pathname).toBe("/"));
+    expect(screen.queryByRole("heading", { level: 1, name: "Settings" })).not.toBeInTheDocument();
+    expect(apiMocks.useSoftphoneRegistration).toHaveBeenLastCalledWith(admin);
   });
 
   it("keeps the Analytics campaign filter separate from the Agent Desk campaign", async () => {
@@ -369,6 +426,22 @@ describe("App Agent Desk empty states", () => {
       })
     );
     apiMocks.fetchAdminOverview.mockResolvedValue(adminResponse({ campaigns: adminCampaigns }));
+    apiMocks.fetchAdminCampaigns.mockResolvedValue({
+      items: adminCampaigns,
+      page: 1,
+      pageSize: 25,
+      total: adminCampaigns.length,
+      totalPages: 1
+    });
+    apiMocks.fetchCampaignContacts.mockImplementation(
+      async (_campaignId: string, filters: { page?: number; pageSize?: number }) => ({
+        contacts: [],
+        page: filters.page ?? 1,
+        pageSize: filters.pageSize ?? 50,
+        total: 51,
+        totalPages: 2
+      })
+    );
 
     render(<App />);
     fireEvent.click(await screen.findByRole("button", { name: "Campaigns" }));
@@ -380,6 +453,24 @@ describe("App Agent Desk empty states", () => {
     expect(within(addLeadPanel!).getByRole("combobox", { name: "Campaign" })).toHaveValue(selectedCampaignId);
     expect(within(csvImportPanel!).getByRole("combobox", { name: "Campaign" })).toHaveValue(
       selectedCampaignId
+    );
+    const contactsPanel = screen.getByRole("heading", { name: "Campaign contacts" }).closest("article");
+    expect(contactsPanel).not.toBeNull();
+    expect(within(contactsPanel!).getByRole("combobox", { name: "Campaign" })).toHaveValue(
+      selectedCampaignId
+    );
+    await waitFor(() =>
+      expect(apiMocks.fetchCampaignContacts).toHaveBeenCalledWith(
+        selectedCampaignId,
+        expect.objectContaining({ page: 1, pageSize: 50 })
+      )
+    );
+    fireEvent.click(within(contactsPanel!).getByRole("button", { name: "Next" }));
+    await waitFor(() =>
+      expect(apiMocks.fetchCampaignContacts).toHaveBeenLastCalledWith(
+        selectedCampaignId,
+        expect.objectContaining({ page: 2, pageSize: 50 })
+      )
     );
   });
 
@@ -393,6 +484,66 @@ describe("App Agent Desk empty states", () => {
     expect(apiMocks.fetchMe).toHaveBeenCalledTimes(1);
     await waitFor(() => expect(apiMocks.subscribeAgentEvents).toHaveBeenCalledTimes(1));
     expect(window.localStorage.getItem("outbound_dialer_token")).toBeNull();
+  });
+
+  it("pages through every reported CSV import failure", async () => {
+    const admin = userRow({ role: "admin" });
+    const csvImport = {
+      id: "33333333-3333-4333-8333-333333333333",
+      campaignId: "11111111-1111-4111-8111-111111111111",
+      campaignName: "Selected campaign",
+      filename: "contacts.csv",
+      status: "completed_with_errors",
+      totalRows: 8,
+      importedRows: 3,
+      failedRows: 5,
+      duplicateRows: 0,
+      createdAt: "2026-07-16T08:00:00.000Z",
+      completedAt: "2026-07-16T08:00:01.000Z"
+    };
+    apiMocks.fetchMe.mockResolvedValue({ user: admin });
+    apiMocks.fetchAgentDesk.mockResolvedValue(deskResponse({ user: admin }));
+    apiMocks.fetchCsvImports.mockResolvedValue({
+      imports: [csvImport],
+      page: 1,
+      pageSize: 20,
+      total: 1,
+      totalPages: 1
+    });
+    apiMocks.fetchCsvImportDetail.mockImplementation(
+      async (_importId: string, filters: { failurePage?: number; failurePageSize?: number }) => {
+        const failurePage = filters.failurePage ?? 1;
+        return {
+          import: csvImport,
+          failures: [
+            {
+              id: `failure-${failurePage}`,
+              rowNumber: failurePage === 1 ? 2 : 4,
+              reason: "Invalid phone number",
+              row: { name: "Alex", phone: "invalid" }
+            }
+          ],
+          failurePage,
+          failurePageSize: filters.failurePageSize ?? 50,
+          failureTotalPages: 2
+        };
+      }
+    );
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Campaigns" }));
+    fireEvent.click(await screen.findByRole("button", { name: /contacts\.csv/ }));
+
+    expect(await screen.findByText("Row 2")).toBeInTheDocument();
+    const detail = screen.getByText("Row 2").closest<HTMLElement>(".import-detail");
+    expect(detail).not.toBeNull();
+    fireEvent.click(within(detail!).getByRole("button", { name: "Next" }));
+
+    expect(await screen.findByText("Row 4")).toBeInTheDocument();
+    expect(apiMocks.fetchCsvImportDetail).toHaveBeenLastCalledWith(csvImport.id, {
+      failurePage: 2,
+      failurePageSize: 50
+    });
   });
 
   it("refreshes desk state when the live event stream emits a refresh", async () => {
@@ -823,7 +974,9 @@ describe("App Agent Desk empty states", () => {
           agentLegUuid: null,
           customerLegUuid: null
         }
-      ]
+      ],
+      timelineTotal: 125,
+      timelineTruncated: true
     });
 
     render(<App />);
@@ -862,6 +1015,7 @@ describe("App Agent Desk empty states", () => {
     expect(screen.queryByText("Customer connected")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Show technical details" }));
     expect(await screen.findByText("Customer connected")).toBeInTheDocument();
+    expect(screen.getByText("Showing the latest 1 of 125 recorded events.")).toBeInTheDocument();
     expect(screen.getByText("Terminal persistence")).toBeInTheDocument();
     expect(screen.getByText("primary-trunk")).toBeInTheDocument();
     expect(screen.getByText("external")).toBeInTheDocument();
@@ -1230,6 +1384,8 @@ function callDetailResponse(call: AdminOverviewResponse["callHistory"][number]):
     avmdReview: null,
     mediaQuality: [],
     legs: [],
-    timeline: []
+    timeline: [],
+    timelineTotal: 0,
+    timelineTruncated: false
   };
 }
