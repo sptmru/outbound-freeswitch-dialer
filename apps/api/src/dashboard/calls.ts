@@ -2,6 +2,7 @@ import type pg from "pg";
 import type { CallOutcome, CallState } from "@outbound-dialer/shared";
 import type { AppConfig } from "../config.js";
 import { finishAgentCall } from "../agent-availability.js";
+import { finalizeCallTransaction, lockCallOwnerAgent } from "../call-finalization.js";
 import { startCallPcapCapture } from "../pcap-capture.js";
 import {
   canOriginateCustomerLeg,
@@ -147,7 +148,12 @@ async function getDefaultRecordingId(client: pg.Pool | pg.PoolClient): Promise<s
 }
 
 type CreateDialerCallFailureReason =
-  "active_call" | "agent_paused" | "agent_not_registered" | "lead_not_callable" | "no_callable_contacts";
+  | "active_call"
+  | "agent_paused"
+  | "agent_not_registered"
+  | "lead_not_callable"
+  | "maintenance"
+  | "no_callable_contacts";
 
 type CreateDialerCallResult =
   { ok: true; callId: string; campaignId: string } | { ok: false; reason: CreateDialerCallFailureReason };
@@ -183,6 +189,26 @@ export async function createDialerCall(
   let committedContext: DialerCallContext | null = null;
   try {
     await client.query("begin");
+
+    // The certificate maintenance workflow updates this same durable row to
+    // true before checking active calls. FOR SHARE lets ordinary call starts
+    // proceed concurrently, while the maintenance update waits for every
+    // in-flight create transaction and closes the check/start race.
+    await client.query(
+      `insert into system_settings (key, value_json)
+       values ('ops.call_start_paused', 'false'::jsonb)
+       on conflict (key) do nothing`
+    );
+    const callStartGate = await client.query<{ paused: boolean }>(
+      `select value_json = 'true'::jsonb as paused
+       from system_settings
+       where key = 'ops.call_start_paused'
+       for share`
+    );
+    if (callStartGate.rows[0]?.paused) {
+      await client.query("rollback");
+      return { ok: false, reason: "maintenance" };
+    }
 
     await client.query(
       `
@@ -396,6 +422,9 @@ export function createDialerCallFailureMessage(reason: CreateDialerCallFailureRe
   if (reason === "no_callable_contacts") {
     return "No callable contacts are available";
   }
+  if (reason === "maintenance") {
+    return "Calling is temporarily paused for certificate maintenance";
+  }
   return "Lead is not callable";
 }
 
@@ -491,45 +520,16 @@ export async function syncFreeSwitchOriginate(
       jobUuid: originate.jobUuid
     });
   } catch (error) {
-    await pool.query(
-      `
-        with stamp as (select clock_timestamp() as persisted_at)
-        update calls
-        set state = 'failed',
-            outcome = 'failed',
-            ended_at = stamp.persisted_at,
-            terminal_persisted_at = stamp.persisted_at,
-            terminal_source = 'originate_failure',
-            updated_at = stamp.persisted_at
-        from stamp
-        where id = $1
-      `,
-      [input.callId]
-    );
-    await finishAgentCall(pool, input.agentId);
-    await pool.query(
-      `
-        update contacts
-        set status = 'new',
-            updated_at = now()
-        where id = (
-          select contact_id
-          from calls
-          where id = $1
-        )
-          and status = 'calling'
-      `,
-      [input.callId]
-    );
-    await insertCallEvent(pool, {
-      agentId: input.agentId,
+    await finalizeCallTransaction(pool, {
       callId: input.callId,
-      eventType: "freeswitch_originate_failed",
-      state: "failed",
-      apiCommandName: "bgapi originate",
-      raw: {
-        message: error instanceof Error ? error.message : "FreeSWITCH originate failed"
-      }
+      event: {
+        apiCommandName: "bgapi originate",
+        eventType: "freeswitch_originate_failed",
+        raw: { message: error instanceof Error ? error.message : "FreeSWITCH originate failed" },
+        state: "failed"
+      },
+      resolve: () => ({ outcome: "failed", state: "failed" }),
+      terminal: { source: "originate_failure" }
     });
   }
 }
@@ -645,65 +645,25 @@ async function closeMissingOriginateLeg(
 
 async function failDialerCallFromFreeSwitch(
   pool: pg.Pool,
-  config: AppConfig,
-  agentId: string,
+  _config: AppConfig,
+  _agentId: string,
   callId: string,
   customerLegUuid: string | null,
   event: { eventType: string; apiCommandName: string; raw: Record<string, unknown> }
 ): Promise<void> {
-  const updated = await pool.query(
-    `
-      with stamp as (select clock_timestamp() as persisted_at)
-      update calls
-      set state = 'failed',
-          outcome = 'failed',
-          ended_at = stamp.persisted_at,
-          terminal_persisted_at = stamp.persisted_at,
-          terminal_source = case
-            when $2 = 'freeswitch_originate_skipped' then 'originate_failure'
-            else 'originate_watchdog'
-          end,
-          updated_at = stamp.persisted_at
-      from stamp
-      where id = $1
-        and ended_at is null
-        and state not in ('completed', 'failed', 'canceled')
-      returning contact_id
-    `,
-    [callId, event.eventType]
-  );
-  if (!updated.rowCount) {
-    return;
-  }
-
-  await pool.query(
-    `
-      update call_legs
-      set state = 'ended',
-          ended_at = coalesce(ended_at, now())
-      where call_id = $1
-    `,
-    [callId]
-  );
-  await finishAgentCall(pool, agentId);
-  await pool.query(
-    `
-      update contacts
-      set status = 'new',
-          updated_at = now()
-      where id = $1
-        and status = 'calling'
-    `,
-    [updated.rows[0]?.contact_id]
-  );
-  await insertCallEvent(pool, {
-    agentId,
+  await finalizeCallTransaction(pool, {
     callId,
-    eventType: event.eventType,
-    state: "failed",
-    apiCommandName: event.apiCommandName,
-    customerLegUuid: customerLegUuid ?? undefined,
-    raw: event.raw
+    event: {
+      apiCommandName: event.apiCommandName,
+      customerLegUuid,
+      eventType: event.eventType,
+      raw: event.raw,
+      state: "failed"
+    },
+    resolve: () => ({ outcome: "failed", state: "failed" }),
+    terminal: {
+      source: event.eventType === "freeswitch_originate_skipped" ? "originate_failure" : "originate_watchdog"
+    }
   });
 }
 
@@ -1185,6 +1145,11 @@ export async function endDialerCall(
   const client = await pool.connect();
   try {
     await client.query("begin");
+    const owner = await lockCallOwnerAgent(client, callId, userId);
+    if (!owner.found) {
+      await client.query("rollback");
+      return false;
+    }
     const call = await client.query<{
       id: string;
       agent_id: string;
@@ -1242,6 +1207,16 @@ export async function endDialerCall(
         values ($1, $2, 'call_ended', 'completed', $3::jsonb)
       `,
       [callId, row.agent_id, JSON.stringify({ outcome })]
+    );
+    await client.query(
+      `
+        update call_legs
+        set state = 'ended',
+            ended_at = coalesce(ended_at, now())
+        where call_id = $1
+          and (state <> 'ended' or ended_at is null)
+      `,
+      [callId]
     );
 
     if (row.contact_id) {

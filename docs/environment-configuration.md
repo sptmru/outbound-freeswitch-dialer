@@ -95,7 +95,9 @@ Use [AWS NAT, firewall, STUN, and TURN](runbooks/aws-networking.md) for address 
 
 `GRAFANA_ADMIN_USER`, `GRAFANA_ADMIN_PASSWORD`, and the retention settings configure Grafana, Prometheus, Loki, and Alertmanager. At least one of the generic webhook, Slack Incoming Webhook, or Telegram destinations should route alerts off the host. Slack requires both `ALERTMANAGER_SLACK_WEBHOOK_URL` and `ALERTMANAGER_SLACK_CHANNEL`; its webhook URL must use HTTPS. `ALLOW_NO_ALERT_RECEIVER=true` is an explicit production risk acceptance.
 
-Monitoring is part of the main Compose deployment. `scripts/deploy.sh` renders `monitoring/generated/prometheus.yml` and `monitoring/generated/alertmanager.yml`, validates all monitoring configs with the pinned runtime images, then starts the stack. Do not edit generated files directly.
+`METRICS_REFRESH_INTERVAL_SECONDS` controls the bounded background refresh of database- and FreeSWITCH-backed metric snapshots (15 seconds by default). Prometheus scrapes serialize the latest completed snapshot and current PostgreSQL pool counters; they do not start new database or ESL work per request.
+
+Monitoring is part of the main Compose deployment. `scripts/deploy.sh` renders `monitoring/generated/prometheus.yml` and `monitoring/generated/alertmanager/alertmanager.yml`, validates all monitoring configs with the pinned runtime images, then starts the stack. Do not edit generated files directly.
 
 Set `COMPOSE_PROJECT_NAME` when deploying under a non-default project name. Alloy maps it to `MONITORING_COMPOSE_PROJECT` and uses it to avoid collecting logs from unrelated Compose projects on the host.
 
@@ -123,6 +125,10 @@ Trust only that deployment subnet; do not use `0.0.0.0/0`, `::/0`, or all privat
 | `PCAP_CAPTURE_ENABLED`, `PCAP_CAPTURE_INTERFACE`, `PCAP_RETENTION_DAYS` | Per-call SIP/RTP capture with terminal SIP/media isolation. Leave disabled unless approved; captures contain customer traffic. |
 | `MEDIA_TICKET_TTL_SECONDS`, `MEDIA_TICKET_MAX_LIFETIME_SECONDS`         | Short-lived scoped browser access to recordings/captures.                                                                      |
 
+### CSV and export bounds
+
+`CSV_UPLOAD_MAX_BYTES` (5 MiB by default) and `CSV_IMPORT_MAX_ROWS` (25,000 by default) bound campaign-contact and suppression CSV imports before database work begins. Independent hard structural ceilings reject more than 128 columns, 2,000,000 cells, or 65,536 characters in one cell, plus duplicate/blank headers and rows wider than their header. Campaign-contact imports still require mapped `name` and `phone` values and preserve every additional source column in the existing contact/import JSON fields; suppression imports retain their existing `phone`/`reason` contract. These resource ceilings do not introduce a field-name whitelist. Valid rows and failure/audit records are written in sorted 1,000-row chunks to bound JSON parameters. Transaction-scoped advisory locks are acquired for normalized phone numbers in one deterministic order before unique-key writes, preventing reverse-order concurrent imports from deadlocking. `CALL_HISTORY_EXPORT_MAX_ROWS` remains a hard administrative row ceiling. The API emits accepted exports incrementally, anchors pagination to the newest row seen at request start, and never holds a database transaction or pool connection open for a slow download. Because the export deliberately avoids a long MVCC snapshot, concurrent updates/deletes may be reflected between chunks, but it never emits more rows than the initial bounded result count.
+
 `ALLOW_LOCAL_ONLY_BACKUPS=true` and `ALLOW_NON_QUIESCED_BACKUP=true` are risk acknowledgements, not evidence of an accepted recovery design. Follow the [backup and restore runbook](runbooks/backup-restore.md).
 
 ## Admin Runtime Overrides
@@ -134,7 +140,7 @@ The Settings UI stores a bounded allowlist of product-policy overrides under `ad
 - `PCAP_CAPTURE_ENABLED` and `SIP_TRUNK_CALLER_ID`;
 - `ALERTMANAGER_REPEAT_INTERVAL` plus enablement of already configured webhook/Slack/Telegram receivers.
 
-Alert receiver URLs/tokens remain deployment-managed secrets and are never returned by the settings API. Runtime alert changes update `monitoring/generated/alertmanager.yml` through the API's dedicated bind mount and use Alertmanager's lifecycle reload endpoint. Direct edits to generated files remain unsupported.
+Alert receiver URLs/tokens remain deployment-managed secrets and are never returned by the settings API. Runtime alert changes atomically replace `monitoring/generated/alertmanager/alertmanager.yml` through the API's dedicated directory bind mount and use Alertmanager's lifecycle reload endpoint. The settings response reports whether that asynchronous runtime apply is pending, applied, failed, or not configured; saving the policy and applying it to Alertmanager are deliberately distinct states. Direct edits to generated files remain unsupported.
 
 ## Build-Time, Runtime, and Operator-Only Values
 

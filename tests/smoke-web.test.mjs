@@ -32,7 +32,7 @@ for argument do
   url="$argument"
 done
 case "$url" in
-  */api/health) printf '%s' '{"service":"api","checks":{}}' ;;
+  */api/health/ready) printf '%s' '{"status":"ok","service":"api","checks":{}}' ;;
   *) printf '%s' '<div id="root"></div><script src="/assets/index-test.js"></script>' ;;
 esac
 `

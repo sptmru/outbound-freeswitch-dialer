@@ -6,6 +6,12 @@ import { parseFreeSwitchEventTimestamp, persistCallMediaStats } from "./call-obs
 import { CoalescedTask } from "./coalesced-task.js";
 import type { AppConfig } from "./config.js";
 import { finishAgentCall } from "./agent-availability.js";
+import {
+  contactStatusForCallOutcome,
+  finalizeCallTransaction,
+  lockCallOwnerAgent,
+  repairFinalizedCallTransaction
+} from "./call-finalization.js";
 import { sendFreeSwitchApiCommand } from "./esl.js";
 import {
   configureFreeSwitchEventQueueMetrics,
@@ -333,44 +339,26 @@ async function persistFreeSwitchEvent(config: AppConfig, pool: pg.Pool, frame: E
   const legType = frame.headers["variable_outbound_dialer_leg_type"] === "agent" ? "agent" : "customer";
   const state = mapEventToCallState(eventName, frame.headers["hangup-cause"], legType);
   const eventType = `freeswitch_${eventName.toLowerCase()}`;
-  const raw = JSON.stringify({
+  const freeswitchEventUuid = getFreeSwitchEventUuid(frame);
+  const rawPayload = {
     headers: frame.headers,
     body: frame.body
-  });
+  };
+  const raw = JSON.stringify(rawPayload);
+  const customerTerminalEvent = isTerminalEvent(eventName) && legType === "customer";
 
-  await pool.query(
-    `
-      insert into call_events (
-        call_id,
-        agent_id,
-        event_type,
-        state,
-        freeswitch_event_name,
-        agent_leg_uuid,
-        customer_leg_uuid,
-        raw_json
-      )
-      values (
-        $1,
-        (select agent_id from calls where id = $1),
-        $2,
-        $3,
-        $4,
-        $5,
-        $6,
-        $7::jsonb
-      )
-    `,
-    [
+  if (!customerTerminalEvent) {
+    await persistGenericFreeSwitchEventState(pool, {
       callId,
-      eventType,
-      state,
       eventName,
-      legType === "agent" ? legUuid : null,
-      legType === "customer" ? legUuid : null,
-      raw
-    ]
-  );
+      eventType,
+      eventUuid: freeswitchEventUuid,
+      legType,
+      legUuid,
+      raw,
+      state
+    });
+  }
 
   if (eventName === "CHANNEL_HANGUP_COMPLETE") {
     await persistCallMediaStats(pool, {
@@ -380,71 +368,6 @@ async function persistFreeSwitchEvent(config: AppConfig, pool: pg.Pool, frame: E
       legType,
       legUuid
     });
-  }
-
-  if (legUuid) {
-    await pool.query(
-      `
-        update call_legs
-        set freeswitch_uuid = coalesce(freeswitch_uuid, $2),
-            state = $3,
-            answered_at = case when $4 then coalesce(answered_at, now()) else answered_at end,
-            ended_at = case when $5 then coalesce(ended_at, now()) else ended_at end
-        where call_id = $1
-          and type = $6
-      `,
-      [
-        callId,
-        legUuid,
-        mapEventToLegState(eventName),
-        eventName === "CHANNEL_ANSWER",
-        isTerminalEvent(eventName),
-        legType
-      ]
-    );
-  }
-
-  if (eventName === "CHANNEL_CREATE" && legType === "customer") {
-    await pool.query(
-      `
-        update calls
-        set state = 'customer_dialing',
-            updated_at = now()
-        where id = $1
-          and state not in (
-            'voicemail_drop_requested',
-            'voicemail_playback_started',
-            'agent_released',
-            'voicemail_playback_completed',
-            'completed',
-            'failed',
-            'canceled'
-          )
-      `,
-      [callId]
-    );
-  }
-
-  if (eventName === "CHANNEL_ANSWER" && legType === "agent") {
-    await pool.query(
-      `
-        update calls
-        set state = 'agent_answered',
-            updated_at = now()
-        where id = $1
-          and state not in (
-            'voicemail_drop_requested',
-            'voicemail_playback_started',
-            'agent_released',
-            'voicemail_playback_completed',
-            'completed',
-            'failed',
-            'canceled',
-            'bridged'
-          )
-      `,
-      [callId]
-    );
   }
 
   if (eventName === "CHANNEL_PROGRESS_MEDIA" && legType === "customer" && legUuid) {
@@ -461,26 +384,6 @@ async function persistFreeSwitchEvent(config: AppConfig, pool: pg.Pool, frame: E
   }
 
   if ((eventName === "CHANNEL_ANSWER" && legType === "customer") || eventName === "CHANNEL_BRIDGE") {
-    await pool.query(
-      `
-        update calls
-        set state = 'bridged',
-            answered_at = coalesce(answered_at, now()),
-            updated_at = now()
-        where id = $1
-          and state not in (
-            'voicemail_drop_requested',
-            'voicemail_playback_started',
-            'agent_released',
-            'voicemail_playback_completed',
-            'completed',
-            'failed',
-            'canceled'
-          )
-      `,
-      [callId]
-    );
-
     if (legType === "customer" && legUuid) {
       await startCallRecording(config, pool, {
         callId,
@@ -495,21 +398,21 @@ async function persistFreeSwitchEvent(config: AppConfig, pool: pg.Pool, frame: E
     }
   }
 
-  if (isTerminalEvent(eventName) && legType === "customer") {
+  if (customerTerminalEvent) {
     const terminalEventAt = parseFreeSwitchEventTimestamp(frame.headers);
     const call = await pool.query<{
       agent_id: string | null;
       answered_at: Date | null;
       contact_id: string | null;
+      ended_at: Date | null;
+      outcome: string | null;
       state: string;
       voicemail_signal_status: string | null;
     }>(
       `
-        select agent_id, answered_at, contact_id, state, voicemail_signal_status
+        select agent_id, answered_at, contact_id, ended_at, outcome, state, voicemail_signal_status
         from calls
         where id = $1
-          and ended_at is null
-          and state not in ('completed', 'failed', 'canceled')
         limit 1
       `,
       [callId]
@@ -518,7 +421,17 @@ async function persistFreeSwitchEvent(config: AppConfig, pool: pg.Pool, frame: E
     if (!current) {
       return;
     }
-    if (isVoicemailDropActiveState(current.state)) {
+    if (!current.ended_at && isVoicemailDropActiveState(current.state)) {
+      await persistTaggedFreeSwitchCallEvent(pool, {
+        callId,
+        eventName,
+        eventType,
+        eventUuid: freeswitchEventUuid,
+        legType,
+        legUuid,
+        raw,
+        state
+      });
       const normalHangup = ["NORMAL_CLEARING", "ORIGINATOR_CANCEL"].includes(
         frame.headers["hangup-cause"]?.toUpperCase() ?? ""
       );
@@ -551,59 +464,196 @@ async function persistFreeSwitchEvent(config: AppConfig, pool: pg.Pool, frame: E
       });
       return;
     }
-    const outcome = resolveCustomerHangupOutcome({
-      answered: Boolean(current.answered_at),
-      hangupCause: frame.headers["hangup-cause"],
-      voicemailDetected: current.voicemail_signal_status === "detected"
+    await finalizeCallTransaction(pool, {
+      callId,
+      event: {
+        customerLegUuid: legUuid,
+        eventType,
+        freeswitchEventName: eventName,
+        freeswitchEventUuid,
+        raw: rawPayload,
+        state
+      },
+      persistEventWhenAlreadyFinalized: true,
+      resolve: (lockedCall) => {
+        const outcome = resolveCustomerHangupOutcome({
+          answered: Boolean(lockedCall.answeredAt),
+          hangupCause: frame.headers["hangup-cause"],
+          voicemailDetected: lockedCall.voicemailSignalStatus === "detected"
+        });
+        return {
+          outcome,
+          state: outcome === "failed" ? "failed" : "completed"
+        };
+      },
+      terminal: {
+        eventAt: terminalEventAt,
+        eventName,
+        source: "freeswitch_customer_terminal"
+      }
     });
-    const terminalState = outcome === "failed" ? "failed" : "completed";
-    const updated = await pool.query(
-      `
-        with stamp as (
-          select clock_timestamp() as persisted_at
-        )
-        update calls
-        set state = $2,
-            outcome = coalesce(outcome, $3),
-            ended_at = stamp.persisted_at,
-            freeswitch_terminal_at = $4,
-            terminal_persisted_at = stamp.persisted_at,
-            terminal_source = 'freeswitch_customer_terminal',
-            terminal_event_name = $5,
-            finalization_latency_ms = case
-              when $4::timestamptz is not null
-                and $4 <= stamp.persisted_at
-                and floor(extract(epoch from (stamp.persisted_at - $4)) * 1000) <= 2147483647
-              then floor(extract(epoch from (stamp.persisted_at - $4)) * 1000)::integer
-              else null
-            end,
-            updated_at = stamp.persisted_at
-        from stamp
-        where id = $1
-          and ended_at is null
-          and state not in ('completed', 'failed', 'canceled')
-        returning agent_id, contact_id
-      `,
-      [callId, terminalState, outcome, terminalEventAt, eventName]
-    );
-    if (!updated.rowCount) {
-      return;
-    }
-    const agentId = updated.rows[0]?.agent_id as string | null | undefined;
-    if (agentId) {
-      await finishAgentCall(pool, agentId);
-    }
-    await pool.query(
-      `
-        update contacts
-        set status = $2,
-            updated_at = now()
-        where id = $1
-          and status = 'calling'
-      `,
-      [updated.rows[0]?.contact_id, contactStatusForOutcome(outcome)]
-    );
   }
+}
+
+interface TaggedFreeSwitchCallEventInput {
+  callId: string;
+  eventName: string;
+  eventType: string;
+  eventUuid: string | null;
+  legType: "agent" | "customer";
+  legUuid: string | null;
+  raw: string;
+  state: string;
+}
+
+async function persistGenericFreeSwitchEventState(
+  pool: pg.Pool,
+  input: TaggedFreeSwitchCallEventInput
+): Promise<void> {
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    // Keep the same call -> leg lock order as terminal finalization. On an
+    // Event-UUID conflict PostgreSQL may not take the parent FK lock for the
+    // skipped insert, so the explicit row lock is required on every replay.
+    await client.query("select id from calls where id = $1 for update", [input.callId]);
+    await persistTaggedFreeSwitchCallEvent(client, input);
+
+    if (input.legUuid) {
+      await client.query(
+        `
+          update call_legs
+          set freeswitch_uuid = coalesce(freeswitch_uuid, $2),
+              state = case
+                when state = 'ended' or $3 = 'ended' then 'ended'
+                when state = 'answered' or $3 = 'answered' then 'answered'
+                when state = 'started' or $3 = 'started' then 'started'
+                else state
+              end,
+              answered_at = case when $4 then coalesce(answered_at, now()) else answered_at end,
+              ended_at = case when $5 then coalesce(ended_at, now()) else ended_at end
+          where call_id = $1
+            and type = $6
+        `,
+        [
+          input.callId,
+          input.legUuid,
+          mapEventToLegState(input.eventName),
+          input.eventName === "CHANNEL_ANSWER",
+          isTerminalEvent(input.eventName),
+          input.legType
+        ]
+      );
+    }
+
+    if (input.eventName === "CHANNEL_CREATE" && input.legType === "customer") {
+      await client.query(
+        `
+          update calls
+          set state = 'customer_dialing',
+              updated_at = now()
+          where id = $1
+            and ended_at is null
+            and state in ('created', 'agent_ringing', 'agent_answered', 'customer_dialing')
+        `,
+        [input.callId]
+      );
+    }
+
+    if (input.eventName === "CHANNEL_ANSWER" && input.legType === "agent") {
+      await client.query(
+        `
+          update calls
+          set state = 'agent_answered',
+              updated_at = now()
+          where id = $1
+            and ended_at is null
+            and state in ('created', 'agent_ringing', 'agent_answered')
+        `,
+        [input.callId]
+      );
+    }
+
+    if (
+      (input.eventName === "CHANNEL_ANSWER" && input.legType === "customer") ||
+      input.eventName === "CHANNEL_BRIDGE"
+    ) {
+      await client.query(
+        `
+          update calls
+          set state = case
+                when state in (
+                  'created',
+                  'agent_ringing',
+                  'agent_answered',
+                  'customer_dialing',
+                  'customer_ringing',
+                  'bridged'
+                ) then 'bridged'
+                else state
+              end,
+              answered_at = coalesce(answered_at, now()),
+              updated_at = now()
+          where id = $1
+            and ended_at is null
+            and state not in ('completed', 'failed', 'canceled')
+        `,
+        [input.callId]
+      );
+    }
+
+    await client.query("commit");
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function persistTaggedFreeSwitchCallEvent(
+  queryable: pg.Pool | pg.PoolClient,
+  input: TaggedFreeSwitchCallEventInput
+): Promise<void> {
+  await queryable.query(
+    `
+      insert into call_events (
+        call_id,
+        agent_id,
+        event_type,
+        state,
+        freeswitch_event_name,
+        freeswitch_event_uuid,
+        agent_leg_uuid,
+        customer_leg_uuid,
+        raw_json
+      )
+      values (
+        $1,
+        (select agent_id from calls where id = $1),
+        $2,
+        $3,
+        $4,
+        $5,
+        $6,
+        $7,
+        $8::jsonb
+      )
+      on conflict (freeswitch_event_uuid)
+        where freeswitch_event_uuid is not null
+        do nothing
+    `,
+    [
+      input.callId,
+      input.eventType,
+      input.state,
+      input.eventName,
+      input.eventUuid,
+      input.legType === "agent" ? input.legUuid : null,
+      input.legType === "customer" ? input.legUuid : null,
+      input.raw
+    ]
+  );
 }
 
 type FreeSwitchApiCommandSender = typeof sendFreeSwitchApiCommand;
@@ -1024,47 +1074,75 @@ async function releaseAgentAfterVoicemailPlaybackStarts(
     return;
   }
 
-  await pool.query(
-    `
-      insert into call_events (
-        call_id,
-        agent_id,
-        event_type,
-        state,
-        api_command_name,
-        agent_leg_uuid,
-        customer_leg_uuid,
-        raw_json
-      )
-      values ($1, $2, 'agent_released', 'agent_released', 'uuid_kill', $3, $4, $5::jsonb)
-      on conflict do nothing
-    `,
-    [input.callId, input.agentId, input.agentLegUuid, input.customerLegUuid, JSON.stringify(releaseResult)]
-  );
-  await pool.query(
-    `
-      update calls
-      set state = 'agent_released',
-          agent_released_at = coalesce(agent_released_at, now()),
-          updated_at = now()
-      where id = $1
-        and ended_at is null
-        and state in ('voicemail_drop_requested', 'voicemail_playback_started', 'agent_released')
-    `,
-    [input.callId]
-  );
-  await pool.query(
-    `
-      update call_legs
-      set state = 'ended',
-          ended_at = coalesce(ended_at, now())
-      where call_id = $1
-        and type = 'agent'
-    `,
-    [input.callId]
-  );
-  if (input.agentId) {
-    await finishAgentCall(pool, input.agentId);
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const owner = await lockCallOwnerAgent(client, input.callId);
+    if (!owner.found) {
+      await client.query("rollback");
+      return;
+    }
+    const call = await client.query<{ state: string }>(
+      `
+        select state
+        from calls
+        where id = $1
+          and ended_at is null
+          and state in ('voicemail_drop_requested', 'voicemail_playback_started', 'agent_released')
+        for update
+      `,
+      [input.callId]
+    );
+    if (!call.rowCount) {
+      await client.query("rollback");
+      return;
+    }
+    await client.query(
+      `
+        insert into call_events (
+          call_id,
+          agent_id,
+          event_type,
+          state,
+          api_command_name,
+          agent_leg_uuid,
+          customer_leg_uuid,
+          raw_json
+        )
+        values ($1, $2, 'agent_released', 'agent_released', 'uuid_kill', $3, $4, $5::jsonb)
+        on conflict do nothing
+      `,
+      [input.callId, owner.agentId, input.agentLegUuid, input.customerLegUuid, JSON.stringify(releaseResult)]
+    );
+    await client.query(
+      `
+        update calls
+        set state = 'agent_released',
+            agent_released_at = coalesce(agent_released_at, now()),
+            updated_at = now()
+        where id = $1
+      `,
+      [input.callId]
+    );
+    await client.query(
+      `
+        update call_legs
+        set state = 'ended',
+            ended_at = coalesce(ended_at, now())
+        where call_id = $1
+          and type = 'agent'
+      `,
+      [input.callId]
+    );
+    if (owner.agentId) {
+      await finishAgentCall(client, owner.agentId);
+    }
+    await client.query("commit");
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
+  } finally {
+    client.release();
   }
 }
 
@@ -1079,6 +1157,11 @@ async function finalizeCompletedVoicemailPlayback(
   const client = await pool.connect();
   try {
     await client.query("begin");
+    const owner = await lockCallOwnerAgent(client, callId);
+    if (!owner.found) {
+      await client.query("rollback");
+      return;
+    }
     const updated = await client.query<{
       agent_id: string | null;
       agent_released_at: Date | null;
@@ -1199,6 +1282,11 @@ async function finalizeIncompleteVoicemailPlayback(
   const client = await pool.connect();
   try {
     await client.query("begin");
+    const owner = await lockCallOwnerAgent(client, input.callId);
+    if (!owner.found) {
+      await client.query("rollback");
+      return;
+    }
     const updated = await client.query(
       `
         with stamp as (
@@ -1254,7 +1342,7 @@ async function finalizeIncompleteVoicemailPlayback(
       `,
       [
         input.callId,
-        input.agentId,
+        owner.agentId,
         eventType,
         eventType,
         input.customerLegUuid,
@@ -1282,8 +1370,8 @@ async function finalizeIncompleteVoicemailPlayback(
         [input.contactId]
       );
     }
-    if (input.agentId && !input.agentReleased) {
-      await finishAgentCall(client, input.agentId);
+    if (owner.agentId && !input.agentReleased) {
+      await finishAgentCall(client, owner.agentId);
     }
     await client.query("commit");
   } catch (error) {
@@ -1300,25 +1388,6 @@ async function persistVoicemailDetectionEvent(pool: pg.Pool, frame: EslFrame): P
     return;
   }
 
-  const call = await pool.query<{ call_id: string; agent_id: string | null; call_state: string }>(
-    `
-      select calls.id as call_id, calls.agent_id, calls.state as call_state
-      from call_legs
-      join calls on calls.id = call_legs.call_id
-      where call_legs.freeswitch_uuid = $1
-        and call_legs.type = 'customer'
-        and calls.ended_at is null
-        and calls.state not in ('completed', 'failed', 'canceled')
-      order by calls.created_at desc
-      limit 1
-    `,
-    [legUuid]
-  );
-  const row = call.rows[0];
-  if (!row) {
-    return;
-  }
-
   const signal = mapVoicemailDetectionSignal(frame);
   if (!signal) {
     return;
@@ -1328,40 +1397,81 @@ async function persistVoicemailDetectionEvent(pool: pg.Pool, frame: EslFrame): P
     headers: frame.headers,
     body: frame.body
   });
+  const eventUuid = getFreeSwitchEventUuid(frame);
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const call = await client.query<{ call_id: string; agent_id: string | null; call_state: string }>(
+      `
+        select calls.id as call_id, calls.agent_id, calls.state as call_state
+        from call_legs
+        join calls on calls.id = call_legs.call_id
+        where call_legs.freeswitch_uuid = $1
+          and call_legs.type = 'customer'
+          and calls.ended_at is null
+          and calls.state not in ('completed', 'failed', 'canceled')
+        order by calls.created_at desc
+        limit 1
+        for update of calls
+      `,
+      [legUuid]
+    );
+    const row = call.rows[0];
+    if (!row) {
+      await client.query("rollback");
+      return;
+    }
 
-  await pool.query(
-    `
-      insert into voicemail_detection_events (call_id, signal_type, confidence, raw_json)
-      values ($1, $2, $3, $4::jsonb)
-    `,
-    [row.call_id, signal.signalType, signal.confidence, raw]
-  );
-  await pool.query(
-    `
-      insert into call_events (
-        call_id,
-        agent_id,
-        event_type,
-        state,
-        freeswitch_event_name,
-        customer_leg_uuid,
-        raw_json
-      )
-      values ($1, $2, $3, $4, 'CUSTOM', $5, $6::jsonb)
-    `,
-    [row.call_id, row.agent_id, signal.eventType, row.call_state, legUuid, raw]
-  );
-  await pool.query(
-    `
-      update calls
-      set voicemail_signal_status = $2,
-          updated_at = now()
-      where id = $1
-        and state not in ('completed', 'failed', 'canceled')
-        and ($2 = 'detected' or voicemail_signal_status is null or voicemail_signal_status = 'none')
-    `,
-    [row.call_id, signal.status]
-  );
+    const claimed = await client.query<{ id: string }>(
+      `
+        insert into call_events (
+          call_id,
+          agent_id,
+          event_type,
+          state,
+          freeswitch_event_name,
+          freeswitch_event_uuid,
+          customer_leg_uuid,
+          raw_json
+        )
+        values ($1, $2, $3, $4, 'CUSTOM', $5, $6, $7::jsonb)
+        on conflict (freeswitch_event_uuid)
+          where freeswitch_event_uuid is not null
+          do nothing
+        returning id
+      `,
+      [row.call_id, row.agent_id, signal.eventType, row.call_state, eventUuid, legUuid, raw]
+    );
+    if (eventUuid && !claimed.rowCount) {
+      await client.query("rollback");
+      return;
+    }
+
+    await client.query(
+      `
+        insert into voicemail_detection_events (call_id, signal_type, confidence, raw_json)
+        values ($1, $2, $3, $4::jsonb)
+      `,
+      [row.call_id, signal.signalType, signal.confidence, raw]
+    );
+    await client.query(
+      `
+        update calls
+        set voicemail_signal_status = $2,
+            updated_at = now()
+        where id = $1
+          and state not in ('completed', 'failed', 'canceled')
+          and ($2 = 'detected' or voicemail_signal_status is null or voicemail_signal_status = 'none')
+      `,
+      [row.call_id, signal.status]
+    );
+    await client.query("commit");
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 async function persistAgentRegistrationEvent(
@@ -1409,21 +1519,17 @@ async function persistBackgroundJobEvent(config: AppConfig, pool: pg.Pool, frame
 
   const result = await pool.query<{
     call_id: string;
-    agent_id: string | null;
     customer_leg_uuid: string | null;
   }>(
     `
       select
         calls.id as call_id,
-        calls.agent_id,
         call_legs.freeswitch_uuid as customer_leg_uuid
       from call_events
       join calls on calls.id = call_events.call_id
       left join call_legs on call_legs.call_id = calls.id and call_legs.type = 'customer'
       where call_events.event_type in ('freeswitch_originate_queued', 'freeswitch_agent_bridge_originate_queued')
         and call_events.raw_json ->> 'jobUuid' = $1
-        and calls.ended_at is null
-        and calls.state not in ('completed', 'failed', 'canceled')
       order by call_events.created_at desc
       limit 1
     `,
@@ -1439,65 +1545,21 @@ async function persistBackgroundJobEvent(config: AppConfig, pool: pg.Pool, frame
     body: frame.body
   });
 
-  await pool.query(
-    `
-      insert into call_events (
-        call_id,
-        agent_id,
-        event_type,
-        state,
-        freeswitch_event_name,
-        api_command_name,
-        customer_leg_uuid,
-        raw_json
-      )
-      values ($1, $2, 'freeswitch_background_job_failed', 'failed', 'BACKGROUND_JOB', $3, $4, $5::jsonb)
-    `,
-    [row.call_id, row.agent_id, frame.headers["job-command"] ?? "bgapi originate", row.customer_leg_uuid, raw]
-  );
-  await pool.query(
-    `
-      with stamp as (select clock_timestamp() as persisted_at)
-      update calls
-      set state = 'failed',
-          outcome = 'failed',
-          ended_at = stamp.persisted_at,
-          terminal_persisted_at = stamp.persisted_at,
-          terminal_source = 'background_job_failure',
-          updated_at = stamp.persisted_at
-      from stamp
-      where id = $1
-        and ended_at is null
-        and state not in ('completed', 'failed', 'canceled')
-    `,
-    [row.call_id]
-  );
-  await pool.query(
-    `
-      update call_legs
-      set state = 'ended',
-          ended_at = coalesce(ended_at, now())
-      where call_id = $1
-    `,
-    [row.call_id]
-  );
-  if (row.agent_id) {
-    await finishAgentCall(pool, row.agent_id);
-  }
-  await pool.query(
-    `
-      update contacts
-      set status = 'new',
-          updated_at = now()
-      where id = (
-        select contact_id
-        from calls
-        where id = $1
-      )
-        and status = 'calling'
-    `,
-    [row.call_id]
-  );
+  await finalizeCallTransaction(pool, {
+    callId: row.call_id,
+    event: {
+      apiCommandName: frame.headers["job-command"] ?? "bgapi originate",
+      customerLegUuid: row.customer_leg_uuid,
+      eventType: "freeswitch_background_job_failed",
+      freeswitchEventName: "BACKGROUND_JOB",
+      freeswitchEventUuid: getFreeSwitchEventUuid(frame),
+      raw: JSON.parse(raw) as Record<string, unknown>,
+      state: "failed"
+    },
+    persistEventWhenAlreadyFinalized: true,
+    resolve: () => ({ outcome: "failed", state: "failed" }),
+    terminal: { source: "background_job_failure" }
+  });
 }
 
 interface ReconciledCallRow {
@@ -1616,6 +1678,17 @@ export async function reconcileActiveCalls(
     }
   }
 
+  let repaired = 0;
+  try {
+    repaired = await repairFinalizedCallConsistency(pool);
+  } catch (error) {
+    errors += 1;
+    logger.warn(
+      { message: error instanceof Error ? error.message : String(error) },
+      "failed to repair finalized call consistency"
+    );
+  }
+
   await pool.query(
     `
       update telephony_observability_state
@@ -1631,9 +1704,66 @@ export async function reconcileActiveCalls(
   );
 
   logger.info(
-    { checked: result.rows.length, closed, errors, missing },
+    { checked: result.rows.length, closed, errors, missing, repaired },
     "FreeSWITCH active-call reconciliation completed"
   );
+}
+
+export async function repairFinalizedCallConsistency(pool: pg.Pool, limit = 100): Promise<number> {
+  const candidates = await pool.query<{ call_id: string }>(
+    `
+      select calls.id as call_id
+      from calls
+      left join agents on agents.id = calls.agent_id
+      left join contacts on contacts.id = calls.contact_id
+      where (calls.ended_at is not null or calls.state in ('completed', 'failed', 'canceled'))
+        and (
+          (calls.ended_at is null and calls.state in ('completed', 'failed', 'canceled'))
+          or (
+            calls.ended_at is not null
+            and (calls.state not in ('completed', 'failed', 'canceled') or calls.outcome is null)
+          )
+          or (
+            contacts.status = 'calling'
+            and not exists (
+              select 1
+              from calls newer_active_call
+              where newer_active_call.contact_id = calls.contact_id
+                and newer_active_call.id <> calls.id
+                and newer_active_call.ended_at is null
+                and newer_active_call.state not in ('completed', 'failed', 'canceled')
+            )
+          )
+          or exists (
+            select 1
+            from call_legs
+            where call_legs.call_id = calls.id
+              and (call_legs.state <> 'ended' or call_legs.ended_at is null)
+          )
+          or (
+            agents.status = 'in_call'
+            and not exists (
+              select 1
+              from calls active_call
+              where active_call.agent_id = calls.agent_id
+                and active_call.ended_at is null
+                and active_call.state not in ('completed', 'failed', 'canceled', 'agent_released')
+            )
+          )
+        )
+      order by coalesce(calls.ended_at, calls.updated_at) asc
+      limit $1
+    `,
+    [limit]
+  );
+
+  let repaired = 0;
+  for (const candidate of candidates.rows) {
+    if (await repairFinalizedCallTransaction(pool, candidate.call_id)) {
+      repaired += 1;
+    }
+  }
+  return repaired;
 }
 
 async function abortTimedOutVoicemailDrop(
@@ -1686,78 +1816,29 @@ async function freeSwitchUuidExists(
 }
 
 async function finalizeMissingActiveCall(
-  config: AppConfig,
+  _config: AppConfig,
   pool: pg.Pool,
   call: ReconciledCallRow
 ): Promise<void> {
-  const outcome = call.answered_at ? "customer_hung_up" : "failed";
-  const terminalState = outcome === "failed" ? "failed" : "completed";
-  const updated = await pool.query(
-    `
-      update calls
-      set state = $2,
-          outcome = $3,
-          ended_at = coalesce(ended_at, now()),
-          terminal_persisted_at = coalesce(terminal_persisted_at, clock_timestamp()),
-          terminal_source = coalesce(terminal_source, 'active_call_reconciliation'),
-          updated_at = now()
-      where id = $1
-        and ended_at is null
-        and state not in ('completed', 'failed', 'canceled')
-      returning agent_id, contact_id
-    `,
-    [call.call_id, terminalState, outcome]
-  );
-  if (!updated.rowCount) {
-    return;
-  }
-  await pool.query(
-    `
-      insert into call_events (
-        call_id,
-        agent_id,
-        event_type,
-        state,
-        api_command_name,
-        agent_leg_uuid,
-        customer_leg_uuid,
-        raw_json
-      )
-      values ($1, $2, 'freeswitch_reconciliation_closed_missing_call', $3, 'uuid_exists', $4, $5, $6::jsonb)
-    `,
-    [
-      call.call_id,
-      call.agent_id,
-      terminalState,
-      call.agent_leg_uuid,
-      call.customer_leg_uuid,
-      JSON.stringify({ answered: Boolean(call.answered_at), outcome })
-    ]
-  );
-  await pool.query(
-    `
-      update call_legs
-      set state = 'ended',
-          ended_at = coalesce(ended_at, now())
-      where call_id = $1
-    `,
-    [call.call_id]
-  );
-  if (call.contact_id) {
-    await pool.query(
-      `
-        update contacts
-        set status = $2,
-            updated_at = now()
-        where id = $1
-          and status = 'calling'
-      `,
-      [call.contact_id, contactStatusForOutcome(outcome)]
-    );
-  }
-  if (call.agent_id) {
-    await finishAgentCall(pool, call.agent_id);
-  }
+  await finalizeCallTransaction(pool, {
+    callId: call.call_id,
+    event: {
+      agentLegUuid: call.agent_leg_uuid,
+      apiCommandName: "uuid_exists",
+      customerLegUuid: call.customer_leg_uuid,
+      eventType: "freeswitch_reconciliation_closed_missing_call",
+      raw: { answered: Boolean(call.answered_at) },
+      state: call.answered_at ? "completed" : "failed"
+    },
+    resolve: (lockedCall) => {
+      const outcome = lockedCall.answeredAt ? "customer_hung_up" : "failed";
+      return {
+        outcome,
+        state: outcome === "failed" ? "failed" : "completed"
+      };
+    },
+    terminal: { source: "active_call_reconciliation" }
+  });
 }
 
 function extractFrames(buffer: string): { frames: EslFrame[]; rest: string } {
@@ -2038,9 +2119,7 @@ function contactStatusForOutcome(
     | "voicemail_dropped"
     | "agent_canceled"
 ): "completed" | "new" {
-  return ["answered", "customer_hung_up", "voicemail_detected", "voicemail_dropped"].includes(outcome)
-    ? "completed"
-    : "new";
+  return contactStatusForCallOutcome(outcome);
 }
 
 function isVoicemailDropActiveState(state: string): boolean {
@@ -2063,6 +2142,11 @@ function isUuid(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
+function getFreeSwitchEventUuid(frame: EslFrame): string | null {
+  const eventUuid = frame.headers["event-uuid"]?.trim();
+  return eventUuid && isUuid(eventUuid) ? eventUuid.toLowerCase() : null;
+}
+
 export const __testing = {
   buildCallRecordingPath,
   eventNames: EVENT_NAMES,
@@ -2072,6 +2156,7 @@ export const __testing = {
   isTransientPersistenceError,
   isTerminalEvent,
   isUuid,
+  getFreeSwitchEventUuid,
   isAgentRegistrationEvent,
   isVoicemailPlaybackEvent,
   isVoicemailDetectionEvent,

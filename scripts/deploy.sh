@@ -7,6 +7,9 @@ ENV_FILE="${ENV_FILE:-${ROOT_DIR}/.env}"
 STATE_FILE="${ROOT_DIR}/logs/deployment-state.env"
 # shellcheck disable=SC1091
 source "${ROOT_DIR}/scripts/deployment-state.sh"
+# shellcheck disable=SC1091
+source "${ROOT_DIR}/scripts/host-operation-lock.sh"
+acquire_host_operation_lock "${ROOT_DIR}" "deployment"
 
 if [[ "${DEPLOY_PULL:-false}" == "true" ]]; then
   git -C "${ROOT_DIR}" pull --ff-only
@@ -105,6 +108,7 @@ compose exec -T prometheus wget -q -O /dev/null --post-data="" http://127.0.0.1:
 ENV_FILE="${ENV_FILE}" APP_VERSION="${new_version}" "${ROOT_DIR}/scripts/ensure-cert.sh"
 ENV_FILE="${ENV_FILE}" "${ROOT_DIR}/scripts/install-cert-renew-cron.sh"
 ENV_FILE="${ENV_FILE}" "${ROOT_DIR}/scripts/install-backup-cron.sh"
+ENV_FILE="${ENV_FILE}" APP_VERSION="${new_version}" "${ROOT_DIR}/scripts/verify-runtime-services.sh"
 WEB_SMOKE_URL="${WEB_SMOKE_URL:-https://${LETSENCRYPT_DOMAIN}}" "${ROOT_DIR}/scripts/smoke-web.sh"
 compose ps
 

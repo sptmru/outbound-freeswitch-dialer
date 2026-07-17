@@ -1,11 +1,38 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { renderAlertmanager } from "../scripts/render-monitoring-config.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
+
+test("monitoring renderer creates the atomically replaceable Alertmanager directory", async () => {
+  const output = await mkdtemp(join(tmpdir(), "outbound-dialer-monitoring-render-"));
+  try {
+    const rendered = spawnSync(
+      process.execPath,
+      [join(root, "scripts/render-monitoring-config.mjs"), output],
+      {
+        cwd: root,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          LETSENCRYPT_DOMAIN: "dialer.example.test",
+          GRAFANA_DOMAIN: "grafana.example.test",
+          GRAFANA_ADMIN_PASSWORD: "test-password-at-least-16"
+        }
+      }
+    );
+    assert.equal(rendered.status, 0, rendered.stderr || rendered.stdout);
+    assert.match(await readFile(join(output, "alertmanager", "alertmanager.yml"), "utf8"), /route:/);
+  } finally {
+    await rm(output, { recursive: true, force: true });
+  }
+});
 
 test("monitoring config renders a native Slack receiver", () => {
   const rendered = renderAlertmanager({
@@ -43,6 +70,7 @@ test("monitoring dashboard provisions the application link and PCAP panels", () 
 
   assert.equal(dashboard.links[0].url, "https://__APP_DOMAIN__/call-history");
   assert.match(renderer, /replaceAll\("__APP_DOMAIN__", appDomain\)/);
+  assert.match(renderer, /resolve\(outputDirectory, "alertmanager"\)/);
   assert.deepEqual(
     dashboard.panels.filter((panel) => panel.id >= 12 && panel.id <= 16).map((panel) => panel.title),
     [

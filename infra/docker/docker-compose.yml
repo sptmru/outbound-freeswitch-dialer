@@ -1,7 +1,15 @@
+x-default-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
+    pids_limit: 256
+    logging: *default-logging
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
@@ -20,6 +28,8 @@ services:
       context: ../..
       dockerfile: apps/api/Dockerfile
     restart: unless-stopped
+    pids_limit: 256
+    logging: *default-logging
     init: true
     read_only: true
     cap_drop:
@@ -59,6 +69,8 @@ services:
       ORIGINATE_WATCHDOG_RETRY_SECONDS: ${ORIGINATE_WATCHDOG_RETRY_SECONDS:-5}
       ORIGINATE_WATCHDOG_MAX_RETRIES: ${ORIGINATE_WATCHDOG_MAX_RETRIES:-3}
       CALL_HISTORY_EXPORT_MAX_ROWS: ${CALL_HISTORY_EXPORT_MAX_ROWS:-50000}
+      CSV_UPLOAD_MAX_BYTES: ${CSV_UPLOAD_MAX_BYTES:-5242880}
+      CSV_IMPORT_MAX_ROWS: ${CSV_IMPORT_MAX_ROWS:-25000}
       BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:-}
       BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-}
       BOOTSTRAP_ADMIN_NAME: ${BOOTSTRAP_ADMIN_NAME:-Admin}
@@ -89,6 +101,7 @@ services:
       TURN_SHARED_SECRET: ${TURN_SHARED_SECRET:-}
       TURN_CREDENTIAL_TTL_SECONDS: ${TURN_CREDENTIAL_TTL_SECONDS:-3600}
       MONITORING_STUCK_CALL_SECONDS: ${MONITORING_STUCK_CALL_SECONDS:-900}
+      METRICS_REFRESH_INTERVAL_SECONDS: ${METRICS_REFRESH_INTERVAL_SECONDS:-15}
       SIP_TRUNK_MODE: ${SIP_TRUNK_MODE:-registration}
       SIP_TRUNK_PROXY: ${SIP_TRUNK_PROXY:-}
       SIP_TRUNK_USERNAME: ${SIP_TRUNK_USERNAME:-}
@@ -117,7 +130,7 @@ services:
       - ../freeswitch/recordings:/var/lib/freeswitch/storage/recordings
       - pcap_storage:/var/lib/outbound-dialer/pcaps
       - pcap_socket:/run/outbound-dialer-pcap
-      - ../../monitoring/generated/alertmanager.yml:/var/lib/outbound-dialer/monitoring/alertmanager.yml
+      - ../../monitoring/generated/alertmanager:/var/lib/outbound-dialer/monitoring
     healthcheck:
       test:
         [
@@ -139,6 +152,8 @@ services:
         VITE_API_BASE_URL: ${VITE_API_BASE_URL:-/api}
         VITE_SIP_DIAGNOSTICS: ${VITE_SIP_DIAGNOSTICS:-false}
     restart: unless-stopped
+    pids_limit: 128
+    logging: *default-logging
     labels:
       com.outbound-dialer.version: ${APP_VERSION:-local}
     depends_on:
@@ -158,6 +173,25 @@ services:
       context: ../..
       dockerfile: infra/proxy/Dockerfile
     restart: unless-stopped
+    init: true
+    read_only: true
+    pids_limit: 128
+    logging: *default-logging
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - NET_BIND_SERVICE
+      - SETGID
+      - SETUID
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /etc/nginx/conf.d:rw,noexec,nosuid,size=1m
+      - /etc/nginx/fallback-certs:rw,noexec,nosuid,size=1m
+      - /tmp:rw,noexec,nosuid,size=16m
+      - /var/cache/nginx:rw,noexec,nosuid,size=32m
+      - /var/run:rw,noexec,nosuid,size=1m
     labels:
       com.outbound-dialer.version: ${APP_VERSION:-local}
     depends_on:
@@ -181,8 +215,8 @@ services:
       - "${HTTP_PORT:-80}:80"
       - "${HTTPS_PORT:-443}:443"
     volumes:
-      - letsencrypt:/etc/letsencrypt
-      - certbot_www:/var/www/certbot
+      - letsencrypt:/etc/letsencrypt:ro
+      - certbot_www:/var/www/certbot:ro
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- --no-check-certificate https://127.0.0.1/ >/dev/null"]
       interval: 15s
@@ -193,6 +227,8 @@ services:
     image: ${CERTBOT_IMAGE:-certbot/certbot@sha256:6bb19cff0b3972a69855686e0ccbd20b98dbfae2aa43845a5df48947ba1401b4}
     profiles:
       - tools
+    pids_limit: 128
+    logging: *default-logging
     volumes:
       - letsencrypt:/etc/letsencrypt
       - certbot_www:/var/www/certbot
@@ -200,6 +236,8 @@ services:
   coturn:
     image: ${COTURN_IMAGE:-coturn/coturn:4.14.0-r0@sha256:0c0e8fc0c263b85a134e9e4242b5e46e1f4c077c5029633511191c05b5c2c814}
     restart: unless-stopped
+    pids_limit: 256
+    logging: *default-logging
     init: true
     read_only: true
     network_mode: host
@@ -236,6 +274,8 @@ services:
       args:
         FREESWITCH_BASE_IMAGE: ${FREESWITCH_BASE_IMAGE:-safarov/freeswitch@sha256:b31c743f4c911a19687c61e3214968f2a24f93f9d3d667cc26284192e158ffc6}
     restart: unless-stopped
+    pids_limit: 1024
+    logging: *default-logging
     labels:
       com.outbound-dialer.version: ${APP_VERSION:-local}
     network_mode: host
@@ -275,6 +315,8 @@ services:
       context: ../..
       dockerfile: infra/pcap/Dockerfile
     restart: unless-stopped
+    pids_limit: 256
+    logging: *default-logging
     init: true
     labels:
       com.outbound-dialer.version: ${APP_VERSION:-local}
@@ -344,6 +386,8 @@ services:
     image: node:22-alpine
     profiles:
       - tools
+    pids_limit: 128
+    logging: *default-logging
     environment:
       LETSENCRYPT_DOMAIN: ${LETSENCRYPT_DOMAIN}
       GRAFANA_DOMAIN: ${GRAFANA_DOMAIN}
@@ -364,6 +408,8 @@ services:
   prometheus:
     image: prom/prometheus:v3.12.0
     restart: unless-stopped
+    pids_limit: 256
+    logging: *default-logging
     command:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.path=/prometheus
@@ -380,23 +426,37 @@ services:
       - cadvisor
       - postgres-exporter
       - blackbox-exporter
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9090/-/ready >/dev/null"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
 
   alertmanager:
     image: prom/alertmanager:v0.32.1
     restart: unless-stopped
+    pids_limit: 128
+    logging: *default-logging
     command:
       - --config.file=/etc/alertmanager/alertmanager.yml
       - --storage.path=/alertmanager
       - --data.retention=${ALERTMANAGER_RETENTION:-120h}
     volumes:
-      - ../../monitoring/generated/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - ../../monitoring/generated/alertmanager:/etc/alertmanager:ro
       - alertmanager_data:/alertmanager
     group_add:
       - "0"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9093/-/ready >/dev/null"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
 
   grafana:
     image: grafana/grafana:13.0.2
     restart: unless-stopped
+    pids_limit: 256
+    logging: *default-logging
     environment:
       GF_SERVER_DOMAIN: ${GRAFANA_DOMAIN:-grafana.localhost}
       GF_SERVER_ROOT_URL: https://${GRAFANA_DOMAIN:-grafana.localhost}
@@ -417,10 +477,17 @@ services:
     depends_on:
       - prometheus
       - loki
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/api/health >/dev/null"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
 
   node-exporter:
     image: prom/node-exporter:v1.11.1
     restart: unless-stopped
+    pids_limit: 128
+    logging: *default-logging
     pid: host
     command:
       - --path.rootfs=/host
@@ -433,6 +500,8 @@ services:
   cadvisor:
     image: ghcr.io/google/cadvisor:v0.57.0
     restart: unless-stopped
+    pids_limit: 256
+    logging: *default-logging
     privileged: true
     devices:
       - /dev/kmsg:/dev/kmsg
@@ -446,6 +515,8 @@ services:
   postgres-exporter:
     image: quay.io/prometheuscommunity/postgres-exporter:v0.19.1
     restart: unless-stopped
+    pids_limit: 128
+    logging: *default-logging
     environment:
       DATA_SOURCE_URI: postgres:5432/${POSTGRES_DB}?sslmode=disable
       DATA_SOURCE_USER: outbound_dialer_exporter
@@ -457,12 +528,16 @@ services:
   blackbox-exporter:
     image: prom/blackbox-exporter:v0.28.0
     restart: unless-stopped
+    pids_limit: 128
+    logging: *default-logging
     volumes:
       - ../../monitoring/blackbox/blackbox.yml:/etc/blackbox_exporter/config.yml:ro
 
   loki:
     image: grafana/loki:3.7.2
     restart: unless-stopped
+    pids_limit: 256
+    logging: *default-logging
     command:
       - -config.file=/etc/loki/loki.yml
       - -config.expand-env=true
@@ -475,6 +550,8 @@ services:
   docker-socket-proxy:
     image: ghcr.io/tecnativa/docker-socket-proxy@sha256:1f3a6f303320723d199d2316a3e82b2e2685d86c275d5e3deeaf182573b47476
     restart: unless-stopped
+    pids_limit: 128
+    logging: *default-logging
     read_only: true
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=16m
@@ -500,6 +577,8 @@ services:
   alloy:
     image: grafana/alloy:v1.16.1
     restart: unless-stopped
+    pids_limit: 256
+    logging: *default-logging
     command:
       - run
       - --server.http.listen-addr=0.0.0.0:12345

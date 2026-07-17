@@ -3,6 +3,7 @@ import { createReadStream, createWriteStream } from "node:fs";
 import { mkdir, stat, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
+import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type pg from "pg";
 import type {
@@ -118,9 +119,11 @@ import {
   getActiveCallActions,
   getCallDetail,
   getCallHistoryPage,
+  getCallHistoryPageBounds,
   getCallRecordingAudioFile,
   mapCallStatus,
-  mapVoicemailSignal
+  mapVoicemailSignal,
+  type CallHistoryFilters
 } from "./responders.js";
 import { findSuppression } from "./suppression.js";
 import { runRetention } from "./retention.js";
@@ -189,7 +192,7 @@ const suppressContactSchema = z.object({
 
 const importCsvSchema = z.object({
   filename: z.string().min(1).max(240),
-  csvText: z.string().min(1).max(2_000_000)
+  csvText: z.string().min(1).max(67_108_864)
 }) satisfies z.ZodType<ImportCsvRequest>;
 
 const contactsQuerySchema = z.object({
@@ -295,6 +298,7 @@ export function registerDashboardRoutes(
   pool: pg.Pool,
   runtimeSettings = new RuntimeSettingsService(pool, config)
 ): void {
+  const csvJsonBodyLimit = Math.min(67_108_864, (config.CSV_UPLOAD_MAX_BYTES ?? 5_242_880) * 2 + 65_536);
   const contactRetryPolicy = {
     get maxAttempts() {
       return config.CONTACT_MAX_ATTEMPTS;
@@ -452,52 +456,20 @@ export function registerDashboardRoutes(
       return;
     }
     const query = callHistoryQuerySchema.omit({ page: true, pageSize: true }).parse(request.query);
-    const first = await getCallHistoryPage(pool, { ...query, page: 1, pageSize: 100 });
-    if (first.total > config.CALL_HISTORY_EXPORT_MAX_ROWS) {
+    const exportResult = await openCallHistoryCsvExport(pool, query, config.CALL_HISTORY_EXPORT_MAX_ROWS);
+    if (!exportResult.stream) {
       reply.code(413).send({
-        message: `Export contains ${first.total} rows; narrow the filters below the configured ${config.CALL_HISTORY_EXPORT_MAX_ROWS}-row limit`
+        message: `Export contains ${exportResult.total} rows; narrow the filters below the configured ${config.CALL_HISTORY_EXPORT_MAX_ROWS}-row limit`
       });
       return;
     }
-    const items = [...first.items];
-    for (let page = 2; page <= first.totalPages; page += 1) {
-      items.push(...(await getCallHistoryPage(pool, { ...query, page, pageSize: 100 })).items);
-    }
-    const csv = [
-      [
-        "created_at",
-        "lead",
-        "phone",
-        "campaign",
-        "agent",
-        "state",
-        "outcome",
-        "duration_seconds",
-        "voicemail_signal",
-        "recording_available"
-      ],
-      ...items.map((item) => [
-        item.createdAt,
-        item.leadName,
-        item.phoneNumber,
-        item.campaignName,
-        item.agentName,
-        item.state,
-        item.outcome ?? "",
-        String(item.durationSeconds),
-        item.voicemailSignal ?? "",
-        String(item.recordingAvailable)
-      ])
-    ]
-      .map((row) => row.map(csvCell).join(","))
-      .join("\n");
     reply
       .header("Content-Type", "text/csv; charset=utf-8")
       .header(
         "Content-Disposition",
         `attachment; filename="call-history-${new Date().toISOString().slice(0, 10)}.csv"`
-      )
-      .send(csv);
+      );
+    reply.send(exportResult.stream);
   });
 
   app.get("/admin/calls/:callId", async (request, reply): Promise<CallDetailResponse | void> => {
@@ -1370,6 +1342,7 @@ export function registerDashboardRoutes(
 
   app.post(
     "/admin/campaigns/:campaignId/import-csv",
+    { bodyLimit: csvJsonBodyLimit },
     async (request, reply): Promise<ImportCsvResponse | void> => {
       const user = await requireAdmin(request, reply, config, pool);
       if (!user) {
@@ -1383,7 +1356,10 @@ export function registerDashboardRoutes(
       }
 
       try {
-        const parsed = parseCsv(input.csvText);
+        const parsed = parseCsv(input.csvText, {
+          maxBytes: config.CSV_UPLOAD_MAX_BYTES,
+          maxRows: config.CSV_IMPORT_MAX_ROWS
+        });
         if (parsed.rows.length === 0) {
           return reply.code(400).send({ message: "CSV has no data rows" });
         }
@@ -1416,20 +1392,32 @@ export function registerDashboardRoutes(
       }
 
       const params = z.object({ campaignId: z.string().uuid() }).parse(request.params);
-      const file = await request.file();
+      let file;
+      try {
+        file = await request.file({ limits: { fileSize: config.CSV_UPLOAD_MAX_BYTES, files: 1 } });
+      } catch (error) {
+        if (isMultipartFileTooLarge(error)) {
+          return reply
+            .code(413)
+            .send({ message: `CSV exceeds configured limit of ${config.CSV_UPLOAD_MAX_BYTES} bytes` });
+        }
+        throw error;
+      }
       if (!file) {
         return reply.code(400).send({ message: "CSV file is required" });
       }
       if (!isCsvFilename(file.filename)) {
         return reply.code(400).send({ message: "Only .csv files are supported" });
       }
-      if (!(await campaignExists(pool, params.campaignId))) {
-        return reply.code(404).send({ message: "Campaign not found" });
-      }
-
       try {
         const csvText = (await file.toBuffer()).toString("utf8");
-        const parsed = parseCsv(csvText);
+        if (!(await campaignExists(pool, params.campaignId))) {
+          return reply.code(404).send({ message: "Campaign not found" });
+        }
+        const parsed = parseCsv(csvText, {
+          maxBytes: config.CSV_UPLOAD_MAX_BYTES,
+          maxRows: config.CSV_IMPORT_MAX_ROWS
+        });
         if (parsed.rows.length === 0) {
           return reply.code(400).send({ message: "CSV has no data rows" });
         }
@@ -1442,6 +1430,11 @@ export function registerDashboardRoutes(
         );
         return reply.code(201).send(importResult);
       } catch (error) {
+        if (isMultipartFileTooLarge(error)) {
+          return reply
+            .code(413)
+            .send({ message: `CSV exceeds configured limit of ${config.CSV_UPLOAD_MAX_BYTES} bytes` });
+        }
         if (error instanceof CsvImportError) {
           return reply.code(400).send({ message: error.message });
         }
@@ -1565,7 +1558,17 @@ export function registerDashboardRoutes(
       if (!user) {
         return;
       }
-      const file = await request.file();
+      let file;
+      try {
+        file = await request.file({ limits: { fileSize: config.CSV_UPLOAD_MAX_BYTES, files: 1 } });
+      } catch (error) {
+        if (isMultipartFileTooLarge(error)) {
+          return reply
+            .code(413)
+            .send({ message: `CSV exceeds configured limit of ${config.CSV_UPLOAD_MAX_BYTES} bytes` });
+        }
+        throw error;
+      }
       if (!file) {
         return reply.code(400).send({ message: "CSV file is required" });
       }
@@ -1573,7 +1576,10 @@ export function registerDashboardRoutes(
         return reply.code(400).send({ message: "Only .csv files are supported" });
       }
       try {
-        const parsed = parseCsv((await file.toBuffer()).toString("utf8"));
+        const parsed = parseCsv((await file.toBuffer()).toString("utf8"), {
+          maxBytes: config.CSV_UPLOAD_MAX_BYTES,
+          maxRows: config.CSV_IMPORT_MAX_ROWS
+        });
         if (!parsed.rows.length) {
           return reply.code(400).send({ message: "CSV has no data rows" });
         }
@@ -1586,6 +1592,11 @@ export function registerDashboardRoutes(
           })
         );
       } catch (error) {
+        if (isMultipartFileTooLarge(error)) {
+          return reply
+            .code(413)
+            .send({ message: `CSV exceeds configured limit of ${config.CSV_UPLOAD_MAX_BYTES} bytes` });
+        }
         if (error instanceof CsvImportError) {
           return reply.code(400).send({ message: error.message });
         }
@@ -1758,6 +1769,82 @@ function sendDownloadFile(
 function csvCell(value: string): string {
   const spreadsheetSafe = /^[=+\-@]/.test(value.trimStart()) ? `'${value}` : value;
   return `"${spreadsheetSafe.replaceAll('"', '""')}"`;
+}
+
+async function* streamCallHistoryCsv(
+  pool: pg.Pool,
+  filters: Omit<CallHistoryFilters, "page" | "pageSize">,
+  first: CallHistoryResponse,
+  rowBudget: number
+): AsyncGenerator<string> {
+  yield callHistoryCsvRows([
+    [
+      "created_at",
+      "lead",
+      "phone",
+      "campaign",
+      "agent",
+      "state",
+      "outcome",
+      "duration_seconds",
+      "voicemail_signal",
+      "recording_available"
+    ]
+  ]);
+
+  const snapshot = getCallHistoryPageBounds(first).first;
+  let current = first;
+  let emittedRows = 0;
+  while (current.items.length && emittedRows < rowBudget) {
+    const items = current.items.slice(0, rowBudget - emittedRows);
+    yield callHistoryCsvRows(
+      items.map((item) => [
+        item.createdAt,
+        item.leadName,
+        item.phoneNumber,
+        item.campaignName,
+        item.agentName,
+        item.state,
+        item.outcome ?? "",
+        String(item.durationSeconds),
+        item.voicemailSignal ?? "",
+        String(item.recordingAvailable)
+      ])
+    );
+    emittedRows += items.length;
+    if (emittedRows >= rowBudget) break;
+    if (current.items.length < first.pageSize) break;
+    const cursor = getCallHistoryPageBounds(current).last;
+    if (!cursor || !snapshot) break;
+    current = await getCallHistoryPage(pool, {
+      ...filters,
+      page: 1,
+      pageSize: first.pageSize,
+      snapshot,
+      cursor,
+      includeTotal: false
+    });
+    // The count window on keyset pages describes the remaining rows, while
+    // the initial count remains the export-size decision made at request time.
+    if (!current.items.length) break;
+  }
+}
+
+async function openCallHistoryCsvExport(
+  pool: pg.Pool,
+  filters: Omit<CallHistoryFilters, "page" | "pageSize">,
+  maximumRows: number
+): Promise<{ stream: Readable | null; total: number }> {
+  const first = await getCallHistoryPage(pool, { ...filters, page: 1, pageSize: 1_000 });
+  if (first.total > maximumRows) return { stream: null, total: first.total };
+  return {
+    stream: Readable.from(streamCallHistoryCsv(pool, filters, first, Math.min(first.total, maximumRows))),
+    total: first.total
+  };
+}
+
+function callHistoryCsvRows(rows: string[][]): string {
+  return `${rows.map((row) => row.map(csvCell).join(",")).join("\n")}\n`;
 }
 
 function isMissingFileError(error: unknown): boolean {
@@ -1974,6 +2061,15 @@ function isCsvImportCampaignForeignKeyError(error: unknown): error is { code: st
     error.code === "23503" &&
     "constraint" in error &&
     error.constraint === "csv_imports_campaign_id_fkey"
+  );
+}
+
+function isMultipartFileTooLarge(error: unknown): error is { code: string } {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error.code === "FST_REQ_FILE_TOO_LARGE" || error.code === "FST_FILES_LIMIT")
   );
 }
 
@@ -2198,6 +2294,7 @@ async function getCampaignContacts(
 
 export const __testing = {
   buildAgentDeskResponse,
+  callHistoryCsvRows,
   createDialerCall,
   csvCell,
   formatElapsed,
@@ -2212,6 +2309,7 @@ export const __testing = {
   mapCallStatus,
   mapVoicemailSignal,
   normalizePhoneNumber,
+  openCallHistoryCsvExport,
   parseCsv,
   sendAudioFile,
   sendDownloadFile,

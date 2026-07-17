@@ -7,6 +7,9 @@ COMPOSE_FILE="${ROOT_DIR}/infra/docker/docker-compose.yml"
 STATE_FILE="${ROOT_DIR}/logs/deployment-state.env"
 # shellcheck disable=SC1091
 source "${ROOT_DIR}/scripts/deployment-state.sh"
+# shellcheck disable=SC1091
+source "${ROOT_DIR}/scripts/host-operation-lock.sh"
+acquire_host_operation_lock "${ROOT_DIR}" "rollback"
 
 [[ -f "${ENV_FILE}" ]] || { echo "Missing ${ENV_FILE}" >&2; exit 1; }
 [[ -f "${STATE_FILE}" ]] || { echo "No deployment state found" >&2; exit 1; }
@@ -79,6 +82,7 @@ trap mark_rollback_failed ERR
 
 APP_ENV_FILE="${ENV_FILE}" APP_VERSION="${target_version}" docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" \
   up -d --no-build --wait api web proxy freeswitch pcap-capture
+ENV_FILE="${ENV_FILE}" APP_VERSION="${target_version}" "${ROOT_DIR}/scripts/verify-runtime-services.sh"
 WEB_SMOKE_URL="${WEB_SMOKE_URL:-https://${LETSENCRYPT_DOMAIN}}" "${ROOT_DIR}/scripts/smoke-web.sh"
 deployment_state_write \
   "${STATE_FILE}" \

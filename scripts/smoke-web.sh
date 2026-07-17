@@ -44,10 +44,12 @@ if [[ "${index_html}" != *'<div id="root">'* || "${index_html}" != *"/assets/ind
   exit 1
 fi
 
-health_json="$(fetch "/api/health")"
-if [[ "${health_json}" != *'"service":"api"'* || "${health_json}" != *'"checks"'* ]]; then
-  echo "Web /api proxy did not return API health JSON from ${base_url}/api/health" >&2
+health_json="$(fetch "/api/health/ready")"
+if [[ "${health_json}" != *'"status":"ok"'* \
+  || "${health_json}" != *'"service":"api"'* \
+  || "${health_json}" != *'"checks"'* ]]; then
+  echo "Web /api proxy did not return ready API health JSON from ${base_url}/api/health/ready" >&2
   exit 1
 fi
 
-echo "Published web smoke passed: ${base_url}/ and ${base_url}/api/health"
+echo "Published web smoke passed: ${base_url}/ and ${base_url}/api/health/ready"

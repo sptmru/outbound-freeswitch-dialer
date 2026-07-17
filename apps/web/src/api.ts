@@ -126,14 +126,35 @@ export async function logout(): Promise<void> {
  */
 export function subscribeAgentEvents(input: {
   onConnectionChange?: (connected: boolean) => void;
-  onRefresh: () => void;
+  onRefresh: (event: AgentLiveRefreshEvent) => void;
 }): () => void {
   const source = new EventSource(`${API_BASE_URL}/agent/events`, { withCredentials: true });
   source.addEventListener("open", () => input.onConnectionChange?.(true));
-  source.addEventListener("refresh", input.onRefresh);
+  source.addEventListener("refresh", (event) => {
+    const fallback: AgentLiveRefreshEvent = { source: "database", occurredAt: new Date().toISOString() };
+    if (!(event instanceof MessageEvent) || typeof event.data !== "string") {
+      input.onRefresh(fallback);
+      return;
+    }
+    try {
+      const parsed = JSON.parse(event.data) as unknown;
+      input.onRefresh(
+        isRecord(parsed) && typeof parsed.source === "string" && typeof parsed.occurredAt === "string"
+          ? { source: parsed.source, occurredAt: parsed.occurredAt }
+          : fallback
+      );
+    } catch {
+      input.onRefresh(fallback);
+    }
+  });
   source.addEventListener("error", () => input.onConnectionChange?.(false));
   return () => source.close();
 }
+
+export type AgentLiveRefreshEvent = {
+  source: string;
+  occurredAt: string;
+};
 
 export async function fetchAgentDesk(campaignId?: string): Promise<AgentDeskResponse> {
   const query = campaignId ? `?campaignId=${encodeURIComponent(campaignId)}` : "";

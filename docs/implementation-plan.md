@@ -72,7 +72,7 @@ Firewall and host-published-port changes were excluded by instruction. They are 
 - VM/beep/AVMD signals shown as advisory evidence, never as an automatic drop trigger.
 - Admin access to Agent Desk without starting SIP/microphone outside the desk view, with active-call navigation/history/deep links forced back to the desk so the browser phone remains registered.
 - Credentialed SSE refresh hints from PostgreSQL changes, EventSource reconnect, heartbeat, debounced refresh, and periodic HTTP fallback.
-- Minimal `name` + `phone` CSV workflow and product-facing copy that hides telephony plumbing.
+- CSV workflow with required mapped `name` + `phone`, preserved additional source fields, explicit byte/row ceilings, and product-facing copy that hides telephony plumbing.
 
 ### 6. Administration, History, And Audit
 
@@ -82,10 +82,10 @@ Firewall and host-published-port changes were excluded by instruction. They are 
 - Paginated campaign contacts and CSV import failures, selected-campaign continuity from Agent Desk, row feedback, search, filters, and manual contact actions.
 - User create/edit/deactivate/reactivate/role/password lifecycle with preserved attribution and FreeSWITCH cleanup.
 - Suppression add/update/search/pagination/import/removal and durable change/blocked-dial events.
-- Paginated/filterable call history, detailed event timeline with explicit latest-100 truncation status, bounded CSV export, and media playback.
+- Paginated/filterable call history, detailed event timeline with explicit latest-100 truncation status, bounded streaming CSV export, and media playback with browser decode/error feedback.
 - Stable per-section application URLs with browser back/forward support plus URL- and browser-persisted Agent Desk campaign selection.
 - Successful mutating admin requests recorded with actor/request/route/status/source metadata and bounded route parameters; paginated audit endpoint with actor/method/date filters.
-- Database-backed admin runtime policies with `.env` fallback for dialing, phone normalization, exports, retention, PCAP, caller ID, and safe Alertmanager channel/repeat controls.
+- Database-backed admin runtime policies with `.env` fallback for dialing, phone normalization, exports, retention, PCAP, caller ID, and safe Alertmanager channel/repeat controls with visible asynchronous apply status.
 
 ### 7. Retention, Monitoring, And Operations
 

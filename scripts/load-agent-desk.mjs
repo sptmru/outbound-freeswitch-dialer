@@ -238,6 +238,9 @@ async function loadTokens(currentConfig) {
       "Set LOAD_AUTH_TOKEN or LOAD_AUTH_TOKENS_FILE to dedicated non-production test agent JWTs"
     );
   }
+  if (unique.length > currentConfig.maximumTokens) {
+    throw new Error(`Load token count must not exceed ${currentConfig.maximumTokens}`);
+  }
   return unique;
 }
 
@@ -246,23 +249,45 @@ async function loadConfig(environment) {
   if (!new Set(["steady", "saturation"]).has(profile)) {
     throw new Error("LOAD_PROFILE must be steady or saturation");
   }
-  const concurrency = positiveInteger(environment, "LOAD_CONCURRENCY", 10);
+  const baseUrl = (environment.LOAD_BASE_URL ?? "http://127.0.0.1:3000").replace(/\/$/, "");
+  const parsedUrl = new URL(baseUrl);
+  if (!new Set(["http:", "https:"]).has(parsedUrl.protocol)) {
+    throw new Error("LOAD_BASE_URL must use http or https");
+  }
+  const approvedTarget = environment.LOAD_APPROVED_TARGET?.trim().replace(/\/$/, "");
+  if (!isLoopback(parsedUrl.hostname) && approvedTarget !== baseUrl) {
+    throw new Error(`Set LOAD_APPROVED_TARGET exactly to ${baseUrl}`);
+  }
+
+  const concurrency = boundedPositiveInteger(environment, "LOAD_CONCURRENCY", 10, 100);
+  const durationSeconds = boundedPositiveInteger(environment, "LOAD_DURATION_SECONDS", 30, 21_600);
+  const pollIntervalMilliseconds = boundedNonNegativeInteger(
+    environment,
+    "LOAD_POLL_INTERVAL_MS",
+    2000,
+    60_000
+  );
+  if (profile === "steady" && pollIntervalMilliseconds < 250) {
+    throw new Error("LOAD_POLL_INTERVAL_MS must be at least 250 for the steady profile");
+  }
   return {
-    baseUrl: (environment.LOAD_BASE_URL ?? "http://127.0.0.1:3000").replace(/\/$/, ""),
+    baseUrl,
     token: environment.LOAD_AUTH_TOKEN?.trim(),
     tokensFile: environment.LOAD_AUTH_TOKENS_FILE?.trim(),
     reportPath: environment.LOAD_REPORT_PATH?.trim(),
     profile,
     concurrency,
-    durationSeconds: positiveInteger(environment, "LOAD_DURATION_SECONDS", 30),
-    pollIntervalMilliseconds: nonNegativeInteger(environment, "LOAD_POLL_INTERVAL_MS", 2000),
-    pollJitterMilliseconds: nonNegativeInteger(environment, "LOAD_POLL_JITTER_MS", 250),
-    requestTimeoutMilliseconds: positiveInteger(environment, "LOAD_REQUEST_TIMEOUT_MS", 5000),
-    sseConnections: nonNegativeInteger(
+    durationSeconds,
+    pollIntervalMilliseconds,
+    pollJitterMilliseconds: boundedNonNegativeInteger(environment, "LOAD_POLL_JITTER_MS", 250, 60_000),
+    requestTimeoutMilliseconds: boundedPositiveInteger(environment, "LOAD_REQUEST_TIMEOUT_MS", 5000, 60_000),
+    sseConnections: boundedNonNegativeInteger(
       environment,
       "LOAD_SSE_CONNECTIONS",
-      profile === "steady" ? concurrency : 0
+      profile === "steady" ? concurrency : 0,
+      100
     ),
+    maximumTokens: 100,
     maximumErrorRate: nonNegativeNumber(environment, "LOAD_MAX_ERROR_RATE", 0.01),
     maximumP95Milliseconds: positiveInteger(environment, "LOAD_MAX_P95_MS", 750),
     maximumP99Milliseconds: positiveInteger(environment, "LOAD_MAX_P99_MS", 1500),
@@ -295,9 +320,21 @@ function positiveInteger(environment, name, fallback) {
   return value;
 }
 
+function boundedPositiveInteger(environment, name, fallback, maximum) {
+  const value = positiveInteger(environment, name, fallback);
+  if (value > maximum) throw new Error(`${name} must not exceed ${maximum}`);
+  return value;
+}
+
 function nonNegativeInteger(environment, name, fallback) {
   const value = Number.parseInt(environment[name] ?? String(fallback), 10);
   if (!Number.isInteger(value) || value < 0) throw new Error(`${name} must be a non-negative integer`);
+  return value;
+}
+
+function boundedNonNegativeInteger(environment, name, fallback, maximum) {
+  const value = nonNegativeInteger(environment, name, fallback);
+  if (value > maximum) throw new Error(`${name} must not exceed ${maximum}`);
   return value;
 }
 
@@ -311,6 +348,10 @@ function fraction(environment, name, fallback) {
   const value = nonNegativeNumber(environment, name, fallback);
   if (value > 1) throw new Error(`${name} must be between 0 and 1`);
   return value;
+}
+
+function isLoopback(hostname) {
+  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]";
 }
 
 function round(value, digits = 2) {

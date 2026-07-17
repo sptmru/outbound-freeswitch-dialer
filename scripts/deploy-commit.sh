@@ -5,7 +5,6 @@ SCRIPT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ROOT_DIR="${DEPLOY_ROOT_DIR:-${SCRIPT_ROOT}}"
 REMOTE="${DEPLOY_REMOTE:-origin}"
 BRANCH="${DEPLOY_BRANCH:-main}"
-LOCK_FILE="${DEPLOY_LOCK_FILE:-${ROOT_DIR}/.git/deploy.lock}"
 TARGET_SHA="${1:-}"
 
 fail() {
@@ -42,13 +41,13 @@ ensure_node_runtime() {
 [[ "${TARGET_SHA}" =~ ^[0-9a-f]{40}$ ]] || fail "expected a full 40-character lowercase Git commit SHA"
 [[ -d "${ROOT_DIR}/.git" ]] || fail "${ROOT_DIR} is not a Git checkout"
 
-for command in flock git; do
+for command in git; do
   command -v "${command}" >/dev/null || fail "missing required command: ${command}"
 done
 
-mkdir -p "$(dirname "${LOCK_FILE}")"
-exec 9>"${LOCK_FILE}"
-flock -n 9 || fail "another deployment is already running"
+# shellcheck disable=SC1090
+source "${SCRIPT_ROOT}/scripts/host-operation-lock.sh"
+acquire_host_operation_lock "${ROOT_DIR}" "remote deployment" || exit 1
 
 if [[ -n "$(git -C "${ROOT_DIR}" status --porcelain --untracked-files=normal)" ]]; then
   fail "working tree must be clean before fetching a release"

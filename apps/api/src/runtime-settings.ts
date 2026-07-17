@@ -1,7 +1,7 @@
 import type pg from "pg";
 import { isSupportedCountry } from "libphonenumber-js";
 import { z } from "zod";
-import { chmod, writeFile } from "node:fs/promises";
+import { chmod, rename, unlink, writeFile } from "node:fs/promises";
 import type { AdminSystemSettings, UpdateAdminSystemSettingsRequest } from "@outbound-dialer/shared";
 import type { AppConfig } from "./config.js";
 
@@ -32,13 +32,37 @@ const persistedSystemSettingsSchema = updateSystemSettingsSchema.extend({
 
 const SETTINGS_KEY = "admin.runtime_settings";
 
+type ReloadResponse = Pick<Response, "ok" | "status" | "statusText">;
+type RuntimeSettingsOptions = {
+  now?: () => Date;
+  reloadAlertmanager?: (signal?: AbortSignal) => Promise<ReloadResponse>;
+  reloadTimeoutMilliseconds?: number;
+  waitBeforeReloadRetry?: () => Promise<void>;
+};
+type StagedAlertmanagerConfig = {
+  discard: () => Promise<void>;
+  publish: () => Promise<void>;
+};
+
 export class RuntimeSettingsService {
   private updatedAt: string | null = null;
+  private reloadGeneration = 0;
+  private reloadAbortController: AbortController | null = null;
+  private updateQueue: Promise<void> = Promise.resolve();
+  private alertmanagerApplyStatus: NonNullable<AdminSystemSettings["alertmanagerApplyStatus"]>;
 
   constructor(
     private readonly pool: pg.Pool,
-    private readonly config: AppConfig
-  ) {}
+    private readonly config: AppConfig,
+    private readonly options: RuntimeSettingsOptions = {}
+  ) {
+    this.alertmanagerApplyStatus = {
+      state: config.ALERTMANAGER_CONFIG_PATH ? "pending" : "not_configured",
+      lastAttemptAt: null,
+      lastSuccessAt: null,
+      error: null
+    };
+  }
 
   async initialize(): Promise<void> {
     const result = await this.pool.query<{ value_json: unknown; updated_at: Date }>(
@@ -50,7 +74,7 @@ export class RuntimeSettingsService {
       this.updatedAt = result.rows[0].updated_at.toISOString();
     }
     await this.writeAlertmanagerConfig();
-    if (this.config.ALERTMANAGER_CONFIG_PATH) void this.reloadAlertmanagerEventually();
+    this.scheduleAlertmanagerReload();
   }
 
   get(): AdminSystemSettings {
@@ -76,13 +100,22 @@ export class RuntimeSettingsService {
           this.config.ALERTMANAGER_TELEGRAM_BOT_TOKEN && this.config.ALERTMANAGER_TELEGRAM_CHAT_ID
         )
       },
+      alertmanagerApplyStatus: { ...this.alertmanagerApplyStatus },
       updatedAt: this.updatedAt
     };
   }
 
-  async update(input: UpdateAdminSystemSettingsRequest): Promise<AdminSystemSettings> {
+  update(input: UpdateAdminSystemSettingsRequest): Promise<AdminSystemSettings> {
+    const operation = this.updateQueue.then(() => this.performUpdate(input));
+    this.updateQueue = operation.then(
+      () => undefined,
+      () => undefined
+    );
+    return operation;
+  }
+
+  private async performUpdate(input: UpdateAdminSystemSettingsRequest): Promise<AdminSystemSettings> {
     const value = updateSystemSettingsSchema.parse(input);
-    const previous = this.get();
     const available = this.get().availableAlertChannels;
     if (value.alertmanagerWebhookEnabled && !available.webhook) {
       throw Object.assign(new Error("Configure ALERTMANAGER_WEBHOOK_URL before enabling webhook alerts"), {
@@ -99,29 +132,58 @@ export class RuntimeSettingsService {
         statusCode: 409
       });
     }
-    this.apply(value);
+    const candidateConfig = { ...this.config } as AppConfig;
+    this.applyToConfig(candidateConfig, value);
+    const stagedConfig = await this.stageAlertmanagerConfig(candidateConfig);
+    let client: pg.PoolClient;
     try {
-      await this.writeAlertmanagerConfig();
-      const result = await this.pool.query<{ updated_at: Date }>(
+      client = await this.pool.connect();
+    } catch (error) {
+      await stagedConfig?.discard();
+      throw error;
+    }
+    let filePublished = false;
+    try {
+      await client.query("begin");
+      const result = await client.query<{ updated_at: Date }>(
         `insert into system_settings (key, value_json, updated_at)
          values ($1, $2::jsonb, now())
          on conflict (key) do update set value_json = excluded.value_json, updated_at = now()
          returning updated_at`,
         [SETTINGS_KEY, JSON.stringify(value)]
       );
+      filePublished = Boolean(stagedConfig);
+      await stagedConfig?.publish();
+      await client.query("commit");
+      this.apply(value);
       this.updatedAt = result.rows[0]?.updated_at.toISOString() ?? new Date().toISOString();
-      if (this.config.ALERTMANAGER_CONFIG_PATH) void this.reloadAlertmanagerEventually();
+      this.scheduleAlertmanagerReload();
       return this.get();
     } catch (error) {
-      const { availableAlertChannels: _available, updatedAt: _updatedAt, ...rollback } = previous;
-      this.apply(rollback);
-      await this.writeAlertmanagerConfig().catch(() => undefined);
+      await client.query("rollback").catch(() => undefined);
+      await stagedConfig?.discard().catch(() => undefined);
+      if (filePublished) {
+        try {
+          await this.writeAlertmanagerConfig();
+        } catch (rollbackError) {
+          throw new AggregateError(
+            [error, rollbackError],
+            "Runtime settings update failed and the Alertmanager config rollback also failed"
+          );
+        }
+      }
       throw error;
+    } finally {
+      client.release();
     }
   }
 
   private apply(value: UpdateAdminSystemSettingsRequest): void {
-    Object.assign(this.config, {
+    this.applyToConfig(this.config, value);
+  }
+
+  private applyToConfig(target: AppConfig, value: UpdateAdminSystemSettingsRequest): void {
+    Object.assign(target, {
       DEFAULT_PHONE_COUNTRY_CODE: value.defaultPhoneCountryCode,
       CONTACT_MAX_ATTEMPTS: value.contactMaxAttempts,
       CONTACT_RETRY_DELAY_SECONDS: value.contactRetryDelaySeconds,
@@ -145,28 +207,160 @@ export class RuntimeSettingsService {
   }
 
   private async writeAlertmanagerConfig(): Promise<void> {
-    if (!this.config.ALERTMANAGER_CONFIG_PATH) return;
-    await writeFile(this.config.ALERTMANAGER_CONFIG_PATH, renderAlertmanager(this.config), "utf8");
-    await chmod(this.config.ALERTMANAGER_CONFIG_PATH, 0o640);
-  }
-
-  private reloadAlertmanager(): Promise<Response> {
-    return fetch(`${this.config.ALERTMANAGER_URL.replace(/\/$/, "")}/-/reload`, { method: "POST" });
-  }
-
-  private async reloadAlertmanagerEventually(): Promise<void> {
-    for (let attempt = 0; attempt < 10; attempt += 1) {
-      try {
-        if ((await this.reloadAlertmanager()).ok) return;
-      } catch {
-        // Alertmanager may start in parallel with the API during a deployment.
-      }
-      await new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, 1_000);
-        timer.unref();
-      });
+    const staged = await this.stageAlertmanagerConfig(this.config);
+    if (!staged) return;
+    try {
+      await staged.publish();
+    } catch (error) {
+      await staged.discard();
+      throw error;
     }
   }
+
+  private async stageAlertmanagerConfig(config: AppConfig): Promise<StagedAlertmanagerConfig | null> {
+    if (!config.ALERTMANAGER_CONFIG_PATH) return null;
+    const target = config.ALERTMANAGER_CONFIG_PATH;
+    const temporary = `${target}.${process.pid}.${Date.now()}.tmp`;
+    try {
+      await writeFile(temporary, renderAlertmanager(config), { encoding: "utf8", mode: 0o640 });
+      await chmod(temporary, 0o640);
+      return {
+        discard: () => unlink(temporary).catch(() => undefined),
+        publish: async () => {
+          try {
+            await rename(temporary, target);
+          } catch (error) {
+            // Retain compatibility with legacy single-file deployments. The
+            // current Compose deployment mounts the containing directory so
+            // its normal path above is an atomic rename.
+            if (!isFileMountRenameError(error)) throw error;
+            await writeFile(target, renderAlertmanager(config), { encoding: "utf8", mode: 0o640 });
+            await chmod(target, 0o640);
+            await unlink(temporary).catch(() => undefined);
+          }
+        }
+      };
+    } catch (error) {
+      await unlink(temporary).catch(() => undefined);
+      throw error;
+    }
+  }
+
+  private reloadAlertmanager(signal: AbortSignal): Promise<ReloadResponse> {
+    const combinedSignal = AbortSignal.any([
+      signal,
+      AbortSignal.timeout(this.options.reloadTimeoutMilliseconds ?? 5_000)
+    ]);
+    const request = this.options.reloadAlertmanager
+      ? this.options.reloadAlertmanager(combinedSignal)
+      : fetch(`${this.config.ALERTMANAGER_URL.replace(/\/$/, "")}/-/reload`, {
+          method: "POST",
+          signal: combinedSignal
+        });
+    return abortable(request, combinedSignal);
+  }
+
+  private scheduleAlertmanagerReload(): void {
+    this.reloadAbortController?.abort(new Error("Superseded by a newer Alertmanager configuration"));
+    this.reloadAbortController = null;
+    if (!this.config.ALERTMANAGER_CONFIG_PATH) {
+      this.reloadGeneration += 1;
+      this.alertmanagerApplyStatus = {
+        state: "not_configured",
+        lastAttemptAt: null,
+        lastSuccessAt: this.alertmanagerApplyStatus.lastSuccessAt,
+        error: null
+      };
+      return;
+    }
+    const generation = ++this.reloadGeneration;
+    const controller = new AbortController();
+    this.reloadAbortController = controller;
+    this.alertmanagerApplyStatus = {
+      state: "pending",
+      lastAttemptAt: this.now().toISOString(),
+      lastSuccessAt: this.alertmanagerApplyStatus.lastSuccessAt,
+      error: null
+    };
+    void this.reloadAlertmanagerEventually(generation, controller.signal);
+  }
+
+  private async reloadAlertmanagerEventually(generation: number, signal: AbortSignal): Promise<void> {
+    let lastError = "Alertmanager reload did not succeed";
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      if (generation !== this.reloadGeneration || signal.aborted) return;
+      if (generation === this.reloadGeneration) {
+        this.alertmanagerApplyStatus = {
+          ...this.alertmanagerApplyStatus,
+          lastAttemptAt: this.now().toISOString()
+        };
+      }
+      try {
+        const response = await this.reloadAlertmanager(signal);
+        if (response.ok) {
+          if (generation === this.reloadGeneration) {
+            const appliedAt = this.now().toISOString();
+            this.alertmanagerApplyStatus = {
+              state: "applied",
+              lastAttemptAt: this.alertmanagerApplyStatus.lastAttemptAt,
+              lastSuccessAt: appliedAt,
+              error: null
+            };
+          }
+          return;
+        }
+        lastError = `Alertmanager reload returned HTTP ${response.status}${response.statusText ? ` ${response.statusText}` : ""}`;
+      } catch (error) {
+        if (generation !== this.reloadGeneration || signal.aborted) return;
+        // Alertmanager may start in parallel with the API during a deployment.
+        lastError = error instanceof Error ? error.message : "Alertmanager reload request failed";
+      }
+      if (generation !== this.reloadGeneration || signal.aborted) return;
+      await this.waitBeforeReloadRetry();
+    }
+    if (generation === this.reloadGeneration) {
+      this.alertmanagerApplyStatus = {
+        state: "failed",
+        lastAttemptAt: this.alertmanagerApplyStatus.lastAttemptAt,
+        lastSuccessAt: this.alertmanagerApplyStatus.lastSuccessAt,
+        error: lastError.slice(0, 500)
+      };
+    }
+  }
+
+  private now(): Date {
+    return this.options.now?.() ?? new Date();
+  }
+
+  private waitBeforeReloadRetry(): Promise<void> {
+    if (this.options.waitBeforeReloadRetry) return this.options.waitBeforeReloadRetry();
+    return new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, 1_000);
+      timer.unref();
+    });
+  }
+}
+
+function abortable<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(abortReason(signal));
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(abortReason(signal));
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
+  });
+}
+
+function abortReason(signal: AbortSignal): Error {
+  return signal.reason instanceof Error ? signal.reason : new Error("Alertmanager reload was aborted");
+}
+
+function isFileMountRenameError(error: unknown): error is { code: string } {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error.code === "EBUSY" || error.code === "EXDEV" || error.code === "EPERM")
+  );
 }
 
 function renderAlertmanager(config: AppConfig): string {

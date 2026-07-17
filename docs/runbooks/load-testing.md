@@ -103,12 +103,19 @@ directly at the exact target:
 
 ```bash
 LOAD_PROFILE=steady \
+LOAD_APPROVED_TARGET="$LOAD_BASE_URL" \
 LOAD_CONCURRENCY=80 \
 LOAD_SSE_CONNECTIONS=80 \
 LOAD_DURATION_SECONDS=600 \
 LOAD_REPORT_PATH=logs/load-tests/80-agents.json \
 npm run test:load:desk
 ```
+
+The underlying runner applies the same exact remote-target approval as the suite;
+calling `test:load:desk` directly does not bypass it. It also fails before network
+access above 100 HTTP workers, 100 SSE connections, six hours, or a 60-second
+request timeout. The steady profile requires at least a 250 ms poll interval.
+These are accident-prevention ceilings, not accepted capacity targets.
 
 Use `LOAD_PROFILE=saturation` only for a short endpoint ceiling test. It removes
 the realistic polling delay and defaults to no SSE connections. It is not an

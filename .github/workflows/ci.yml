@@ -34,17 +34,15 @@ jobs:
           node-version: 22.13.0
           cache: npm
       - run: npm ci
-      - run: npm run lint
-      - run: npm run format:check
-      - run: npm run typecheck
-      - run: npm test
-      - run: npm run build
+      - run: npm run quality
       - run: npm audit --omit=dev --audit-level=high
       - name: Validate Compose model
         run: |
           cp .env.example .env
           chmod 600 .env
           APP_ENV_FILE="$PWD/.env" docker compose --env-file .env -f infra/docker/docker-compose.yml config --quiet
+      - name: Validate hardened proxy runtime
+        run: bash scripts/test-proxy-runtime.sh
 
   browser:
     runs-on: ubuntu-latest

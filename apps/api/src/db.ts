@@ -10,7 +10,8 @@ const { Pool } = pg;
 export function createPool(config: AppConfig): pg.Pool {
   return new Pool({
     connectionString: config.DATABASE_URL,
-    max: 10
+    max: 10,
+    connectionTimeoutMillis: 5_000
   });
 }
 
@@ -55,6 +56,22 @@ export async function runMigrations(pool: pg.Pool): Promise<void> {
             checksum
           ]);
         }
+        continue;
+      }
+
+      if (/^\s*--\s*outbound-dialer:no-transaction\b/m.test(sql)) {
+        // Operations such as CREATE INDEX CONCURRENTLY are forbidden inside a
+        // transaction. They must be idempotent because the process can stop
+        // after the operation succeeds but before its checksum row is stored.
+        const statements = sql
+          .split(/^\s*--\s*outbound-dialer:statement\s*$/m)
+          .map((statement) => statement.trim())
+          .filter(Boolean);
+        for (const statement of statements) await client.query(statement);
+        await client.query("insert into schema_migrations (filename, checksum_sha256) values ($1, $2)", [
+          filename,
+          checksum
+        ]);
         continue;
       }
 

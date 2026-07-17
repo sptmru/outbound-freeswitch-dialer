@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type pg from "pg";
 import type { AppConfig } from "./config.js";
-import { __testing, reconcileActiveCalls } from "./esl-events.js";
+import { __testing, reconcileActiveCalls, repairFinalizedCallConsistency } from "./esl-events.js";
 
 const config = {
   FREESWITCH_DOMAIN: "dialer.local",
@@ -24,11 +24,116 @@ describe("FreeSWITCH event helpers", () => {
     );
   });
 
-  it("does not let replayed channel setup events regress an active voicemail drop", async () => {
+  it("uses only a valid FreeSWITCH Event-UUID as the durable replay key", () => {
+    assert.equal(
+      __testing.getFreeSwitchEventUuid({
+        body: "",
+        headers: { "event-uuid": "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA" }
+      }),
+      "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    );
+    assert.equal(
+      __testing.getFreeSwitchEventUuid({ body: "", headers: { "event-uuid": "not-a-uuid" } }),
+      null
+    );
+  });
+
+  it("retries an atomic voicemail detection write and ignores the committed replay", async () => {
+    let claimAttempts = 0;
+    let committedClaim = false;
+    let detectionAttempts = 0;
+    let failDetectionOnce = true;
+    let transactionClaimed = false;
+    let updateAttempts = 0;
+    let commits = 0;
+    let rollbacks = 0;
+    const pool = createTransactionalQueryPool((sql) => {
+      if (sql === "begin") {
+        transactionClaimed = false;
+        return rows([]);
+      }
+      if (sql.includes("from call_legs") && sql.includes("for update of calls")) {
+        return rows([
+          {
+            agent_id: "22222222-2222-4222-8222-222222222222",
+            call_id: "11111111-1111-4111-8111-111111111111",
+            call_state: "customer_dialing"
+          }
+        ]);
+      }
+      if (sql.includes("insert into call_events")) {
+        claimAttempts += 1;
+        if (committedClaim) {
+          return rows([]);
+        }
+        transactionClaimed = true;
+        return rows([{ id: "66666666-6666-4666-8666-666666666666" }]);
+      }
+      if (sql.includes("insert into voicemail_detection_events")) {
+        detectionAttempts += 1;
+        if (failDetectionOnce) {
+          failDetectionOnce = false;
+          throw new Error("transient voicemail detection write failure");
+        }
+        return rows([]);
+      }
+      if (sql.includes("update calls")) {
+        updateAttempts += 1;
+        return rows([]);
+      }
+      if (sql === "commit") {
+        commits += 1;
+        committedClaim ||= transactionClaimed;
+        transactionClaimed = false;
+        return rows([]);
+      }
+      if (sql === "rollback") {
+        rollbacks += 1;
+        transactionClaimed = false;
+        return rows([]);
+      }
+      return rows([]);
+    });
+    const frame = {
+      body: "",
+      headers: {
+        "amd-result": "MACHINE",
+        "event-name": "CUSTOM",
+        "event-subclass": "amd::result",
+        "event-uuid": "55555555-5555-4555-8555-555555555555",
+        "unique-id": "33333333-3333-4333-8333-333333333333"
+      }
+    };
+
+    await assert.rejects(
+      __testing.persistFreeSwitchEvent(config, pool, frame),
+      /transient voicemail detection write failure/
+    );
+    await __testing.persistFreeSwitchEvent(config, pool, frame);
+    await __testing.persistFreeSwitchEvent(config, pool, frame);
+
+    assert.equal(claimAttempts, 3);
+    assert.equal(detectionAttempts, 2);
+    assert.equal(updateAttempts, 1);
+    assert.equal(commits, 1);
+    assert.equal(rollbacks, 2);
+  });
+
+  it("uses monotonic call and leg transitions for replayed channel setup events", async () => {
     for (const eventName of ["CHANNEL_CREATE", "CHANNEL_ANSWER", "CHANNEL_BRIDGE"]) {
       const queries: Array<{ params: readonly unknown[]; sql: string }> = [];
-      const pool = createQueryPool((sql, params) => {
+      const pool = createTransactionalQueryPool((sql, params) => {
         queries.push({ sql, params });
+        if (sql.includes("select raw_json")) {
+          return rows([
+            {
+              raw_json: {
+                modules: { mod_amd: { status: "started" }, mod_avmd: { status: "started" } },
+                phase: "answered"
+              }
+            }
+          ]);
+        }
         return rows([]);
       });
 
@@ -46,30 +151,129 @@ describe("FreeSWITCH event helpers", () => {
         (query) => query.sql.includes("update calls") && query.sql.includes("set state =")
       );
       assert.ok(callStateUpdate, `${eventName} should attempt a guarded call-state update`);
-      assert.match(callStateUpdate.sql, /'voicemail_drop_requested'/);
-      assert.match(callStateUpdate.sql, /'voicemail_playback_started'/);
-      assert.match(callStateUpdate.sql, /'agent_released'/);
-      assert.match(callStateUpdate.sql, /'voicemail_playback_completed'/);
+      if (eventName === "CHANNEL_CREATE") {
+        assert.match(
+          callStateUpdate.sql,
+          /state in \('created', 'agent_ringing', 'agent_answered', 'customer_dialing'\)/
+        );
+        assert.doesNotMatch(callStateUpdate.sql, /'bridged'/);
+      } else {
+        assert.match(callStateUpdate.sql, /set state = case/);
+        assert.match(callStateUpdate.sql, /then 'bridged'\s+else state/);
+        assert.doesNotMatch(callStateUpdate.sql, /'voicemail_signal_detected'/);
+      }
+      const legStateUpdate = queries.find((query) => query.sql.includes("update call_legs"));
+      assert.match(legStateUpdate?.sql ?? "", /when state = 'ended' or \$3 = 'ended' then 'ended'/);
+      assert.match(legStateUpdate?.sql ?? "", /when state = 'answered' or \$3 = 'answered' then 'answered'/);
+      assert.equal(queries[0]?.sql, "begin");
+      const callLockIndex = queries.findIndex(
+        (query) => query.sql === "select id from calls where id = $1 for update"
+      );
+      assert.ok(callLockIndex > -1);
+      assert.ok(callLockIndex < queries.findIndex((query) => query.sql.includes("update call_legs")));
+      assert.ok(queries.some((query) => query.sql === "commit"));
+      if (eventName !== "CHANNEL_CREATE") {
+        assert.ok(queries.some((query) => query.sql.includes("select raw_json")));
+      }
     }
+  });
+
+  it("replays guarded transitions after a raw event transaction rolls back or conflicts", async () => {
+    let committedEvent = false;
+    let commits = 0;
+    let failTransitionOnce = true;
+    let rawInsertAttempts = 0;
+    let rollbacks = 0;
+    let transactionInserted = false;
+    let transitionAttempts = 0;
+    const pool = createTransactionalQueryPool((sql) => {
+      if (sql === "begin") {
+        transactionInserted = false;
+        return rows([]);
+      }
+      if (sql.includes("insert into call_events")) {
+        rawInsertAttempts += 1;
+        transactionInserted = !committedEvent;
+        return rows([]);
+      }
+      if (sql.includes("update calls")) {
+        transitionAttempts += 1;
+        if (failTransitionOnce) {
+          failTransitionOnce = false;
+          throw new Error("transition write failed");
+        }
+        return rows([]);
+      }
+      if (sql === "commit") {
+        commits += 1;
+        committedEvent ||= transactionInserted;
+        transactionInserted = false;
+        return rows([]);
+      }
+      if (sql === "rollback") {
+        rollbacks += 1;
+        transactionInserted = false;
+        return rows([]);
+      }
+      return rows([]);
+    });
+    const frame = {
+      body: "",
+      headers: {
+        "event-name": "CHANNEL_CREATE",
+        "event-uuid": "55555555-5555-4555-8555-555555555555",
+        "unique-id": "22222222-2222-4222-8222-222222222222",
+        variable_outbound_dialer_call_id: "11111111-1111-4111-8111-111111111111",
+        variable_outbound_dialer_leg_type: "customer"
+      }
+    };
+
+    await assert.rejects(__testing.persistFreeSwitchEvent(config, pool, frame), /transition write failed/);
+    await __testing.persistFreeSwitchEvent(config, pool, frame);
+    await __testing.persistFreeSwitchEvent(config, pool, frame);
+
+    assert.equal(rawInsertAttempts, 3);
+    assert.equal(transitionAttempts, 3);
+    assert.equal(commits, 2);
+    assert.equal(rollbacks, 1);
+    assert.equal(committedEvent, true);
   });
 
   it("persists terminal timing in the guarded update that wins customer finalization", async () => {
     const queries: Array<{ params: readonly unknown[]; sql: string }> = [];
-    const pool = createQueryPool((sql, params) => {
+    const pool = createTransactionalQueryPool((sql, params) => {
       queries.push({ sql, params });
-      if (sql.includes("select agent_id, answered_at, contact_id, state, voicemail_signal_status")) {
+      if (sql.includes("select agent_id, answered_at, contact_id, ended_at, outcome, state")) {
         return rows([
           {
             agent_id: null,
             answered_at: new Date("2026-07-15T05:00:00.000Z"),
             contact_id: null,
+            ended_at: null,
+            outcome: null,
             state: "bridged",
             voicemail_signal_status: "none"
           }
         ]);
       }
-      if (sql.includes("returning agent_id, contact_id")) {
-        return rows([{ agent_id: null, contact_id: null }]);
+      if (sql === "select agent_id from calls where id = $1") {
+        return rows([{ agent_id: null }]);
+      }
+      if (sql.includes("from calls") && sql.includes("for update")) {
+        return rows([
+          {
+            agent_id: null,
+            answered_at: new Date("2026-07-15T05:00:00.000Z"),
+            contact_id: null,
+            ended_at: null,
+            outcome: null,
+            state: "bridged",
+            voicemail_signal_status: "none"
+          }
+        ]);
+      }
+      if (sql.includes("returning outcome")) {
+        return rows([{ outcome: "customer_hung_up" }]);
       }
       return rows([]);
     });
@@ -86,14 +290,14 @@ describe("FreeSWITCH event helpers", () => {
       }
     });
 
-    const terminalUpdate = queries.find((query) =>
-      query.sql.includes("terminal_source = 'freeswitch_customer_terminal'")
-    );
+    const terminalUpdate = queries.find((query) => query.sql.includes("terminal_source = coalesce"));
     assert.ok(terminalUpdate);
     assert.match(terminalUpdate.sql, /with stamp as/);
-    assert.match(terminalUpdate.sql, /and ended_at is null/);
     assert.equal((terminalUpdate.params[3] as Date).toISOString(), "2026-07-15T05:11:30.123Z");
-    assert.equal(terminalUpdate.params[4], "CHANNEL_HANGUP");
+    assert.equal(terminalUpdate.params[4], "freeswitch_customer_terminal");
+    assert.equal(terminalUpdate.params[5], "CHANNEL_HANGUP");
+    assert.ok(queries.some((query) => query.sql.includes("for update")));
+    assert.ok(queries.some((query) => query.sql === "commit"));
   });
 
   it("builds a stable WAV path for a call recording", () => {
@@ -389,7 +593,7 @@ describe("FreeSWITCH event helpers", () => {
 
   it("does not finalize a call when the agent leg emits a terminal event", async () => {
     const queries: Array<{ params: readonly unknown[]; sql: string }> = [];
-    const pool = createQueryPool((sql, params) => {
+    const pool = createTransactionalQueryPool((sql, params) => {
       queries.push({ sql, params });
       return rows([]);
     });
@@ -413,21 +617,39 @@ describe("FreeSWITCH event helpers", () => {
 
   it("finalizes a customer hangup with the persisted call context", async () => {
     const queries: Array<{ params: readonly unknown[]; sql: string }> = [];
-    const pool = createQueryPool((sql, params) => {
+    const pool = createTransactionalQueryPool((sql, params) => {
       queries.push({ sql, params });
-      if (sql.includes("select agent_id, answered_at, contact_id, state, voicemail_signal_status")) {
+      if (sql.includes("select agent_id, answered_at, contact_id, ended_at, outcome, state")) {
         return rows([
           {
             agent_id: "agent-1",
             answered_at: new Date(),
             contact_id: "contact-1",
+            ended_at: null,
+            outcome: null,
             state: "bridged",
             voicemail_signal_status: null
           }
         ]);
       }
-      if (sql.includes("update calls") && sql.includes("returning agent_id")) {
+      if (sql === "select agent_id from calls where id = $1") {
         return rows([{ agent_id: "agent-1" }]);
+      }
+      if (sql.includes("from calls") && sql.includes("for update")) {
+        return rows([
+          {
+            agent_id: "agent-1",
+            answered_at: new Date(),
+            contact_id: "contact-1",
+            ended_at: null,
+            outcome: null,
+            state: "bridged",
+            voicemail_signal_status: null
+          }
+        ]);
+      }
+      if (sql.includes("returning outcome")) {
+        return rows([{ outcome: "customer_hung_up" }]);
       }
       return rows([]);
     });
@@ -444,13 +666,14 @@ describe("FreeSWITCH event helpers", () => {
     });
 
     const update = queries.find(
-      (query) => query.sql.includes("update calls") && query.sql.includes("returning agent_id")
+      (query) => query.sql.includes("update calls") && query.sql.includes("returning outcome")
     );
     assert.deepEqual(update?.params, [
       "11111111-1111-4111-8111-111111111111",
       "completed",
       "customer_hung_up",
       null,
+      "freeswitch_customer_terminal",
       "CHANNEL_HANGUP"
     ]);
     assert.ok(queries.some((query) => /update\s+agents/.test(query.sql)));
@@ -460,12 +683,17 @@ describe("FreeSWITCH event helpers", () => {
     const queries: Array<{ params: readonly unknown[]; sql: string }> = [];
     const pool = createTransactionalQueryPool((sql, params) => {
       queries.push({ sql, params });
-      if (sql.includes("select agent_id, answered_at, contact_id, state, voicemail_signal_status")) {
+      if (sql === "select agent_id from calls where id = $1") {
+        return rows([{ agent_id: "agent-1" }]);
+      }
+      if (sql.includes("select agent_id, answered_at, contact_id, ended_at, outcome, state")) {
         return rows([
           {
             agent_id: "agent-1",
             answered_at: new Date(),
             contact_id: "contact-1",
+            ended_at: null,
+            outcome: null,
             state: "agent_released",
             voicemail_signal_status: "detected"
           }
@@ -652,8 +880,14 @@ describe("FreeSWITCH event helpers", () => {
   it("releases only the agent leg after confirmed voicemail playback start", async () => {
     const queries: Array<{ params: readonly unknown[]; sql: string }> = [];
     const commands: string[] = [];
-    const pool = createQueryPool((sql, params) => {
+    const pool = createTransactionalQueryPool((sql, params) => {
       queries.push({ sql, params });
+      if (sql === "select agent_id from calls where id = $1") {
+        return rows([{ agent_id: "agent-1" }]);
+      }
+      if (sql.includes("select state") && sql.includes("for update")) {
+        return rows([{ state: "voicemail_playback_started" }]);
+      }
       return rows([]);
     });
 
@@ -682,12 +916,21 @@ describe("FreeSWITCH event helpers", () => {
     assert.doesNotMatch(callUpdate?.sql ?? "", /ended_at\s*=/);
     const availabilityUpdate = queries.find((query) => query.sql.includes("availability_status = case"));
     assert.deepEqual(availabilityUpdate?.params, ["agent-1"]);
+    assert.ok(queries.findIndex((query) => query.sql.includes("select id from agents")) > -1);
+    assert.ok(
+      queries.findIndex((query) => query.sql.includes("select id from agents")) <
+        queries.findIndex((query) => query.sql.includes("select state") && query.sql.includes("for update"))
+    );
+    assert.equal(queries.at(-1)?.sql, "commit");
   });
 
   it("finalizes a voicemail drop only after the completion event", async () => {
     const queries: Array<{ params: readonly unknown[]; sql: string }> = [];
     const pool = createTransactionalQueryPool((sql, params) => {
       queries.push({ sql, params });
+      if (sql === "select agent_id from calls where id = $1") {
+        return rows([{ agent_id: "agent-1" }]);
+      }
       if (sql.includes("update calls")) {
         return rows([{ agent_id: "agent-1", contact_id: "contact-1" }]);
       }
@@ -721,6 +964,9 @@ describe("FreeSWITCH event helpers", () => {
     const queries: Array<{ params: readonly unknown[]; sql: string }> = [];
     const pool = createTransactionalQueryPool((sql, params) => {
       queries.push({ sql, params });
+      if (sql === "select agent_id from calls where id = $1") {
+        return rows([{ agent_id: "agent-1" }]);
+      }
       if (sql.includes("update calls")) {
         return rows([
           {
@@ -748,6 +994,9 @@ describe("FreeSWITCH event helpers", () => {
     const queries: Array<{ params: readonly unknown[]; sql: string }> = [];
     const pool = createTransactionalQueryPool((sql, params) => {
       queries.push({ sql, params });
+      if (sql === "select agent_id from calls where id = $1") {
+        return rows([{ agent_id: "agent-1" }]);
+      }
       if (sql.includes("update calls")) {
         return rows([{}]);
       }
@@ -784,6 +1033,9 @@ describe("FreeSWITCH event helpers", () => {
     const queries: Array<{ params: readonly unknown[]; sql: string }> = [];
     const pool = createTransactionalQueryPool((sql, params) => {
       queries.push({ sql, params });
+      if (sql === "select agent_id from calls where id = $1") {
+        return rows([{ agent_id: "agent-1" }]);
+      }
       return sql.includes("update calls") ? rows([{}]) : rows([]);
     });
 
@@ -812,9 +1064,9 @@ describe("FreeSWITCH event helpers", () => {
 
   it("reconciles an old missing answered call without requeueing its contact", async () => {
     const queries: Array<{ params: readonly unknown[]; sql: string }> = [];
-    const pool = createQueryPool((sql, params) => {
+    const pool = createTransactionalQueryPool((sql, params) => {
       queries.push({ sql, params });
-      if (sql.includes("calls.id as call_id")) {
+      if (sql.includes("calls.id as call_id") && sql.includes("calls.ended_at is null")) {
         return rows([
           {
             agent_id: "agent-1",
@@ -828,8 +1080,24 @@ describe("FreeSWITCH event helpers", () => {
           }
         ]);
       }
-      if (sql.includes("update calls")) {
-        return rows([{ agent_id: "agent-1", contact_id: "contact-1" }]);
+      if (sql === "select agent_id from calls where id = $1") {
+        return rows([{ agent_id: "agent-1" }]);
+      }
+      if (sql.includes("from calls") && sql.includes("for update")) {
+        return rows([
+          {
+            agent_id: "agent-1",
+            answered_at: new Date("2026-07-13T08:00:00.000Z"),
+            contact_id: "contact-1",
+            ended_at: null,
+            outcome: null,
+            state: "bridged",
+            voicemail_signal_status: null
+          }
+        ]);
+      }
+      if (sql.includes("returning outcome")) {
+        return rows([{ outcome: "customer_hung_up" }]);
       }
       return rows([]);
     });
@@ -845,11 +1113,58 @@ describe("FreeSWITCH event helpers", () => {
     assert.deepEqual(callUpdate?.params, [
       "11111111-1111-4111-8111-111111111111",
       "completed",
-      "customer_hung_up"
+      "customer_hung_up",
+      null,
+      "active_call_reconciliation",
+      null
     ]);
     const contactUpdate = queries.find((query) => query.sql.includes("update contacts"));
-    assert.deepEqual(contactUpdate?.params, ["contact-1", "completed"]);
-    assert.ok(queries.some((query) => query.sql.includes("freeswitch_reconciliation_closed_missing_call")));
+    assert.deepEqual(contactUpdate?.params, [
+      "contact-1",
+      "completed",
+      "11111111-1111-4111-8111-111111111111"
+    ]);
+    assert.ok(
+      queries.some(
+        (query) =>
+          query.sql.includes("insert into call_events") &&
+          query.params.includes("freeswitch_reconciliation_closed_missing_call")
+      )
+    );
+  });
+
+  it("repairs ended calls left with active agent, contact, or leg state", async () => {
+    const queries: Array<{ params: readonly unknown[]; sql: string }> = [];
+    const pool = createTransactionalQueryPool((sql, params) => {
+      queries.push({ sql, params });
+      if (sql.includes("calls.ended_at is not null")) {
+        return rows([{ call_id: "11111111-1111-4111-8111-111111111111" }]);
+      }
+      if (sql === "select agent_id from calls where id = $1") {
+        return rows([{ agent_id: "agent-1" }]);
+      }
+      if (sql.includes("from calls") && sql.includes("for update")) {
+        return rows([
+          {
+            agent_id: "agent-1",
+            answered_at: null,
+            contact_id: "contact-1",
+            ended_at: new Date("2026-07-17T06:00:00.000Z"),
+            outcome: "failed",
+            state: "failed",
+            voicemail_signal_status: null
+          }
+        ]);
+      }
+      return rows([]);
+    });
+
+    assert.equal(await repairFinalizedCallConsistency(pool), 1);
+    assert.ok(queries.some((query) => query.sql.includes("update call_legs")));
+    assert.ok(queries.some((query) => query.sql.includes("update agents")));
+    const contact = queries.find((query) => query.sql.includes("update contacts"));
+    assert.deepEqual(contact?.params, ["contact-1", "new", "11111111-1111-4111-8111-111111111111"]);
+    assert.equal(queries.at(-1)?.sql, "commit");
   });
 
   it("fails and terminates a voicemail drop whose playback start event never arrives", async () => {
@@ -857,6 +1172,9 @@ describe("FreeSWITCH event helpers", () => {
     const commands: string[] = [];
     const pool = createTransactionalQueryPool((sql, params) => {
       queries.push({ sql, params });
+      if (sql === "select agent_id from calls where id = $1") {
+        return rows([{ agent_id: "agent-1" }]);
+      }
       if (sql.includes("calls.id as call_id")) {
         return rows([
           {

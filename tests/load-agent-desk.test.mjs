@@ -35,6 +35,43 @@ test("agent desk load runner requires dedicated test credentials", () => {
   assert.match(result.stderr, /LOAD_AUTH_TOKEN or LOAD_AUTH_TOKENS_FILE/);
 });
 
+test("agent desk load runner requires exact approval for a direct remote run", () => {
+  const result = spawnSync(process.execPath, ["scripts/load-agent-desk.mjs"], {
+    cwd: rootDirectory,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      LOAD_APPROVED_TARGET: "https://different.example/api",
+      LOAD_AUTH_TOKEN: "not-used",
+      LOAD_BASE_URL: "https://client.example/api"
+    }
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /Set LOAD_APPROVED_TARGET exactly/);
+});
+
+test("agent desk load runner enforces concurrency and duration ceilings before network access", () => {
+  for (const [name, value, expected] of [
+    ["LOAD_CONCURRENCY", "101", /LOAD_CONCURRENCY must not exceed 100/],
+    ["LOAD_SSE_CONNECTIONS", "101", /LOAD_SSE_CONNECTIONS must not exceed 100/],
+    ["LOAD_DURATION_SECONDS", "21601", /LOAD_DURATION_SECONDS must not exceed 21600/]
+  ]) {
+    const result = spawnSync(process.execPath, ["scripts/load-agent-desk.mjs"], {
+      cwd: rootDirectory,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        LOAD_AUTH_TOKEN: "not-used",
+        LOAD_BASE_URL: "http://127.0.0.1:1",
+        [name]: value
+      }
+    });
+    assert.notEqual(result.status, 0, name);
+    assert.match(result.stderr, expected, name);
+  }
+});
+
 test("load suite refuses a remote target without an exact approval match", async () => {
   const directory = await mkdtemp(join(tmpdir(), "outbound-dialer-load-suite-"));
   const tokenFile = join(directory, "tokens");

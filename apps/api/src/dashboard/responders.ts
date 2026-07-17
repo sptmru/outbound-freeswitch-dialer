@@ -525,7 +525,21 @@ export type CallHistoryFilters = {
   voicemail?: "drop" | "signal";
   recording?: "available" | "missing";
   avmdReview?: "needs_review" | "reviewed" | "uncertain";
+  snapshot?: { createdAt: string; id: string };
+  cursor?: { createdAt: string; id: string };
+  includeTotal?: boolean;
 };
+
+export type CallHistoryPageBounds = {
+  first: { createdAt: string; id: string } | null;
+  last: { createdAt: string; id: string } | null;
+};
+
+const callHistoryPageBounds = new WeakMap<CallHistoryResponse, CallHistoryPageBounds>();
+
+export function getCallHistoryPageBounds(page: CallHistoryResponse): CallHistoryPageBounds {
+  return callHistoryPageBounds.get(page) ?? { first: null, last: null };
+}
 
 export async function getCallHistoryPage(
   pool: pg.Pool,
@@ -543,13 +557,14 @@ export async function getCallHistoryPage(
     state: CallState;
     outcome: CallOutcome | null;
     created_at: Date;
+    created_at_cursor: string;
     duration_seconds: number | null;
     recording_available: boolean;
     pcap_status: CallPcapStatus | null;
     pcap_available: boolean;
     voicemail_signal_status: string | null;
     avmd_review_status: "needs_review" | "reviewed" | "uncertain" | null;
-    total_count: string;
+    total_count: string | null;
   }>(
     `
     select
@@ -563,6 +578,7 @@ export async function getCallHistoryPage(
       calls.state,
       calls.outcome,
       calls.created_at,
+      to_char(calls.created_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as created_at_cursor,
       calls.call_recording_status = 'available' and calls.call_recording_path is not null as recording_available,
       call_pcaps.status as pcap_status,
       call_pcaps.status = 'available' and call_pcaps.file_path is not null as pcap_available,
@@ -573,7 +589,7 @@ export async function getCallHistoryPage(
         when call_avmd_reviews.call_id is not null then 'reviewed'
         else 'needs_review'
       end as avmd_review_status,
-      count(*) over() as total_count,
+      ${filters.includeTotal === false ? "null::bigint" : "count(*) over()"} as total_count,
       extract(epoch from (coalesce(calls.ended_at, now()) - coalesce(calls.answered_at, calls.started_at, calls.created_at)))::int as duration_seconds
     from calls
     left join contacts on contacts.id = calls.contact_id
@@ -611,8 +627,18 @@ export async function getCallHistoryPage(
         or ($9 = 'reviewed' and call_avmd_reviews.actual_party in ('human', 'machine'))
         or ($9 = 'uncertain' and call_avmd_reviews.actual_party = 'uncertain')
       )
-    order by calls.created_at desc
-    limit $10 offset $11
+      and (
+        $10::timestamptz is null
+        or calls.created_at < $10
+        or (calls.created_at = $10 and calls.id <= $11::uuid)
+      )
+      and (
+        $12::timestamptz is null
+        or calls.created_at < $12
+        or (calls.created_at = $12 and calls.id < $13::uuid)
+      )
+    order by calls.created_at desc, calls.id desc
+    limit $14 offset $15
   `,
     [
       filters.q?.trim() || null,
@@ -624,6 +650,10 @@ export async function getCallHistoryPage(
       filters.voicemail ?? null,
       filters.recording ?? null,
       filters.avmdReview ?? null,
+      filters.snapshot?.createdAt ?? null,
+      filters.snapshot?.id ?? null,
+      filters.cursor?.createdAt ?? null,
+      filters.cursor?.id ?? null,
       filters.pageSize,
       offset
     ]
@@ -648,13 +678,24 @@ export async function getCallHistoryPage(
     avmdReviewStatus: row.avmd_review_status
   }));
   const total = Number(result.rows[0]?.total_count ?? 0);
-  return {
+  const response: CallHistoryResponse = {
     items,
     page: filters.page,
     pageSize: filters.pageSize,
     total,
     totalPages: total ? Math.ceil(total / filters.pageSize) : 0
   };
+  const firstRow = result.rows[0];
+  const lastRow = result.rows.at(-1);
+  callHistoryPageBounds.set(response, {
+    first: firstRow
+      ? { createdAt: firstRow.created_at_cursor ?? firstRow.created_at.toISOString(), id: firstRow.id }
+      : null,
+    last: lastRow
+      ? { createdAt: lastRow.created_at_cursor ?? lastRow.created_at.toISOString(), id: lastRow.id }
+      : null
+  });
+  return response;
 }
 
 export async function getCallDetail(pool: pg.Pool, callId: string): Promise<CallDetailResponse | null> {

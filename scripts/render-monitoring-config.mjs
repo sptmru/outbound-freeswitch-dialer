@@ -37,7 +37,9 @@ async function main() {
   await writeFile(resolve(outputDirectory, "outbound-dialer-overview.json"), grafanaDashboard, {
     mode: 0o644
   });
-  const alertmanagerPath = resolve(outputDirectory, "alertmanager.yml");
+  const alertmanagerDirectory = resolve(outputDirectory, "alertmanager");
+  await mkdir(alertmanagerDirectory, { recursive: true });
+  const alertmanagerPath = resolve(alertmanagerDirectory, "alertmanager.yml");
   await writeFile(alertmanagerPath, renderAlertmanager(), { mode: 0o640 });
   await chmod(alertmanagerPath, 0o640);
 

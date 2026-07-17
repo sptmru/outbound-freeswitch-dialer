@@ -65,6 +65,7 @@ describe("softphone runtime helpers", () => {
 function runtime(overrides: Partial<SoftphoneRuntime> = {}): SoftphoneRuntime {
   return {
     answerIncomingCall: async () => undefined,
+    audioPlaybackState: "idle",
     callState: "none",
     declineIncomingCall: async () => undefined,
     detail: "Ready for calls",
@@ -74,6 +75,7 @@ function runtime(overrides: Partial<SoftphoneRuntime> = {}): SoftphoneRuntime {
     label: "Softphone registered",
     microphoneAllowed: true,
     registered: true,
+    retryRemoteAudio: async () => undefined,
     state: "registered",
     ...overrides
   };

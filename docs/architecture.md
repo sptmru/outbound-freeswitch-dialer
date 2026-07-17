@@ -185,7 +185,7 @@ The event record is the source of lifecycle evidence. A local completion event s
 - `.env` remains the bootstrap/default and deployment-secret source. An `admin.runtime_settings` JSON document in `system_settings` holds the validated admin override set.
 - The API applies overrides to its shared live configuration after migrations and after `PATCH /admin/system-settings`; request-time dialing, normalization, export, caller-ID, PCAP, metrics, and retention consumers see the updated values immediately.
 - The PCAP supervisor remains internally ready while the API policy controls whether a call creates capture state, so disabling capture does not require recreating the privileged sidecar.
-- Alert destination credentials remain in the protected deployment environment. The UI can enable only channels whose credentials are present; the API rewrites the mounted generated Alertmanager config and calls its lifecycle reload endpoint.
+- Alert destination credentials remain in the protected deployment environment. The UI can enable only channels whose credentials are present; the API atomically rewrites the mounted generated Alertmanager config, applies serialized generation-guarded reloads, and exposes pending/applied/failed status separately from settings persistence.
 
 ## Retention Architecture
 

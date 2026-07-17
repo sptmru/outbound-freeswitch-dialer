@@ -6,6 +6,9 @@ ENV_FILE="${ENV_FILE:-${ROOT_DIR}/.env}"
 COMPOSE_FILE="${ROOT_DIR}/infra/docker/docker-compose.yml"
 RECORDINGS_DIR="${RECORDINGS_DIR:-${ROOT_DIR}/infra/freeswitch/recordings}"
 TEXTFILE_DIR="${ROOT_DIR}/monitoring/textfile"
+# shellcheck disable=SC1091
+source "${ROOT_DIR}/scripts/host-operation-lock.sh"
+acquire_host_operation_lock "${ROOT_DIR}" "backup"
 
 [[ -f "${ENV_FILE}" ]] || { echo "Missing ${ENV_FILE}" >&2; exit 1; }
 set -a
@@ -31,14 +34,23 @@ quiesced_services=()
 
 resume_quiesced_services() {
   local service
+  local resume_status=0
+  local -a still_quiesced_services=()
   for service in "${quiesced_services[@]}"; do
-    compose unpause "${service}" >/dev/null 2>&1 || true
+    if ! compose unpause "${service}" >/dev/null; then
+      echo "Failed to resume quiesced ${service} service" >&2
+      still_quiesced_services+=("${service}")
+      resume_status=1
+    fi
   done
-  quiesced_services=()
+  quiesced_services=("${still_quiesced_services[@]}")
+  return "${resume_status}"
 }
 
 cleanup() {
-  resume_quiesced_services
+  if ! resume_quiesced_services; then
+    echo "Backup cleanup could not resume all quiesced services; operator recovery is required" >&2
+  fi
   rm -rf "${work_dir}"
 }
 trap cleanup EXIT
@@ -71,7 +83,10 @@ fi
 
 compose exec -T postgres pg_dump --username "${POSTGRES_USER}" --dbname "${POSTGRES_DB}" --format custom > "${work_dir}/database.dump"
 tar -czf "${work_dir}/recordings.tar.gz" -C "${RECORDINGS_DIR}" .
-resume_quiesced_services
+if ! resume_quiesced_services; then
+  echo "Backup snapshot was captured, but runtime services could not be resumed; refusing to publish a backup success" >&2
+  exit 1
+fi
 
 cat > "${work_dir}/metadata.txt" <<EOF
 created_at=${timestamp}

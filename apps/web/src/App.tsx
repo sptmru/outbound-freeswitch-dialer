@@ -85,6 +85,7 @@ import {
   upsertCallAvmdReview,
   uploadRecording
 } from "./api";
+import type { AgentLiveRefreshEvent } from "./api";
 import { useSoftphoneRegistration } from "./softphone";
 import type { SoftphoneRuntime } from "./softphone";
 import type {
@@ -182,6 +183,34 @@ const navItems: Array<{ id: View; label: string; icon: typeof BarChart3 }> = [
   { id: "settings", label: "Settings", icon: Settings2 }
 ];
 
+const deskRefreshSources = new Set([
+  "agents",
+  "calls",
+  "call_events",
+  "campaigns",
+  "contacts",
+  "recordings",
+  "suppression_entries",
+  "users"
+]);
+
+const adminRefreshSources: Record<Exclude<View, "desk">, ReadonlySet<string>> = {
+  analytics: new Set(["agents", "calls", "call_events", "campaigns", "contacts"]),
+  campaigns: new Set(["campaigns", "contacts", "csv_imports", "csv_import_failures"]),
+  recordings: new Set(["recordings"]),
+  history: new Set(["agents", "calls", "call_events", "call_pcaps", "campaigns"]),
+  suppression: new Set(["suppression_entries", "suppression_events"]),
+  settings: new Set(["agents", "calls", "call_events", "campaigns", "users"])
+};
+
+function sourceAffectsDesk(source: string): boolean {
+  return source === "database" || deskRefreshSources.has(source);
+}
+
+function sourceAffectsView(source: string, view: Exclude<View, "desk">): boolean {
+  return source === "database" || adminRefreshSources[view].has(source);
+}
+
 function getErrorMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback;
 }
@@ -218,8 +247,16 @@ export function App() {
   const [view, setView] = useState<View>(initialNavigation.current.view);
   const [error, setError] = useState<string | null>(null);
   const [manualDialNumber, setManualDialNumber] = useState("");
-  const activeCallPollRequestRef = useRef(0);
+  const [viewRefreshVersion, setViewRefreshVersion] = useState(0);
+  const deskRequestRef = useRef(0);
+  const deskBackgroundRequestRef = useRef(0);
+  const deskActionPendingRef = useRef(false);
   const liveRefreshRequestRef = useRef(0);
+  const sessionRequestRef = useRef(0);
+  const activeUserIdRef = useRef<string | null>(user?.id ?? null);
+  activeUserIdRef.current = user?.id ?? null;
+  const isAgentOnly = user?.role === "agent";
+  const activeView: View = isAgentOnly ? "desk" : view;
 
   useEffect(() => {
     window.localStorage.removeItem("outbound_dialer_token");
@@ -244,6 +281,11 @@ export function App() {
   }, [desk?.activeCall?.id, desk?.campaign?.id, selectedCampaignId, user?.role]);
 
   function resetSession(nextError: string | null = null) {
+    sessionRequestRef.current += 1;
+    deskRequestRef.current += 1;
+    deskBackgroundRequestRef.current += 1;
+    deskActionPendingRef.current = false;
+    liveRefreshRequestRef.current += 1;
     setUser(null);
     setDesk(null);
     setAdmin(null);
@@ -251,16 +293,23 @@ export function App() {
     const navigation = readNavigationState();
     setSelectedCampaignId(navigation.campaignId);
     setManualDialNumber("");
+    setViewRefreshVersion(0);
     setView(navigation.view);
     setError(nextError);
   }
 
   async function hydrateSession() {
+    const sessionRequest = ++sessionRequestRef.current;
     try {
       const [{ user: nextUser }, nextDesk] = await Promise.all([
         fetchMe(),
         fetchAgentDesk(selectedCampaignId ?? undefined)
       ]);
+      if (sessionRequest !== sessionRequestRef.current) {
+        return;
+      }
+      deskRequestRef.current += 1;
+      deskBackgroundRequestRef.current += 1;
       setUser(nextUser);
       setDesk(nextDesk);
       const nextCampaignId = nextDesk.campaign?.id ?? null;
@@ -270,27 +319,38 @@ export function App() {
       writeNavigationState(nextView, nextCampaignId, true);
       if (nextUser.role === "admin") {
         const [nextAdmin, nextImports] = await Promise.all([fetchAdminOverview(), fetchCsvImports()]);
+        if (sessionRequest !== sessionRequestRef.current) {
+          return;
+        }
         setAdmin(nextAdmin);
         setCsvImports(nextImports.imports);
       }
     } catch (sessionError) {
+      if (sessionRequest !== sessionRequestRef.current) {
+        return;
+      }
+      setSessionReady(true);
       resetSession(
         isApiError(sessionError) && sessionError.status === 401
           ? null
           : getErrorMessage(sessionError, "Could not load session")
       );
     } finally {
-      setSessionReady(true);
+      if (sessionRequest === sessionRequestRef.current) {
+        setSessionReady(true);
+      }
     }
   }
 
   async function handleLogin(email: string, password: string) {
     setError(null);
+    sessionRequestRef.current += 1;
     await login(email, password);
     await hydrateSession();
   }
 
   async function handleLogout() {
+    sessionRequestRef.current += 1;
     try {
       await logout();
     } finally {
@@ -299,11 +359,32 @@ export function App() {
   }
 
   async function handleCampaignChange(campaignId: string) {
-    const nextDesk = await fetchAgentDesk(campaignId);
-    const nextCampaignId = nextDesk.campaign?.id ?? null;
-    setSelectedCampaignId(nextCampaignId);
+    const requestId = ++deskRequestRef.current;
+    deskBackgroundRequestRef.current += 1;
+    deskActionPendingRef.current = true;
+    try {
+      const nextDesk = await fetchAgentDesk(campaignId);
+      if (requestId !== deskRequestRef.current) {
+        return;
+      }
+      const nextCampaignId = nextDesk.campaign?.id ?? null;
+      setSelectedCampaignId(nextCampaignId);
+      setDesk(nextDesk);
+      writeNavigationState(activeView, nextCampaignId);
+    } finally {
+      if (requestId === deskRequestRef.current) {
+        deskActionPendingRef.current = false;
+      }
+    }
+  }
+
+  function commitDeskMutation(nextDesk: AgentDeskResponse) {
+    if (activeUserIdRef.current !== nextDesk.user.id) {
+      return;
+    }
+    deskRequestRef.current += 1;
     setDesk(nextDesk);
-    writeNavigationState(activeView, nextCampaignId);
+    setSelectedCampaignId(nextDesk.campaign?.id ?? null);
   }
 
   function navigateToView(nextView: View) {
@@ -323,16 +404,27 @@ export function App() {
 
     let stopped = false;
     const refreshDesk = async () => {
-      const requestId = ++activeCallPollRequestRef.current;
+      if (deskActionPendingRef.current) return;
+      const requestId = ++deskBackgroundRequestRef.current;
+      const deskVersion = deskRequestRef.current;
       try {
         const nextDesk = await fetchAgentDesk(selectedCampaignId ?? desk.campaign?.id);
-        if (stopped || requestId !== activeCallPollRequestRef.current) {
+        if (
+          stopped ||
+          requestId !== deskBackgroundRequestRef.current ||
+          deskVersion !== deskRequestRef.current ||
+          deskActionPendingRef.current
+        ) {
           return;
         }
         setDesk(nextDesk);
         setSelectedCampaignId(nextDesk.campaign?.id ?? null);
       } catch (refreshError) {
-        if (stopped || requestId !== activeCallPollRequestRef.current) {
+        if (
+          stopped ||
+          requestId !== deskBackgroundRequestRef.current ||
+          deskVersion !== deskRequestRef.current
+        ) {
           return;
         }
         if (isApiError(refreshError) && refreshError.status === 401) {
@@ -349,7 +441,7 @@ export function App() {
 
     return () => {
       stopped = true;
-      activeCallPollRequestRef.current += 1;
+      deskBackgroundRequestRef.current += 1;
       window.clearInterval(interval);
     };
   }, [desk?.activeCall?.id, desk?.campaign?.id, selectedCampaignId, user]);
@@ -361,27 +453,49 @@ export function App() {
 
     let stopped = false;
     let debounce: number | null = null;
-    const refresh = async () => {
+    const pendingSources = new Set<string>();
+    const refresh = async (sources: ReadonlySet<string>) => {
       const requestId = ++liveRefreshRequestRef.current;
       try {
-        if (user.role === "admin") {
-          const [nextDesk, nextAdmin, nextImports] = await Promise.all([
-            fetchAgentDesk(selectedCampaignId ?? undefined),
-            fetchAdminOverview(),
-            fetchCsvImports()
-          ]);
-          if (stopped || requestId !== liveRefreshRequestRef.current) return;
+        const shouldRefreshDesk = [...sources].some(sourceAffectsDesk);
+        const canRefreshDesk = shouldRefreshDesk && !deskActionPendingRef.current;
+        const deskRequestId = canRefreshDesk
+          ? ++deskBackgroundRequestRef.current
+          : deskBackgroundRequestRef.current;
+        const deskVersion = deskRequestRef.current;
+        const nextDesk = canRefreshDesk ? await fetchAgentDesk(selectedCampaignId ?? undefined) : null;
+        if (
+          nextDesk &&
+          !stopped &&
+          requestId === liveRefreshRequestRef.current &&
+          deskRequestId === deskBackgroundRequestRef.current &&
+          deskVersion === deskRequestRef.current &&
+          !deskActionPendingRef.current
+        ) {
           setDesk(nextDesk);
           setSelectedCampaignId(nextDesk.campaign?.id ?? null);
-          setAdmin(nextAdmin);
-          setCsvImports(nextImports.imports);
-          return;
         }
 
-        const nextDesk = await fetchAgentDesk(selectedCampaignId ?? undefined);
-        if (stopped || requestId !== liveRefreshRequestRef.current) return;
-        setDesk(nextDesk);
-        setSelectedCampaignId(nextDesk.campaign?.id ?? null);
+        if (
+          user.role === "admin" &&
+          activeView !== "desk" &&
+          [...sources].some((source) => sourceAffectsView(source, activeView))
+        ) {
+          const nextAdmin = await fetchAdminOverview();
+          if (stopped || requestId !== liveRefreshRequestRef.current) return;
+          setAdmin(nextAdmin);
+          setViewRefreshVersion((current) => current + 1);
+        }
+
+        if (
+          user.role === "admin" &&
+          activeView === "campaigns" &&
+          [...sources].some((source) => source === "database" || source.startsWith("csv_import"))
+        ) {
+          const nextImports = await fetchCsvImports();
+          if (stopped || requestId !== liveRefreshRequestRef.current) return;
+          setCsvImports(nextImports.imports);
+        }
       } catch (refreshError) {
         if (stopped || requestId !== liveRefreshRequestRef.current) return;
         if (isApiError(refreshError) && refreshError.status === 401) {
@@ -389,9 +503,14 @@ export function App() {
         }
       }
     };
-    const scheduleRefresh = () => {
+    const scheduleRefresh = (event: AgentLiveRefreshEvent = { source: "database", occurredAt: "" }) => {
+      pendingSources.add(event.source || "database");
       if (debounce !== null) window.clearTimeout(debounce);
-      debounce = window.setTimeout(() => void refresh(), 100);
+      debounce = window.setTimeout(() => {
+        const sources = new Set(pendingSources);
+        pendingSources.clear();
+        void refresh(sources);
+      }, 100);
     };
 
     let unsubscribe: () => void = () => undefined;
@@ -405,19 +524,17 @@ export function App() {
     } catch {
       // The periodic refresh below keeps the desk usable if SSE is unavailable.
     }
-    const fallback = window.setInterval(() => void refresh(), 30_000);
+    const fallback = window.setInterval(() => void refresh(new Set(["database"])), 30_000);
 
     return () => {
       stopped = true;
       liveRefreshRequestRef.current += 1;
+      deskBackgroundRequestRef.current += 1;
       if (debounce !== null) window.clearTimeout(debounce);
       window.clearInterval(fallback);
       unsubscribe();
     };
-  }, [selectedCampaignId, user?.id, user?.role]);
-
-  const isAgentOnly = user?.role === "agent";
-  const activeView: View = isAgentOnly ? "desk" : view;
+  }, [activeView, selectedCampaignId, user?.id, user?.role]);
   const softphoneRuntime = useSoftphoneRegistration(user && activeView === "desk" ? user : null);
 
   if (!sessionReady) {
@@ -444,12 +561,13 @@ export function App() {
             <span>Campaign</span>
             <strong>{desk.campaign?.name ?? "Outbound calling"}</strong>
           </div>
-          <nav className="nav-list">
+          <nav aria-label="Primary navigation" className="nav-list">
             {navItems.map((item) => {
               const Icon = item.icon;
               return (
                 <button
                   aria-current={item.id === activeView ? "page" : undefined}
+                  aria-label={item.label}
                   className={item.id === activeView ? "nav-item active" : "nav-item"}
                   disabled={Boolean(desk.activeCall && activeView === "desk" && item.id !== "desk")}
                   key={item.id}
@@ -502,7 +620,7 @@ export function App() {
               desk={desk}
               manualDialNumber={manualDialNumber}
               onCampaignChange={handleCampaignChange}
-              onDeskChanged={setDesk}
+              onDeskChanged={commitDeskMutation}
               onManualDialNumberChange={setManualDialNumber}
               softphone={softphoneRuntime}
             />
@@ -517,6 +635,7 @@ export function App() {
                 navigateToView("desk");
               }}
               selectedCampaignId={selectedCampaignId}
+              viewRefreshVersion={viewRefreshVersion}
               view={activeView}
               user={user}
             />
@@ -538,6 +657,9 @@ function LoginScreen({
   const [password, setPassword] = useState("");
   const [pending, setPending] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  useEffect(() => {
+    document.title = "Sign in · Dialer";
+  }, []);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -583,7 +705,11 @@ function LoginScreen({
               value={password}
             />
           </label>
-          {(formError || error) && <p className="form-error">{formError ?? error}</p>}
+          {(formError || error) && (
+            <p className="form-error" role="alert">
+              {formError ?? error}
+            </p>
+          )}
           <button className="primary-action" disabled={pending} type="submit">
             <PhoneCall size={17} />
             {pending ? "Signing in" : "Sign in"}
@@ -624,10 +750,17 @@ function TopBar({
     settings: { title: "Settings", subtitle: "Users, calling controls and operations" }
   };
   const heading = titles[view];
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    document.title = `${heading.title} · Dialer`;
+    headingRef.current?.focus();
+  }, [heading.title]);
   return (
     <header className="topbar">
       <div className="topbar-title">
-        <h1>{heading.title}</h1>
+        <h1 ref={headingRef} tabIndex={-1}>
+          {heading.title}
+        </h1>
         <p>{heading.subtitle}</p>
       </div>
       <div className="topbar-actions">
@@ -647,7 +780,7 @@ function TopBar({
           <Headphones size={16} />
           <span>{user.name}</span>
         </div>
-        <button className="icon-button" onClick={onLogout} title="Log out" type="button">
+        <button aria-label="Log out" className="icon-button" onClick={onLogout} title="Log out" type="button">
           <LogOut size={17} />
         </button>
       </div>
@@ -671,10 +804,10 @@ function AgentDesk({
   softphone: SoftphoneRuntime;
 }) {
   const [callNextPending, setCallNextPending] = useState(false);
+  const callStartPendingRef = useRef(false);
   const [callNextError, setCallNextError] = useState<string | null>(null);
-  const [endCallPending, setEndCallPending] = useState(false);
-  const [dropVoicemailPending, setDropVoicemailPending] = useState(false);
-  const [dtmfPending, setDtmfPending] = useState(false);
+  const [callControlPending, setCallControlPending] = useState<"hangup" | "voicemail" | "dtmf" | null>(null);
+  const callControlPendingRef = useRef<typeof callControlPending>(null);
   const [endCallError, setEndCallError] = useState<string | null>(null);
   const campaign = desk.campaign;
   const availabilityStatus = useEffectiveAvailability(desk.availability);
@@ -689,14 +822,11 @@ function AgentDesk({
       setCallNextError(callStartBlockedMessage(desk, softphone));
       return;
     }
-    setCallNextPending(true);
     setCallNextError(null);
     try {
-      onDeskChanged(await startNextCall({ campaignId: campaign.id }));
+      await runCallStart(() => startNextCall({ campaignId: campaign.id }));
     } catch (error) {
       setCallNextError(error instanceof Error ? error.message : "Could not start next call");
-    } finally {
-      setCallNextPending(false);
     }
   }
 
@@ -705,50 +835,73 @@ function AgentDesk({
       setCallNextError(callStartBlockedMessage(desk, softphone));
       return;
     }
-    setCallNextPending(true);
     setCallNextError(null);
     try {
-      onDeskChanged(await startLeadCall(lead.id));
+      await runCallStart(() => startLeadCall(lead.id));
     } catch (error) {
       setCallNextError(error instanceof Error ? error.message : "Could not start lead call");
+    }
+  }
+
+  async function callManual(phoneNumber: string) {
+    if (!campaign) {
+      throw new Error("No active campaign is available");
+    }
+    await runCallStart(() => startManualCall({ campaignId: campaign.id, phoneNumber }));
+  }
+
+  async function runCallStart(action: () => Promise<AgentDeskResponse>) {
+    if (callStartPendingRef.current) {
+      throw new Error("Another call is already starting");
+    }
+    callStartPendingRef.current = true;
+    setCallNextPending(true);
+    try {
+      onDeskChanged(await action());
     } finally {
+      callStartPendingRef.current = false;
       setCallNextPending(false);
     }
   }
 
   async function hangUp(callId: string) {
-    setEndCallPending(true);
-    setEndCallError(null);
-    try {
-      onDeskChanged(await endCall(callId, { campaignId: campaign?.id }));
-    } catch (error) {
-      setEndCallError(error instanceof Error ? error.message : "Could not end call");
-    } finally {
-      setEndCallPending(false);
-    }
+    await runCallControl("hangup", () => endCall(callId, { campaignId: campaign?.id }), "Could not end call");
   }
 
   async function handleDropVoicemail(callId: string, recordingId?: string) {
-    setDropVoicemailPending(true);
-    setEndCallError(null);
-    try {
-      onDeskChanged(await dropVoicemail(callId, { campaignId: campaign?.id, recordingId }));
-    } catch (error) {
-      setEndCallError(error instanceof Error ? error.message : "Could not drop voicemail");
-    } finally {
-      setDropVoicemailPending(false);
-    }
+    await runCallControl(
+      "voicemail",
+      () => dropVoicemail(callId, { campaignId: campaign?.id, recordingId }),
+      "Could not drop voicemail"
+    );
   }
 
   async function handleSendDtmf(callId: string, digit: string) {
-    setDtmfPending(true);
+    await runCallControl(
+      "dtmf",
+      () => sendDtmf(callId, { campaignId: campaign?.id, digit }),
+      "Could not send DTMF"
+    );
+  }
+
+  async function runCallControl(
+    kind: NonNullable<typeof callControlPending>,
+    action: () => Promise<AgentDeskResponse>,
+    fallbackError: string
+  ) {
+    if (callControlPendingRef.current) {
+      return;
+    }
+    callControlPendingRef.current = kind;
+    setCallControlPending(kind);
     setEndCallError(null);
     try {
-      onDeskChanged(await sendDtmf(callId, { campaignId: campaign?.id, digit }));
+      onDeskChanged(await action());
     } catch (error) {
-      setEndCallError(error instanceof Error ? error.message : "Could not send DTMF");
+      setEndCallError(error instanceof Error ? error.message : fallbackError);
     } finally {
-      setDtmfPending(false);
+      callControlPendingRef.current = null;
+      setCallControlPending(null);
     }
   }
 
@@ -759,13 +912,12 @@ function AgentDesk({
         {desk.activeCall && (
           <ActiveCall
             desk={desk}
-            dropPending={dropVoicemailPending}
+            controlPending={callControlPending}
             error={endCallError}
             onDropVoicemail={handleDropVoicemail}
             onHangUp={hangUp}
             onSendDtmf={handleSendDtmf}
-            dtmfPending={dtmfPending}
-            pending={endCallPending}
+            softphone={softphone}
           />
         )}
         <AgentNoCampaignStatus desk={desk} onDeskChanged={onDeskChanged} softphone={softphone} />
@@ -794,13 +946,12 @@ function AgentDesk({
         />
         <ActiveCall
           desk={desk}
-          dropPending={dropVoicemailPending}
+          controlPending={callControlPending}
           error={endCallError}
           onDropVoicemail={handleDropVoicemail}
           onHangUp={hangUp}
           onSendDtmf={handleSendDtmf}
-          dtmfPending={dtmfPending}
-          pending={endCallPending}
+          softphone={softphone}
         />
         <LeadContextPanel lead={activeLead} />
         <VoicemailJobs jobs={desk.voicemailJobs} />
@@ -820,12 +971,14 @@ function AgentDesk({
       />
       <AgentStatusPanel
         canStartCalls={canStartCalls}
+        callStartPending={callNextPending}
         desk={campaignDesk}
         manualDialNumber={manualDialNumber}
         mode="ready"
         onCampaignChange={onCampaignChange}
         onDeskChanged={onDeskChanged}
         onManualDialNumberChange={onManualDialNumberChange}
+        onStartManualCall={callManual}
         softphone={softphone}
       />
       <VoicemailJobs jobs={desk.voicemailJobs} />
@@ -930,7 +1083,11 @@ function LeadQueue({
         </div>
         <p>{activeQueue ? "Current campaign queue" : "Start the next call from the campaign queue."}</p>
       </div>
-      {error && <p className="form-error">{error}</p>}
+      {error && (
+        <p className="form-error" role="alert">
+          {error}
+        </p>
+      )}
       {showRecommendedCall && recommended && (
         <div className="recommended-call">
           <h3>Next lead</h3>
@@ -962,7 +1119,12 @@ function LeadQueue({
           value={query}
         />
       </label>
-      <div className="lead-table" role="table" aria-label="Next leads">
+      <div className="lead-table" role="table" aria-label={activeQueue ? "Lead queue" : "Next leads"}>
+        <div className="lead-table-row lead-table-head" role="row">
+          <span aria-hidden="true" />
+          <span role="columnheader">Lead</span>
+          <span role="columnheader">Status</span>
+        </div>
         {visibleLeads.map((lead) => {
           const company = getDisplayCompany(lead.company);
           return (
@@ -970,12 +1132,12 @@ function LeadQueue({
               <span className="lead-avatar" aria-hidden="true">
                 {getInitials(lead.name)}
               </span>
-              <div className="lead-identity">
+              <div className="lead-identity" role="cell">
                 <strong>{lead.name}</strong>
                 {activeQueue && company && <small>{company}</small>}
                 <span>{lead.phoneNumber}</span>
               </div>
-              <div className="lead-row-state">
+              <div className="lead-row-state" role="cell">
                 <b>{formatLeadStatus(lead.status)}</b>
                 {showRecommendedCall && (
                   <button
@@ -993,7 +1155,9 @@ function LeadQueue({
         })}
         {!visibleLeads.length && (
           <div className="lead-table-empty" role="row">
-            {leads.length ? "No leads match your search." : "No leads are queued for this campaign."}
+            <span role="cell">
+              {leads.length ? "No leads match your search." : "No leads are queued for this campaign."}
+            </span>
           </div>
         )}
       </div>
@@ -1140,33 +1304,40 @@ function AvailabilityControl({
       >
         {pending ? "Saving" : actionLabel}
       </button>
-      {error && <small className="form-error">{error}</small>}
+      {error && (
+        <small className="form-error" role="alert">
+          {error}
+        </small>
+      )}
     </div>
   );
 }
 
 function AgentStatusPanel({
   canStartCalls,
+  callStartPending,
   desk,
   manualDialNumber,
   mode,
   onCampaignChange,
   onDeskChanged,
   onManualDialNumberChange,
+  onStartManualCall,
   softphone
 }: {
   canStartCalls: boolean;
+  callStartPending: boolean;
   desk: AgentDeskWithCampaign;
   manualDialNumber: string;
   mode: "ready" | "active";
   onCampaignChange: (campaignId: string) => Promise<void>;
   onDeskChanged: (desk: AgentDeskResponse) => void;
   onManualDialNumberChange: (phoneNumber: string) => void;
+  onStartManualCall: (phoneNumber: string) => Promise<void>;
   softphone: SoftphoneRuntime;
 }) {
   const [campaignPending, setCampaignPending] = useState(false);
   const [campaignError, setCampaignError] = useState<string | null>(null);
-  const [manualDialPending, setManualDialPending] = useState(false);
   const [manualDialError, setManualDialError] = useState<string | null>(null);
   const phoneStatus = getPhoneStatusCopy(softphone);
 
@@ -1189,19 +1360,12 @@ function AgentStatusPanel({
       return;
     }
 
-    setManualDialPending(true);
     setManualDialError(null);
     try {
-      const nextDesk = await startManualCall({
-        campaignId: desk.campaign.id,
-        phoneNumber: manualDialNumber
-      });
+      await onStartManualCall(manualDialNumber);
       onManualDialNumberChange("");
-      onDeskChanged(nextDesk);
     } catch (error) {
       setManualDialError(error instanceof Error ? error.message : "Could not start call");
-    } finally {
-      setManualDialPending(false);
     }
   }
 
@@ -1213,7 +1377,9 @@ function AgentStatusPanel({
       <label className="campaign-selector">
         Campaign
         <select
-          disabled={campaignPending || mode === "active" || desk.availableCampaigns.length <= 1}
+          disabled={
+            campaignPending || callStartPending || mode === "active" || desk.availableCampaigns.length <= 1
+          }
           onChange={(event) => void changeCampaign(event.target.value)}
           value={desk.campaign.id}
         >
@@ -1224,9 +1390,17 @@ function AgentStatusPanel({
           ))}
         </select>
       </label>
-      {campaignError && <p className="form-error">{campaignError}</p>}
+      {campaignError && (
+        <p className="form-error" role="alert">
+          {campaignError}
+        </p>
+      )}
       <div className="status-stack">
-        <AvailabilityControl desk={desk} disabled={mode === "active"} onDeskChanged={onDeskChanged} />
+        <AvailabilityControl
+          desk={desk}
+          disabled={callStartPending || mode === "active"}
+          onDeskChanged={onDeskChanged}
+        />
       </div>
       <div className="softphone-runtime-card">
         <div className="softphone-runtime-icon">
@@ -1267,14 +1441,18 @@ function AgentStatusPanel({
             />
             <button
               className="primary-action teal-action"
-              disabled={manualDialPending || !manualDialNumber.trim() || !canStartCalls}
+              disabled={callStartPending || !manualDialNumber.trim() || !canStartCalls}
               type="submit"
             >
               <PhoneCall size={17} />
-              {manualDialPending ? "Starting" : "Call"}
+              {callStartPending ? "Starting" : "Call"}
             </button>
           </div>
-          {manualDialError && <p className="form-error">{manualDialError}</p>}
+          {manualDialError && (
+            <p className="form-error" role="alert">
+              {manualDialError}
+            </p>
+          )}
         </form>
       )}
       <div className="status-metric-list">
@@ -1328,23 +1506,21 @@ function AgentNoCampaignStatus({
 }
 
 function ActiveCall({
+  controlPending,
   desk,
-  dropPending,
-  dtmfPending,
   error,
   onDropVoicemail,
   onHangUp,
   onSendDtmf,
-  pending
+  softphone
 }: {
+  controlPending: "hangup" | "voicemail" | "dtmf" | null;
   desk: AgentDeskResponse;
-  dropPending: boolean;
-  dtmfPending: boolean;
   error: string | null;
   onDropVoicemail: (callId: string, recordingId?: string) => Promise<void>;
   onHangUp: (callId: string) => Promise<void>;
   onSendDtmf: (callId: string, digit: string) => Promise<void>;
-  pending: boolean;
+  softphone: SoftphoneRuntime;
 }) {
   const activeCall = desk.activeCall as ActiveCallUi | null;
   const defaultRecordingId = activeCall?.recordingId ?? desk.recordings[0]?.id ?? "";
@@ -1357,7 +1533,11 @@ function ActiveCall({
     return (
       <article className="panel active-call">
         <PanelHeader icon={Phone} title="Active call" meta="Ready" />
-        {error && <p className="form-error">{error}</p>}
+        {error && (
+          <p className="form-error" role="alert">
+            {error}
+          </p>
+        )}
       </article>
     );
   }
@@ -1366,16 +1546,24 @@ function ActiveCall({
   const voicemailSignal = formatVoicemailSignal(activeCall.voicemailSignal);
   const selectedRecording = desk.recordings.find((recording) => recording.id === selectedRecordingId);
   const dropRecordingId = selectedRecording?.id ?? activeCall.recordingId ?? undefined;
-  const dropEligibility = activeCall.actions?.dropVoicemail ?? {
-    allowed: activeCall.status === "bridged",
-    reason: activeCall.status === "bridged" ? null : "Wait until the customer is connected"
+  const unavailableAction = {
+    allowed: false,
+    reason: "Call controls are unavailable. Refresh the Agent Desk before continuing."
   };
-  const dtmfEligibility = activeCall.actions?.sendDtmf ?? {
-    allowed: activeCall.status === "bridged",
-    reason: activeCall.status === "bridged" ? null : "DTMF is available after the customer connects"
-  };
+  const dropEligibility = activeCall.actions?.dropVoicemail ?? unavailableAction;
+  const dtmfEligibility = activeCall.actions?.sendDtmf ?? unavailableAction;
+  const browserAudioCopy =
+    activeCall.status !== "bridged"
+      ? durationLabel
+      : softphone.audioPlaybackState === "playing"
+        ? "Browser audio playing · customer connected"
+        : softphone.audioPlaybackState === "unavailable"
+          ? "Browser call audio is unavailable"
+          : softphone.audioPlaybackState === "blocked"
+            ? "Browser blocked call audio playback"
+            : "Customer connected · waiting for browser audio";
   return (
-    <article className="panel active-call">
+    <article aria-busy={controlPending !== null} className="panel active-call">
       <div className="call-status-line">
         <StatusBadge label={`● ${durationLabel}`} tone="good" />
         <span>Call {activeCall.id.slice(0, 8).toUpperCase()}</span>
@@ -1389,7 +1577,7 @@ function ActiveCall({
       </div>
       <div className="call-stage">
         <div className="call-stage-top">
-          <span>Live audio</span>
+          <span>{softphone.audioPlaybackState === "playing" ? "Live audio" : "Call audio"}</span>
           <strong aria-label={`Call duration ${formatDuration(activeCall.durationSeconds)}`}>
             {formatDuration(activeCall.durationSeconds)}
           </strong>
@@ -1403,7 +1591,7 @@ function ActiveCall({
           ))}
         </div>
         <div className="call-stage-meta">
-          <span>{activeCall.status === "bridged" ? "Stable media · customer connected" : durationLabel}</span>
+          <span aria-live="polite">{browserAudioCopy}</span>
           <b className={`recording-state recording-${activeCall.callRecordingStatus}`}>
             {activeCall.callRecordingStatus === "recording"
               ? "● REC"
@@ -1414,6 +1602,26 @@ function ActiveCall({
                   : "Not recorded"}
           </b>
         </div>
+        {activeCall.status === "bridged" && softphone.audioPlaybackState === "blocked" && (
+          <div className="audio-playback-warning" role="alert">
+            <span>Your browser blocked call audio. Start playback to hear the customer.</span>
+            <button
+              className="secondary-action compact-action"
+              onClick={() => void softphone.retryRemoteAudio()}
+              type="button"
+            >
+              <Play size={15} />
+              Play call audio
+            </button>
+          </div>
+        )}
+        {activeCall.status === "bridged" && softphone.audioPlaybackState === "unavailable" && (
+          <div className="audio-playback-warning" role="alert">
+            <span>
+              The browser could not attach the customer audio stream. End the call and reconnect the phone.
+            </span>
+          </div>
+        )}
       </div>
       <div className="handoff-card">
         <Voicemail size={18} />
@@ -1432,7 +1640,7 @@ function ActiveCall({
           <span>Recording</span>
           <label className="compact-select">
             <select
-              disabled={pending || dropPending || desk.recordings.length === 0}
+              disabled={controlPending !== null || desk.recordings.length === 0}
               onChange={(event) => setSelectedRecordingId(event.target.value)}
               value={selectedRecordingId}
             >
@@ -1450,7 +1658,7 @@ function ActiveCall({
       <div className="call-actions call-actions-stacked">
         <button
           className="primary-action voicemail-primary-action"
-          disabled={pending || dropPending || !dropRecordingId || !dropEligibility.allowed}
+          disabled={controlPending !== null || !dropRecordingId || !dropEligibility.allowed}
           onClick={() => onDropVoicemail(activeCall.id, dropRecordingId)}
           title={
             !dropEligibility.allowed
@@ -1460,28 +1668,32 @@ function ActiveCall({
           type="button"
         >
           <Voicemail size={17} />
-          {dropPending ? "Dropping" : "Drop voicemail"}
+          {controlPending === "voicemail" ? "Dropping" : "Drop voicemail"}
         </button>
         <button
           className="danger-action"
-          disabled={pending}
+          disabled={controlPending !== null}
           onClick={() => onHangUp(activeCall.id)}
           type="button"
         >
           <PhoneOff size={17} />
-          {pending ? "Ending" : "Hang up"}
+          {controlPending === "hangup" ? "Ending" : "Hang up"}
         </button>
       </div>
       {!dropEligibility.allowed && dropEligibility.reason && (
         <p className="action-hint">{dropEligibility.reason}</p>
       )}
-      {error && <p className="form-error">{error}</p>}
+      {error && (
+        <p className="form-error" role="alert">
+          {error}
+        </p>
+      )}
       <details className="dtmf-panel">
         <summary>Keypad</summary>
         <div className="dtmf-pad" aria-label="DTMF keypad">
           {["1", "2", "3", "4", "5", "6", "7", "8", "9", "*", "0", "#"].map((digit) => (
             <button
-              disabled={dtmfPending || !dtmfEligibility.allowed}
+              disabled={controlPending !== null || !dtmfEligibility.allowed}
               key={digit}
               onClick={() => void onSendDtmf(activeCall.id, digit)}
               title={
@@ -1509,13 +1721,7 @@ function ActiveCall({
   );
 }
 
-type ActiveCallUi = NonNullable<AgentDeskResponse["activeCall"]> & {
-  actions?: {
-    dropVoicemail: { allowed: boolean; reason: string | null };
-    sendDtmf: { allowed: boolean; reason: string | null };
-  };
-  campaignName?: string;
-};
+type ActiveCallUi = NonNullable<AgentDeskResponse["activeCall"]> & { campaignName?: string };
 
 function formatDuration(totalSeconds: number): string {
   const safeSeconds = Math.max(0, Math.floor(totalSeconds));
@@ -1555,7 +1761,8 @@ function AdminView({
   onManualDial,
   selectedCampaignId,
   user,
-  view
+  view,
+  viewRefreshVersion
 }: {
   admin: AdminOverviewResponse | null;
   csvImports: CsvImportSummary[];
@@ -1564,6 +1771,7 @@ function AdminView({
   selectedCampaignId: string | null;
   user: PublicUser;
   view: View;
+  viewRefreshVersion: number;
 }) {
   if (user.role !== "admin") {
     return (
@@ -1579,7 +1787,7 @@ function AdminView({
   }
 
   const content = {
-    analytics: <AnalyticsView admin={admin} />,
+    analytics: <AnalyticsView admin={admin} refreshVersion={viewRefreshVersion} />,
     campaigns: (
       <Campaigns
         admin={admin}
@@ -1590,7 +1798,7 @@ function AdminView({
       />
     ),
     recordings: <Recordings admin={admin} onChanged={onChanged} />,
-    history: <HistoryView admin={admin} />,
+    history: <HistoryView admin={admin} refreshVersion={viewRefreshVersion} />,
     suppression: <SuppressionView admin={admin} onChanged={onChanged} />,
     settings: <SettingsView admin={admin} onChanged={onChanged} />,
     desk: null
@@ -1647,7 +1855,7 @@ function formatAnalyticsDuration(totalSeconds: number): string {
   return `${minutes}m ${remainder}s`;
 }
 
-function AnalyticsView({ admin }: { admin: AdminOverviewResponse }) {
+function AnalyticsView({ admin, refreshVersion }: { admin: AdminOverviewResponse; refreshVersion: number }) {
   const analyticsCampaignId = new URLSearchParams(window.location.search).get("analyticsCampaignId");
   const initialFilters = useRef({
     ...analyticsPreset(7),
@@ -1685,11 +1893,11 @@ function AnalyticsView({ admin }: { admin: AdminOverviewResponse }) {
   }
 
   useEffect(() => {
-    void load(initialFilters.current);
+    void load(draft);
     return () => {
       requestId.current += 1;
     };
-  }, []);
+  }, [refreshVersion]);
 
   function applyPreset(days: number) {
     const next = { ...analyticsPreset(days), campaignId: draft.campaignId };
@@ -4061,7 +4269,8 @@ function CreateUserForm({ onChanged }: { onChanged: () => Promise<void> }) {
   );
 }
 
-function HistoryView({ admin }: { admin: AdminOverviewResponse }) {
+function HistoryView({ admin, refreshVersion }: { admin: AdminOverviewResponse; refreshVersion: number }) {
+  const detailRequestRef = useRef(0);
   const [selectedCallId, setSelectedCallId] = useState<string | null>(null);
   const [technicalCallId, setTechnicalCallId] = useState<string | null>(null);
   const [detail, setDetail] = useState<CallDetailResponse | null>(null);
@@ -4086,6 +4295,13 @@ function HistoryView({ admin }: { admin: AdminOverviewResponse }) {
   const [page, setPage] = useState(1);
   const [historyPending, setHistoryPending] = useState(false);
   const [pcapPendingId, setPcapPendingId] = useState<string | null>(null);
+
+  useEffect(
+    () => () => {
+      detailRequestRef.current += 1;
+    },
+    []
+  );
 
   useEffect(() => {
     let active = true;
@@ -4118,7 +4334,19 @@ function HistoryView({ admin }: { admin: AdminOverviewResponse }) {
       active = false;
       window.clearTimeout(timeout);
     };
-  }, [agentId, avmdReview, campaignId, dateFrom, dateTo, outcome, page, query, recording, voicemail]);
+  }, [
+    agentId,
+    avmdReview,
+    campaignId,
+    dateFrom,
+    dateTo,
+    outcome,
+    page,
+    query,
+    recording,
+    refreshVersion,
+    voicemail
+  ]);
 
   async function exportHistory() {
     setError(null);
@@ -4147,6 +4375,7 @@ function HistoryView({ admin }: { admin: AdminOverviewResponse }) {
 
   async function toggleCall(callId: string) {
     if (selectedCallId === callId) {
+      detailRequestRef.current += 1;
       setSelectedCallId(null);
       setTechnicalCallId(null);
       setDetail(null);
@@ -4157,12 +4386,16 @@ function HistoryView({ admin }: { admin: AdminOverviewResponse }) {
     setDetail(null);
     setPendingId(callId);
     setError(null);
+    const requestId = ++detailRequestRef.current;
     try {
-      setDetail(await fetchCallDetail(callId));
+      const nextDetail = await fetchCallDetail(callId);
+      if (requestId !== detailRequestRef.current) return;
+      setDetail(nextDetail);
     } catch (detailError) {
+      if (requestId !== detailRequestRef.current) return;
       setError(getErrorMessage(detailError, "Could not load call details"));
     } finally {
-      setPendingId(null);
+      if (requestId === detailRequestRef.current) setPendingId(null);
     }
   }
 
@@ -5141,6 +5374,37 @@ function SystemSettingsPanel() {
       .catch((loadError) => setError(getErrorMessage(loadError, "Could not load system settings")));
   }, []);
 
+  useEffect(() => {
+    if (settings?.alertmanagerApplyStatus?.state !== "pending") return undefined;
+    let active = true;
+    let timer: number | null = null;
+    const pollApplyStatus = async () => {
+      try {
+        const next = await fetchSystemSettings();
+        if (!active) return;
+        setSettings((current) =>
+          current
+            ? {
+                ...current,
+                alertmanagerApplyStatus: next.alertmanagerApplyStatus,
+                updatedAt: next.updatedAt
+              }
+            : next
+        );
+        if (next.alertmanagerApplyStatus?.state === "pending") {
+          timer = window.setTimeout(() => void pollApplyStatus(), 1_500);
+        }
+      } catch {
+        if (active) timer = window.setTimeout(() => void pollApplyStatus(), 1_500);
+      }
+    };
+    timer = window.setTimeout(() => void pollApplyStatus(), 1_500);
+    return () => {
+      active = false;
+      if (timer !== null) window.clearTimeout(timer);
+    };
+  }, [settings?.alertmanagerApplyStatus?.state]);
+
   if (!settings) {
     return (
       <article className="panel">
@@ -5171,22 +5435,28 @@ function SystemSettingsPanel() {
       ...settings,
       ...Object.fromEntries(Object.entries(numberDrafts).map(([key, value]) => [key, Number(value)]))
     } as AdminSystemSettings;
-    const { availableAlertChannels: _available, updatedAt: _updatedAt, ...input } = parsedSettings;
+    const {
+      availableAlertChannels: _available,
+      alertmanagerApplyStatus: _applyStatus,
+      updatedAt: _updatedAt,
+      ...input
+    } = parsedSettings;
     try {
       const updated = await updateSystemSettings(input as UpdateAdminSystemSettingsRequest);
       setSettings(updated);
       setNumberDrafts(systemSettingNumberDrafts(updated));
-      setMessage("Settings applied");
+      setMessage("Settings saved");
     } catch (saveError) {
       setError(getErrorMessage(saveError, "Could not save system settings"));
     } finally {
       setPending(false);
     }
   };
+  const alertmanagerApplyStatus = settings.alertmanagerApplyStatus;
 
   return (
     <article className="panel form-panel system-settings-panel">
-      <PanelHeader icon={Settings2} title="System policies" meta="Applies immediately" />
+      <PanelHeader icon={Settings2} title="System policies" meta="Save and runtime status" />
       <form className="stack-form" onSubmit={submit}>
         <div className="inline-fields">
           <label>
@@ -5336,6 +5606,32 @@ function SystemSettingsPanel() {
         <p className="panel-note">
           Alert credentials remain deployment-managed; this screen only enables configured channels.
         </p>
+        {alertmanagerApplyStatus?.state === "pending" && (
+          <p aria-live="polite" className="panel-note" role="status">
+            Alertmanager configuration is saved; runtime reload is pending.
+          </p>
+        )}
+        {alertmanagerApplyStatus?.state === "applied" && (
+          <p aria-live="polite" className="form-success" role="status">
+            Alertmanager configuration applied
+            {alertmanagerApplyStatus.lastSuccessAt
+              ? ` at ${formatDateTime(alertmanagerApplyStatus.lastSuccessAt)}`
+              : ""}
+            .
+          </p>
+        )}
+        {alertmanagerApplyStatus?.state === "failed" && (
+          <p aria-live="assertive" className="form-error" role="alert">
+            Alertmanager reload failed
+            {alertmanagerApplyStatus.error ? `: ${alertmanagerApplyStatus.error}` : "."}
+          </p>
+        )}
+        {alertmanagerApplyStatus?.state === "not_configured" && (
+          <p className="panel-note">Alertmanager runtime reload is not configured for this deployment.</p>
+        )}
+        {!alertmanagerApplyStatus && (
+          <p className="panel-note">Alertmanager apply status is unavailable during the API upgrade.</p>
+        )}
         {error && <p className="form-error">{error}</p>}
         {message && <p className="form-success">{message}</p>}
         <button className="primary-action" disabled={pending} type="submit">

@@ -830,10 +830,16 @@ export interface AdminSystemSettings {
   alertmanagerSlackEnabled: boolean;
   alertmanagerTelegramEnabled: boolean;
   availableAlertChannels: { webhook: boolean; slack: boolean; telegram: boolean };
+  alertmanagerApplyStatus?: {
+    state: "not_configured" | "pending" | "applied" | "failed";
+    lastAttemptAt: string | null;
+    lastSuccessAt: string | null;
+    error: string | null;
+  };
   updatedAt: string | null;
 }
 
 export type UpdateAdminSystemSettingsRequest = Omit<
   AdminSystemSettings,
-  "availableAlertChannels" | "updatedAt"
+  "availableAlertChannels" | "alertmanagerApplyStatus" | "updatedAt"
 >;

@@ -39,6 +39,8 @@ Deploy the checked-out commit:
 ./scripts/deploy.sh
 ```
 
+The script first takes a non-blocking host-operation `flock` shared with backup, restore, rollback, certificate reconciliation, and both cron installers. Nested operations inherit the descriptor; a second independent operation fails closed instead of racing service or database changes.
+
 The script performs these steps:
 
 1. optionally runs a fast-forward-only pull when `DEPLOY_PULL=true`, then re-executes the pulled deploy script;
@@ -50,7 +52,7 @@ The script performs these steps:
 7. pulls external images, builds API/FreeSWITCH/packet-capture/web/proxy with the SHA tag, renders monitoring configuration, and validates Prometheus, Alertmanager, Blackbox Exporter, Loki, and Alloy configuration with their pinned runtime binaries;
 8. atomically records `PENDING_VERSION` before changing runtime services or running migrations;
 9. starts PostgreSQL/FreeSWITCH, runs migrations once with the new API image, creates/rotates the least-privilege PostgreSQL exporter role, then starts the stack with health waits;
-10. ensures/renews certificates, installs certificate/backup cron jobs, and runs the web/API smoke test;
+10. ensures/renews certificates, installs deterministic certificate/backup cron jobs, verifies every in-scope non-firewall mandatory Compose service is running and every configured health check is healthy, and runs the public web plus `/api/health/ready` smoke test;
 11. promotes the pending SHA to `CURRENT_VERSION` with `DEPLOYMENT_STATUS=stable`. A failure retains `failed_deploy` plus the unconfirmed target instead of claiming the old state matches runtime.
 
 `SKIP_DEPLOY_CHECKS`, `SKIP_PRE_DEPLOY_BACKUP`, `ALLOW_ACTIVE_CALL_DEPLOY`, `ALLOW_UNVERIFIED_ACTIVE_CALL_STATE`, `ALLOW_UNCONFIGURED_SIP_TRUNK`, `ALLOW_NO_ALERT_RECEIVER`, and `ALLOW_LOCAL_ONLY_BACKUPS` are break-glass/risk-acceptance controls. `SKIP_DEPLOY_CHECKS=true` skips `npm run quality`, but dependency installation still runs. Do not use these controls in an ordinary release; record owner, reason, time, and follow-up whenever one is used.
@@ -77,7 +79,21 @@ The client checkout separately needs read-only GitHub access, preferably through
 
 Leave `CLIENT_DEPLOY_ENABLED` absent or set to `false` during bootstrap. After this workflow commit has landed on `main`, manually update `/opt/outbound-dialer` once so `scripts/deploy-commit.sh` exists, complete the target `.env` and deployment acceptance checks, add the environment secrets, and only then set the repository variable to `true`. The next push to `main` will be the first automatic deployment.
 
-GitHub job concurrency and the host `flock` prevent overlapping releases. A deploy rejected because calls are active or because another release is running remains failed and must be rerun later; the workflow does not enable any break-glass override or perform a blind automatic rollback.
+GitHub job concurrency and the shared host `flock` prevent a release from overlapping another deploy, backup, restore, rollback, or certificate operation. A deploy rejected because calls are active or because another operation is running remains failed and must be rerun later; the workflow does not enable any break-glass override or perform a blind automatic rollback.
+
+Migration `019_freeswitch_event_idempotency_index.sql` is explicitly non-transactional and idempotent so PostgreSQL can build its partial unique index with `CREATE INDEX CONCURRENTLY`. Historical `call_events` rows remain unchanged and retain a null replay key; the first post-upgrade observation of an old event establishes the key for subsequent retries. This avoids a blocking historical rewrite/delete during API startup.
+
+## Certificate Renewal Safety
+
+The daily renewal job runs with the deterministic tool `PATH` captured by its installer and takes the shared host-operation lock. The backup installer records the actual Node.js, Docker, `flock`, and, when configured, AWS CLI directories; missing or non-absolute executable paths fail installation. Certbot may update certificate files, but proxy reload and Coturn recreation happen only when the current certificate fingerprint differs from `logs/applied-certificate.sha256`. An unchanged certificate produces no runtime restart.
+
+Before reading active-call state, the certificate workflow closes the durable `ops.call_start_paused` gate in PostgreSQL. Call creation takes a shared lock on that same row, so the maintenance update waits for in-flight starts and new starts fail with a temporary maintenance message until the gate is reopened. This removes the check/start race without restarting the API.
+
+If calls are active after a renewal, applying the new certificate is deferred, the gate is reopened, and the old fingerprint marker remains in place so a later run retries. If active-call state cannot be read, the job fails closed. A changed marker is written only after `nginx -t`, proxy reload, Coturn recreation/running-state verification, and verification that the proxy actually serves the new SHA-256 certificate fingerprint. Failure reopens the gate but leaves the previous marker for retry; failure to reopen the gate is a hard operator incident. A later unchanged-certificate run also reopens the gate after verifying the served fingerprint, which repairs a prior transient reopen failure. `ALLOW_ACTIVE_CALL_CERTIFICATE_APPLY=true` and `ALLOW_UNVERIFIED_CERTIFICATE_APPLY=true` are disruptive break-glass controls and require an explicit maintenance owner and impact record.
+
+## Runtime Containment
+
+All in-scope non-firewall Compose services use bounded local JSON-file log rotation and PID limits. The public proxy runs with a read-only root filesystem, an explicit set of required capabilities, no-new-privileges, read-only certificate volumes, and small writable tmpfs mounts for generated nginx configuration, fallback certificates, cache, PID, and temporary files. Prometheus, Alertmanager, and Grafana have readiness health checks in addition to the application, proxy, PostgreSQL, FreeSWITCH, and packet-capture checks. CI also starts the proxy with the same containment flags, without publishing host ports, and requires its configuration and HTTPS health path to succeed.
 
 ## Two-Stage SIP Credential Encryption Rollout
 

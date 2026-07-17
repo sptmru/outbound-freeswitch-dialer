@@ -175,11 +175,16 @@ describe("agent live-event subscription", () => {
     const onRefresh = vi.fn();
 
     const unsubscribe = subscribeAgentEvents({ onRefresh });
-    listeners.get("refresh")?.(new MessageEvent("refresh"));
+    listeners.get("refresh")?.(
+      new MessageEvent("refresh", {
+        data: JSON.stringify({ source: "calls", occurredAt: "2026-07-17T10:00:00.000Z" })
+      })
+    );
     unsubscribe();
 
     expect(constructor).toHaveBeenCalledWith("/api/agent/events", { withCredentials: true });
     expect(onRefresh).toHaveBeenCalledTimes(1);
+    expect(onRefresh).toHaveBeenCalledWith({ source: "calls", occurredAt: "2026-07-17T10:00:00.000Z" });
     expect(close).toHaveBeenCalledTimes(1);
   });
 });

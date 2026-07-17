@@ -7,6 +7,21 @@ export interface ParsedCsv {
   rows: string[][];
 }
 
+export interface CsvParseLimits {
+  maxBytes?: number;
+  maxCellCharacters?: number;
+  maxCells?: number;
+  maxColumns?: number;
+  maxRows?: number;
+}
+
+const CSV_DATABASE_CHUNK_SIZE = 1_000;
+const DEFAULT_CSV_MAX_BYTES = 67_108_864;
+const DEFAULT_CSV_MAX_ROWS = 250_000;
+const DEFAULT_CSV_MAX_COLUMNS = 128;
+const DEFAULT_CSV_MAX_CELLS = 2_000_000;
+const DEFAULT_CSV_MAX_CELL_CHARACTERS = 65_536;
+
 export async function importSuppressionFromCsv(
   pool: pg.Pool,
   input: {
@@ -21,56 +36,128 @@ export async function importSuppressionFromCsv(
     throw new CsvImportError("Suppression CSV must include a phone column");
   }
   const reasonIndex = findColumn(input.parsed.headers, ["reason", "note", "notes"]);
+  const failures: SuppressionImportResponse["failures"] = [];
+  const validRows: Array<{
+    rowNumber: number;
+    phoneNumber: string;
+    normalizedPhoneNumber: string;
+    reason: string;
+  }> = [];
+
+  for (const [rowIndex, row] of input.parsed.rows.entries()) {
+    const rowNumber = rowIndex + 2;
+    const phoneNumber = (row[phoneIndex] ?? "").trim();
+    const reason = (reasonIndex >= 0 ? row[reasonIndex] : "")?.trim() || "Suppression CSV import";
+    const normalized = normalizePhoneNumber(phoneNumber, input.defaultCountryCode);
+    if (!normalized.ok) {
+      failures.push({ rowNumber, reason: normalized.reason });
+      continue;
+    }
+    validRows.push({ rowNumber, phoneNumber, normalizedPhoneNumber: normalized.number, reason });
+  }
+
+  if (!validRows.length) {
+    return {
+      filename: input.filename,
+      totalRows: input.parsed.rows.length,
+      importedRows: 0,
+      updatedRows: 0,
+      failedRows: failures.length,
+      failures: failures.slice(0, 50)
+    };
+  }
+
+  // Preserve the loop import's final-value semantics while doing a bounded
+  // number of database round trips: the last row for a number wins, earlier
+  // duplicates still count as updates and retain individual audit events.
+  const latestByNumber = new Map<string, (typeof validRows)[number]>();
+  for (const row of validRows) latestByNumber.set(row.normalizedPhoneNumber, row);
+  const uniqueRows = [...latestByNumber.values()].sort((left, right) =>
+    compareNormalizedPhoneNumbers(left.normalizedPhoneNumber, right.normalizedPhoneNumber)
+  );
   const client = await pool.connect();
   let importedRows = 0;
-  let updatedRows = 0;
-  const failures: SuppressionImportResponse["failures"] = [];
 
   try {
     await client.query("begin");
-    for (const [rowIndex, row] of input.parsed.rows.entries()) {
-      const rowNumber = rowIndex + 2;
-      const phoneNumber = (row[phoneIndex] ?? "").trim();
-      const reason = (reasonIndex >= 0 ? row[reasonIndex] : "")?.trim() || "Suppression CSV import";
-      const normalized = normalizePhoneNumber(phoneNumber, input.defaultCountryCode);
-      if (!normalized.ok) {
-        failures.push({ rowNumber, reason: normalized.reason });
-        continue;
-      }
-
-      const result = await client.query<{ id: string; inserted: boolean }>(
+    await lockNormalizedPhoneNumbers(
+      client,
+      uniqueRows.map((row) => row.normalizedPhoneNumber)
+    );
+    const entryIds = new Map<string, string>();
+    for (const chunk of chunks(uniqueRows, CSV_DATABASE_CHUNK_SIZE)) {
+      const upserted = await client.query<{
+        id: string;
+        inserted: boolean;
+        normalized_phone_number: string;
+      }>(
         `
-          insert into suppression_entries (phone_number, normalized_phone_number, reason, created_by_user_id)
-          values ($1, $2, $3, $4)
-          on conflict (normalized_phone_number)
-          do update set phone_number = excluded.phone_number,
-                        reason = excluded.reason,
-                        created_by_user_id = excluded.created_by_user_id
-          returning id, (xmax = 0) as inserted
-        `,
-        [phoneNumber, normalized.number, reason, input.actorUserId]
+        with input_rows as (
+          select *
+          from jsonb_to_recordset($1::jsonb) as item(
+            phone_number text,
+            normalized_phone_number text,
+            reason text
+          )
+        )
+        insert into suppression_entries (phone_number, normalized_phone_number, reason, created_by_user_id)
+        select phone_number, normalized_phone_number, reason, $2
+        from input_rows
+        order by normalized_phone_number
+        on conflict (normalized_phone_number)
+        do update set phone_number = excluded.phone_number,
+                      reason = excluded.reason,
+                      created_by_user_id = excluded.created_by_user_id
+        returning id, normalized_phone_number, (xmax = 0) as inserted
+      `,
+        [
+          JSON.stringify(
+            chunk.map((row) => ({
+              phone_number: row.phoneNumber,
+              normalized_phone_number: row.normalizedPhoneNumber,
+              reason: row.reason
+            }))
+          ),
+          input.actorUserId
+        ]
       );
-      const item = result.rows[0];
-      if (item.inserted) {
-        importedRows += 1;
-      } else {
-        updatedRows += 1;
-      }
+      importedRows += upserted.rows.filter((row) => row.inserted).length;
+      for (const row of upserted.rows) entryIds.set(row.normalized_phone_number, row.id);
+    }
+    for (const chunk of chunks(validRows, CSV_DATABASE_CHUNK_SIZE)) {
       await client.query(
         `
-          insert into suppression_events (
-            suppression_entry_id, actor_user_id, event_type, phone_number,
-            normalized_phone_number, reason, metadata_json
+        with input_rows as (
+          select *
+          from jsonb_to_recordset($1::jsonb) as item(
+            suppression_entry_id uuid,
+            phone_number text,
+            normalized_phone_number text,
+            reason text,
+            row_number integer
           )
-          values ($1, $2, 'imported', $3, $4, $5, $6::jsonb)
-        `,
+        )
+        insert into suppression_events (
+          suppression_entry_id, actor_user_id, event_type, phone_number,
+          normalized_phone_number, reason, metadata_json
+        )
+        select suppression_entry_id, $2, 'imported', phone_number,
+               normalized_phone_number, reason,
+               jsonb_build_object('filename', $3::text, 'rowNumber', row_number)
+        from input_rows
+      `,
         [
-          item.id,
+          JSON.stringify(
+            chunk.map((row) => ({
+              suppression_entry_id: entryIds.get(row.normalizedPhoneNumber),
+              phone_number: row.phoneNumber,
+              normalized_phone_number: row.normalizedPhoneNumber,
+              reason: row.reason,
+              row_number: row.rowNumber
+            }))
+          ),
           input.actorUserId,
-          phoneNumber,
-          normalized.number,
-          reason,
-          JSON.stringify({ filename: input.filename, rowNumber })
+          input.filename
         ]
       );
     }
@@ -86,7 +173,7 @@ export async function importSuppressionFromCsv(
     filename: input.filename,
     totalRows: input.parsed.rows.length,
     importedRows,
-    updatedRows,
+    updatedRows: validRows.length - importedRows,
     failedRows: failures.length,
     failures: failures.slice(0, 50)
   };
@@ -112,6 +199,39 @@ export async function importContactsFromCsv(
   }
   const companyIndex = findColumn(parsed.headers, ["company", "business", "organization", "org"]);
 
+  const validRows: Array<{
+    rowNumber: number;
+    phoneNumber: string;
+    normalizedPhoneNumber: string;
+    displayName: string;
+    mappedFields: Record<string, string>;
+  }> = [];
+  const initialFailures: Array<{ rowNumber: number; reason: string; row: Record<string, string> }> = [];
+  for (const [rowIndex, row] of parsed.rows.entries()) {
+    const rowNumber = rowIndex + 2;
+    const phoneNumber = (row[phoneIndex] ?? "").trim();
+    const displayName = (row[nameIndex] ?? "").trim();
+    const mappedFields = Object.fromEntries(
+      parsed.headers.map((header, index) => [header, (row[index] ?? "").trim()])
+    );
+    if (!displayName) {
+      initialFailures.push({ rowNumber, reason: "Name is required", row: mappedFields });
+      continue;
+    }
+    const normalized = normalizePhoneNumber(phoneNumber, defaultCountryCode);
+    if (!normalized.ok) {
+      initialFailures.push({ rowNumber, reason: normalized.reason, row: mappedFields });
+      continue;
+    }
+    validRows.push({
+      rowNumber,
+      phoneNumber,
+      normalizedPhoneNumber: normalized.number,
+      displayName,
+      mappedFields
+    });
+  }
+
   const client = await pool.connect();
   try {
     await client.query("begin");
@@ -134,70 +254,78 @@ export async function importContactsFromCsv(
     );
 
     const importId = importInsert.rows[0].id;
-    let importedRows = 0;
-    let failedRows = 0;
-    let duplicateRows = 0;
+    await insertCsvImportFailures(client, importId, initialFailures);
 
-    for (const [rowIndex, row] of parsed.rows.entries()) {
-      const rowNumber = rowIndex + 2;
-      const phoneNumber = (row[phoneIndex] ?? "").trim();
-      const displayName = (row[nameIndex] ?? "").trim();
-      const normalized = normalizePhoneNumber(phoneNumber, defaultCountryCode);
-      const mappedFields = Object.fromEntries(
-        parsed.headers.map((header, index) => [header, (row[index] ?? "").trim()])
-      );
-
-      if (!displayName) {
-        await insertCsvImportFailure(client, importId, rowNumber, "Name is required", mappedFields);
-        failedRows += 1;
-        continue;
+    const firstRowByNumber = new Map<string, (typeof validRows)[number]>();
+    for (const row of validRows) {
+      if (!firstRowByNumber.has(row.normalizedPhoneNumber)) {
+        firstRowByNumber.set(row.normalizedPhoneNumber, row);
       }
-
-      if (!normalized.ok) {
-        await insertCsvImportFailure(client, importId, rowNumber, normalized.reason, mappedFields);
-        failedRows += 1;
-        continue;
-      }
-
-      const insertResult = await client.query(
+    }
+    const uniqueValidRows = [...firstRowByNumber.values()].sort((left, right) =>
+      compareNormalizedPhoneNumbers(left.normalizedPhoneNumber, right.normalizedPhoneNumber)
+    );
+    await lockNormalizedPhoneNumbers(
+      client,
+      uniqueValidRows.map((row) => row.normalizedPhoneNumber)
+    );
+    const insertedNumbers = new Set<string>();
+    for (const chunk of chunks(uniqueValidRows, CSV_DATABASE_CHUNK_SIZE)) {
+      const inserted = await client.query<{ normalized_phone_number: string }>(
         `
-          insert into contacts (
-            campaign_id,
-            phone_number,
-            normalized_phone_number,
-            display_name,
-            source_row_json,
-            mapped_fields_json,
-            status
+          with input_rows as (
+            select *
+            from jsonb_to_recordset($2::jsonb) as item(
+              row_number integer,
+              phone_number text,
+              normalized_phone_number text,
+              display_name text,
+              mapped_fields jsonb
+            )
           )
-          values ($1, $2, $3, $4, $5::jsonb, $6::jsonb, 'new')
+          insert into contacts (
+            campaign_id, phone_number, normalized_phone_number, display_name,
+            source_row_json, mapped_fields_json, status
+          )
+          select $1, phone_number, normalized_phone_number, display_name,
+                 mapped_fields, mapped_fields, 'new'
+          from input_rows
+          order by normalized_phone_number
           on conflict (campaign_id, normalized_phone_number) do nothing
-          returning id
+          returning normalized_phone_number
         `,
         [
           campaignId,
-          phoneNumber,
-          normalized.number,
-          displayName,
-          JSON.stringify(mappedFields),
-          JSON.stringify(mappedFields)
+          JSON.stringify(
+            chunk.map((row) => ({
+              row_number: row.rowNumber,
+              phone_number: row.phoneNumber,
+              normalized_phone_number: row.normalizedPhoneNumber,
+              display_name: row.displayName,
+              mapped_fields: row.mappedFields
+            }))
+          )
         ]
       );
+      for (const row of inserted.rows) insertedNumbers.add(row.normalized_phone_number);
+    }
 
-      if (insertResult.rowCount) {
-        importedRows += 1;
-      } else {
-        await insertCsvImportFailure(
-          client,
-          importId,
-          rowNumber,
-          "Duplicate phone number in this campaign",
-          mappedFields
-        );
-        duplicateRows += 1;
-        failedRows += 1;
+    const duplicateFailures: typeof initialFailures = [];
+    for (const row of validRows) {
+      const firstRow = firstRowByNumber.get(row.normalizedPhoneNumber);
+      if (firstRow?.rowNumber !== row.rowNumber || !insertedNumbers.has(row.normalizedPhoneNumber)) {
+        duplicateFailures.push({
+          rowNumber: row.rowNumber,
+          reason: "Duplicate phone number in this campaign",
+          row: row.mappedFields
+        });
       }
     }
+    await insertCsvImportFailures(client, importId, duplicateFailures);
+
+    const importedRows = insertedNumbers.size;
+    const duplicateRows = duplicateFailures.length;
+    const failedRows = initialFailures.length + duplicateRows;
 
     await client.query(
       `
@@ -230,27 +358,51 @@ export async function importContactsFromCsv(
   }
 }
 
-async function insertCsvImportFailure(
+async function insertCsvImportFailures(
   client: pg.PoolClient,
   importId: string,
-  rowNumber: number,
-  reason: string,
-  row: Record<string, string>
+  failures: Array<{ rowNumber: number; reason: string; row: Record<string, string> }>
 ): Promise<void> {
-  await client.query(
-    `
+  if (!failures.length) return;
+  for (const chunk of chunks(failures, CSV_DATABASE_CHUNK_SIZE)) {
+    await client.query(
+      `
       insert into csv_import_failures (import_id, row_number, reason, row_json)
-      values ($1, $2, $3, $4::jsonb)
+      select $1, item.row_number, item.reason, item.row_json
+      from jsonb_to_recordset($2::jsonb) as item(
+        row_number integer,
+        reason text,
+        row_json jsonb
+      )
     `,
-    [importId, rowNumber, reason, JSON.stringify(row)]
-  );
+      [
+        importId,
+        JSON.stringify(
+          chunk.map((failure) => ({
+            row_number: failure.rowNumber,
+            reason: failure.reason,
+            row_json: failure.row
+          }))
+        )
+      ]
+    );
+  }
 }
 
-export function parseCsv(input: string): ParsedCsv {
+export function parseCsv(input: string, limits: CsvParseLimits = {}): ParsedCsv {
+  const maxBytes = limits.maxBytes ?? DEFAULT_CSV_MAX_BYTES;
+  const maxRows = limits.maxRows ?? DEFAULT_CSV_MAX_ROWS;
+  const maxColumns = limits.maxColumns ?? DEFAULT_CSV_MAX_COLUMNS;
+  const maxCells = limits.maxCells ?? DEFAULT_CSV_MAX_CELLS;
+  const maxCellCharacters = limits.maxCellCharacters ?? DEFAULT_CSV_MAX_CELL_CHARACTERS;
+  if (Buffer.byteLength(input, "utf8") > maxBytes) {
+    throw new CsvImportError(`CSV exceeds configured limit of ${maxBytes} bytes`);
+  }
   const rows: string[][] = [];
   let field = "";
   let row: string[] = [];
   let inQuotes = false;
+  let cellCount = 0;
 
   for (let index = 0; index < input.length; index += 1) {
     const char = input[index];
@@ -258,6 +410,9 @@ export function parseCsv(input: string): ParsedCsv {
 
     if (char === '"' && inQuotes && next === '"') {
       field += '"';
+      if (field.length > maxCellCharacters) {
+        throw new CsvImportError(`CSV cell exceeds structural limit of ${maxCellCharacters} characters`);
+      }
       index += 1;
       continue;
     }
@@ -269,6 +424,7 @@ export function parseCsv(input: string): ParsedCsv {
 
     if (char === "," && !inQuotes) {
       row.push(field.trim());
+      enforceCsvColumnLimit(row.length, maxColumns);
       field = "";
       continue;
     }
@@ -278,8 +434,12 @@ export function parseCsv(input: string): ParsedCsv {
         index += 1;
       }
       row.push(field.trim());
+      enforceCsvColumnLimit(row.length, maxColumns);
       if (row.some((value) => value.length > 0)) {
+        cellCount += row.length;
+        enforceCsvCellCountLimit(cellCount, maxCells);
         rows.push(row);
+        enforceCsvRowLimit(rows.length, maxRows);
       }
       field = "";
       row = [];
@@ -287,11 +447,21 @@ export function parseCsv(input: string): ParsedCsv {
     }
 
     field += char;
+    if (field.length > maxCellCharacters) {
+      throw new CsvImportError(`CSV cell exceeds structural limit of ${maxCellCharacters} characters`);
+    }
   }
 
+  if (inQuotes) {
+    throw new CsvImportError("CSV contains an unterminated quoted field");
+  }
   row.push(field.trim());
+  enforceCsvColumnLimit(row.length, maxColumns);
   if (row.some((value) => value.length > 0)) {
+    cellCount += row.length;
+    enforceCsvCellCountLimit(cellCount, maxCells);
     rows.push(row);
+    enforceCsvRowLimit(rows.length, maxRows);
   }
 
   const headers = (rows.shift() ?? []).map((header, index) => {
@@ -304,11 +474,36 @@ export function parseCsv(input: string): ParsedCsv {
   if (headers.some((header) => !header)) {
     throw new CsvImportError("CSV header names cannot be blank");
   }
+  if (new Set(headers.map((header) => header.toLowerCase())).size !== headers.length) {
+    throw new CsvImportError("CSV header names must be unique");
+  }
+  const widerRowIndex = rows.findIndex((csvRow) => csvRow.length > headers.length);
+  if (widerRowIndex >= 0) {
+    throw new CsvImportError(`CSV row ${widerRowIndex + 2} has more values than the header row`);
+  }
 
   return {
     headers,
     rows: rows.filter((csvRow) => csvRow.some((value) => value.trim().length > 0))
   };
+}
+
+function enforceCsvColumnLimit(columns: number, maxColumns: number): void {
+  if (columns > maxColumns) {
+    throw new CsvImportError(`CSV exceeds structural limit of ${maxColumns} columns`);
+  }
+}
+
+function enforceCsvCellCountLimit(cells: number, maxCells: number): void {
+  if (cells > maxCells) {
+    throw new CsvImportError(`CSV exceeds structural limit of ${maxCells} cells`);
+  }
+}
+
+function enforceCsvRowLimit(rowsIncludingHeader: number, maxRows: number | undefined): void {
+  if (maxRows !== undefined && Math.max(0, rowsIncludingHeader - 1) > maxRows) {
+    throw new CsvImportError(`CSV exceeds configured limit of ${maxRows} data rows`);
+  }
 }
 
 function findColumn(headers: string[], candidates: string[]): number {
@@ -326,4 +521,31 @@ function normalizeHeader(value: string): string {
 
 export function isCsvFilename(filename: string): boolean {
   return filename.toLowerCase().endsWith(".csv");
+}
+
+function chunks<T>(values: T[], size: number): T[][] {
+  const result: T[][] = [];
+  for (let index = 0; index < values.length; index += size) {
+    result.push(values.slice(index, index + size));
+  }
+  return result;
+}
+
+async function lockNormalizedPhoneNumbers(
+  client: pg.PoolClient,
+  normalizedPhoneNumbers: string[]
+): Promise<void> {
+  const ordered = [...new Set(normalizedPhoneNumbers)].sort(compareNormalizedPhoneNumbers);
+  for (const chunk of chunks(ordered, CSV_DATABASE_CHUNK_SIZE)) {
+    await client.query(
+      `select pg_advisory_xact_lock(hashtextextended(phone_number, 913202607))
+       from unnest($1::text[]) as numbers(phone_number)
+       order by phone_number collate "C"`,
+      [chunk]
+    );
+  }
+}
+
+function compareNormalizedPhoneNumbers(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
 }

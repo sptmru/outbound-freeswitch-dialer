@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -15,11 +15,14 @@ describe("RuntimeSettingsService", () => {
       pcapCaptureEnabled: true,
       sipTrunkCallerId: "15551234567"
     });
-    const pool = {
-      query: async () => ({ rows: [{ value_json: value, updated_at: updatedAt }], rowCount: 1 })
-    } as unknown as pg.Pool;
+    const pool = mockPool(async () => ({
+      rows: [{ value_json: value, updated_at: updatedAt }],
+      rowCount: 1
+    }));
     const config = baseConfig();
-    const service = new RuntimeSettingsService(pool, config);
+    const service = new RuntimeSettingsService(pool, config, {
+      reloadAlertmanager: async () => ({ ok: true, status: 200, statusText: "OK" })
+    });
 
     await service.initialize();
 
@@ -31,7 +34,7 @@ describe("RuntimeSettingsService", () => {
   });
 
   it("rejects enabling an alert channel whose deployment secret is absent", async () => {
-    const pool = { query: async () => ({ rows: [], rowCount: 0 }) } as unknown as pg.Pool;
+    const pool = mockPool(async () => ({ rows: [], rowCount: 0 }));
     const service = new RuntimeSettingsService(pool, baseConfig());
     await assert.rejects(
       service.update(settings({ alertmanagerWebhookEnabled: true })),
@@ -46,16 +49,19 @@ describe("RuntimeSettingsService", () => {
   it("renders an enabled Slack receiver with firing and resolved notifications", async () => {
     const directory = await mkdtemp(join(tmpdir(), "outbound-dialer-slack-settings-"));
     const configPath = join(directory, "alertmanager.yml");
-    const pool = {
-      query: async () => ({ rows: [{ updated_at: new Date("2026-07-16T12:00:00.000Z") }], rowCount: 1 })
-    } as unknown as pg.Pool;
+    const pool = mockPool(async () => ({
+      rows: [{ updated_at: new Date("2026-07-16T12:00:00.000Z") }],
+      rowCount: 1
+    }));
     const config = Object.assign(baseConfig(), {
       ALERTMANAGER_CONFIG_PATH: configPath,
       ALERTMANAGER_URL: "http://127.0.0.1:1",
       ALERTMANAGER_SLACK_WEBHOOK_URL: "https://hooks.slack.com/services/test/example/secret",
       ALERTMANAGER_SLACK_CHANNEL: "#dialer-alerts"
     });
-    const service = new RuntimeSettingsService(pool, config);
+    const service = new RuntimeSettingsService(pool, config, {
+      reloadAlertmanager: async () => ({ ok: true, status: 200, statusText: "OK" })
+    });
 
     try {
       await service.update(settings({ alertmanagerSlackEnabled: true }));
@@ -74,9 +80,143 @@ describe("RuntimeSettingsService", () => {
     const directory = await mkdtemp(join(tmpdir(), "outbound-dialer-settings-"));
     const configPath = join(directory, "alertmanager.yml");
     const updatedAt = new Date("2026-07-14T12:30:00.000Z");
-    const pool = {
-      query: async () => ({ rows: [{ updated_at: updatedAt }], rowCount: 1 })
-    } as unknown as pg.Pool;
+    const pool = mockPool(async () => ({ rows: [{ updated_at: updatedAt }], rowCount: 1 }));
+    const config = Object.assign(baseConfig(), {
+      ALERTMANAGER_CONFIG_PATH: configPath,
+      ALERTMANAGER_URL: "http://127.0.0.1:1"
+    });
+    const service = new RuntimeSettingsService(pool, config, {
+      reloadAlertmanager: async () => ({ ok: false, status: 503, statusText: "Unavailable" }),
+      waitBeforeReloadRetry: async () => undefined
+    });
+
+    try {
+      const updated = await service.update(settings({ contactMaxAttempts: 50 }));
+      assert.equal(updated.contactMaxAttempts, 50);
+      assert.equal(updated.alertmanagerApplyStatus?.state, "pending");
+      assert.match(await readFile(configPath, "utf8"), /repeat_interval: 4h/);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      const applyStatus = service.get().alertmanagerApplyStatus;
+      assert.ok(applyStatus);
+      assert.deepEqual(applyStatus, {
+        state: "failed",
+        lastAttemptAt: applyStatus.lastAttemptAt,
+        lastSuccessAt: null,
+        error: "Alertmanager reload returned HTTP 503 Unavailable"
+      });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("aborts retries for a configuration superseded by a newer update", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "outbound-dialer-settings-supersede-"));
+    const configPath = join(directory, "alertmanager.yml");
+    const pool = mockPool(async () => ({ rows: [{ updated_at: new Date() }], rowCount: 1 }));
+    const config = Object.assign(baseConfig(), {
+      ALERTMANAGER_CONFIG_PATH: configPath,
+      ALERTMANAGER_URL: "http://127.0.0.1:1"
+    });
+    let reloadCalls = 0;
+    let firstSignal: AbortSignal | undefined;
+    const service = new RuntimeSettingsService(pool, config, {
+      reloadAlertmanager: async (signal) => {
+        reloadCalls += 1;
+        if (reloadCalls === 1) {
+          firstSignal = signal;
+          return new Promise<never>(() => undefined);
+        }
+        return { ok: true, status: 200, statusText: "OK" };
+      }
+    });
+
+    try {
+      await service.update(settings({ contactMaxAttempts: 4 }));
+      await service.update(settings({ contactMaxAttempts: 5 }));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      assert.equal(firstSignal?.aborted, true);
+      assert.equal(reloadCalls, 2);
+      assert.equal(service.get().alertmanagerApplyStatus?.state, "applied");
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("times out a hung reload and exposes the failed apply status", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "outbound-dialer-settings-timeout-"));
+    const configPath = join(directory, "alertmanager.yml");
+    const pool = mockPool(async () => ({ rows: [{ updated_at: new Date() }], rowCount: 1 }));
+    const config = Object.assign(baseConfig(), {
+      ALERTMANAGER_CONFIG_PATH: configPath,
+      ALERTMANAGER_URL: "http://127.0.0.1:1"
+    });
+    let reloadCalls = 0;
+    const service = new RuntimeSettingsService(pool, config, {
+      reloadAlertmanager: async () => {
+        reloadCalls += 1;
+        return new Promise<never>(() => undefined);
+      },
+      reloadTimeoutMilliseconds: 2,
+      waitBeforeReloadRetry: async () => undefined
+    });
+
+    try {
+      await service.update(settings({ contactMaxAttempts: 6 }));
+      await waitFor(() => service.get().alertmanagerApplyStatus?.state === "failed");
+
+      assert.equal(reloadCalls, 10);
+      assert.match(service.get().alertmanagerApplyStatus?.error ?? "", /timed out|abort/i);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps concurrent readers on the previous settings until persistence commits", async () => {
+    let releasePersistence: (() => void) | undefined;
+    let persistenceStarted: (() => void) | undefined;
+    const persistenceGate = new Promise<void>((resolve) => {
+      releasePersistence = resolve;
+    });
+    const started = new Promise<void>((resolve) => {
+      persistenceStarted = resolve;
+    });
+    const pool = mockPool(async (sql) => {
+      if (sql.includes("insert into system_settings")) {
+        persistenceStarted?.();
+        await persistenceGate;
+        return { rows: [{ updated_at: new Date("2026-07-16T15:00:00.000Z") }], rowCount: 1 };
+      }
+      return { rows: [], rowCount: 0 };
+    });
+    const config = baseConfig();
+    const service = new RuntimeSettingsService(pool, config);
+
+    const update = service.update(settings({ contactMaxAttempts: 9 }));
+    await started;
+    assert.equal(config.CONTACT_MAX_ATTEMPTS, 3);
+    assert.equal(service.get().contactMaxAttempts, 3);
+
+    releasePersistence?.();
+    await update;
+    assert.equal(config.CONTACT_MAX_ATTEMPTS, 9);
+    assert.equal(service.get().contactMaxAttempts, 9);
+  });
+
+  it("surfaces a rollback failure instead of hiding database/file divergence", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "outbound-dialer-settings-rollback-failure-"));
+    const configPath = join(directory, "alertmanager.yml");
+    const pool = mockPool(async (sql) => {
+      if (sql.trim() === "commit") {
+        await rm(directory, { recursive: true, force: true });
+        await writeFile(directory, "blocks recreation of the config directory");
+        throw new Error("database commit failed");
+      }
+      if (sql.includes("insert into system_settings")) {
+        return { rows: [{ updated_at: new Date() }], rowCount: 1 };
+      }
+      return { rows: [], rowCount: 0 };
+    });
     const config = Object.assign(baseConfig(), {
       ALERTMANAGER_CONFIG_PATH: configPath,
       ALERTMANAGER_URL: "http://127.0.0.1:1"
@@ -84,14 +224,26 @@ describe("RuntimeSettingsService", () => {
     const service = new RuntimeSettingsService(pool, config);
 
     try {
-      const updated = await service.update(settings({ contactMaxAttempts: 50 }));
-      assert.equal(updated.contactMaxAttempts, 50);
-      assert.match(await readFile(configPath, "utf8"), /repeat_interval: 4h/);
+      await assert.rejects(
+        service.update(settings({ contactMaxAttempts: 11 })),
+        (error: unknown) =>
+          error instanceof AggregateError && /config rollback also failed/.test(error.message)
+      );
+      assert.equal(config.CONTACT_MAX_ATTEMPTS, 3);
+      assert.equal(service.get().contactMaxAttempts, 3);
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
   });
 });
+
+async function waitFor(predicate: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error("Timed out waiting for condition");
+}
 
 function settings(overrides: Record<string, unknown> = {}) {
   return {
@@ -129,4 +281,18 @@ function baseConfig(): AppConfig {
     ALERTMANAGER_SLACK_ENABLED: true,
     ALERTMANAGER_TELEGRAM_ENABLED: true
   } as AppConfig;
+}
+
+function mockPool(
+  handler: (sql: string, values?: unknown[]) => Promise<{ rowCount: number; rows: unknown[] }>
+): pg.Pool {
+  const query = (sql: string, values?: unknown[]) => handler(sql, values);
+  return {
+    query,
+    connect: async () =>
+      ({
+        query,
+        release: () => undefined
+      }) as unknown as pg.PoolClient
+  } as unknown as pg.Pool;
 }

@@ -85,7 +85,7 @@ This document is the current product and operational contract. Items described a
 - Campaign states are `draft`, `active`, `paused`, and `archived`.
 - Admins can create/edit campaigns and configure manual dialing, call recording, and early-media AVMD per campaign.
 - Archived campaigns preserve operational history and are not callable.
-- Current contact import is intentionally limited to required `name` and `phone` columns. The importer normalizes numbers, reports row errors, and avoids duplicates.
+- Contact import requires mapped `name` and `phone` values, preserves additional CSV columns in the contact/import JSON fields, normalizes numbers, reports row errors, and avoids duplicates. Upload byte and row ceilings reject oversized work before database writes without imposing a column whitelist.
 - Campaign contacts and CSV row failures are paginated. Opening Contacts follows the campaign selected on Agent Desk, and every rejected CSV row remains reviewable instead of being silently limited to the first page.
 - Manual numbers and campaign contacts both pass backend authorization and normalized suppression checks before originate.
 - Suppression supports add/update, search, pagination, CSV import, and removal.
@@ -97,7 +97,7 @@ This document is the current product and operational contract. Items described a
 - Deactivation is rejected while the user has an active interactive call, revokes sessions, removes agent registration material, and preserves historical attribution.
 - Successful mutating `/admin/*` requests create `admin_audit_events` with actor, request ID, method, route, response status, source IP, user agent, bounded string route parameters, and timestamp.
 - Audit history is paginated and filterable by actor, method, and date.
-- Admins can update runtime product policies from Settings: default phone country, contact retry policy, export limit, retention windows/control, per-call PCAP capture, the global trunk caller ID, Alertmanager repeat interval, and enablement of deployment-configured notification channels.
+- Admins can update runtime product policies from Settings: default phone country, contact retry policy, export limit, retention windows/control, per-call PCAP capture, the global trunk caller ID, Alertmanager repeat interval, and enablement of deployment-configured notification channels. The UI distinguishes settings persistence from the asynchronous Alertmanager runtime-apply state.
 - Runtime settings are stored in `system_settings`, audited through the normal `/admin/*` mutation hook, and override `.env` defaults without exposing alert credentials.
 - Audit/retention/legal-hold duration is an external policy decision; it must not be assumed from call-log retention.
 
@@ -110,7 +110,7 @@ This document is the current product and operational contract. Items described a
 - Date-filtered call metrics and current contact-queue snapshots are labeled separately. Current callable/suppressed/exhausted counts must not be presented as historical values for the selected call period.
 - Admin call history is paginated and filterable by text, campaign, agent, outcome, date range, voicemail drop/signal, and recording availability.
 - Call detail includes lifecycle events and technical identifiers needed for diagnosis. The technical timeline is bounded to the latest 100 events and reports the total and whether older events were omitted.
-- CSV export applies the same filters and refuses exports above `CALL_HISTORY_EXPORT_MAX_ROWS` (50,000 by default).
+- CSV export applies the same filters, refuses exports above `CALL_HISTORY_EXPORT_MAX_ROWS` (50,000 by default), and streams accepted rows in bounded pages.
 - Outcomes are derived from backend call events. Agents do not select a mandatory post-call disposition in this version.
 
 ## Retention

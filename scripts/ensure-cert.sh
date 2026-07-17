@@ -5,6 +5,9 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COMPOSE_FILE="${ROOT_DIR}/infra/docker/docker-compose.yml"
 ENV_FILE="${ENV_FILE:-${ROOT_DIR}/.env}"
 STATE_FILE="${ROOT_DIR}/logs/deployment-state.env"
+# shellcheck disable=SC1091
+source "${ROOT_DIR}/scripts/host-operation-lock.sh"
+acquire_host_operation_lock "${ROOT_DIR}" "certificate reconciliation"
 
 if [[ -z "${APP_VERSION:-}" && -f "${STATE_FILE}" ]]; then
   source "${STATE_FILE}"
@@ -39,8 +42,14 @@ if [[ -z "${GRAFANA_DOMAIN:-}" ]]; then
   exit 1
 fi
 
-APP_ENV_FILE="${ENV_FILE}" docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" up -d proxy
-APP_ENV_FILE="${ENV_FILE}" docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" run --rm certbot \
+compose() {
+  APP_ENV_FILE="${ENV_FILE}" docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" "$@"
+}
+# shellcheck disable=SC1091
+source "${ROOT_DIR}/scripts/certificate-runtime.sh"
+
+compose up -d --wait --no-recreate proxy
+compose run --rm certbot \
   certonly \
   --webroot \
   --webroot-path /var/www/certbot \
@@ -53,7 +62,4 @@ APP_ENV_FILE="${ENV_FILE}" docker compose --env-file "${ENV_FILE}" -f "${COMPOSE
   --cert-name "${LETSENCRYPT_DOMAIN}" \
   -d "${LETSENCRYPT_DOMAIN}" \
   -d "${GRAFANA_DOMAIN}"
-APP_ENV_FILE="${ENV_FILE}" docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" exec -T proxy \
-  /docker-entrypoint.d/20-render-outbound-dialer-proxy.sh
-APP_ENV_FILE="${ENV_FILE}" docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" exec -T proxy nginx -s reload
-APP_ENV_FILE="${ENV_FILE}" docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" up -d --force-recreate coturn
+apply_certificate_runtime_if_changed "${ROOT_DIR}"

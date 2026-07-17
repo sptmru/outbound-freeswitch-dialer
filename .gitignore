@@ -15,3 +15,4 @@ coverage/
 .DS_Store
 infra/freeswitch/recordings/*
 !infra/freeswitch/recordings/.gitkeep
+infra/freeswitch/recordings.pre-restore-*/

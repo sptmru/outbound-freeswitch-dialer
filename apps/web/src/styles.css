@@ -398,6 +398,23 @@ input[type="checkbox"] {
   padding: 0 10px;
 }
 
+.lead-table-row.lead-table-head {
+  min-height: 32px;
+  padding-bottom: 4px;
+  padding-top: 4px;
+}
+
+.lead-table-head [role="columnheader"] {
+  color: var(--relay-muted, #667789);
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.lead-table-head [role="columnheader"]:last-child {
+  text-align: right;
+}
+
 .lead-table-head {
   background: #f8f8f8;
   color: #667789;
@@ -2099,6 +2116,26 @@ input[type="checkbox"] {
 .call-stage-meta b {
   color: #ff636e;
   font-size: 10px;
+}
+
+.audio-playback-warning {
+  align-items: center;
+  background: rgba(255, 201, 92, 0.14);
+  border: 1px solid rgba(255, 201, 92, 0.45);
+  border-radius: 10px;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  padding: 10px 12px;
+}
+
+.audio-playback-warning span {
+  color: #ffe4a8;
+  font-size: 11px;
+}
+
+.audio-playback-warning button {
+  flex: 0 0 auto;
 }
 
 .handoff-card {

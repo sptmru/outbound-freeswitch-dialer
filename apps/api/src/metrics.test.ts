@@ -58,7 +58,7 @@ describe("application metrics", () => {
       }
     } as unknown as pg.Pool;
 
-    await __testing.refreshDatabaseMetrics(pool, 120);
+    await __testing.refreshDatabaseMetrics(withMetricsClient(pool), 120);
 
     const windowQuery = queries.find((sql) => sql.includes("voicemail_drops"));
     assert.match(windowQuery ?? "", /voicemail_playback_completed_at/);
@@ -118,7 +118,7 @@ describe("application metrics", () => {
       }
     } as unknown as pg.Pool;
 
-    await __testing.refreshDatabaseMetrics(pool, 120);
+    await __testing.refreshDatabaseMetrics(withMetricsClient(pool), 120);
 
     const snapshotQuery = queries.find((sql) => sql.includes("active_voicemail_jobs"));
     assert.match(snapshotQuery ?? "", /state not in \('completed', 'failed', 'canceled', 'agent_released'\)/);
@@ -245,7 +245,7 @@ describe("application metrics", () => {
       }
     } as unknown as pg.Pool;
 
-    await __testing.refreshDatabaseMetrics(pool, 120);
+    await __testing.refreshDatabaseMetrics(withMetricsClient(pool), 120);
 
     const metrics = await __testing.metrics();
     assert.match(metrics, /outbound_dialer_registration_reconciliation_up 1/);
@@ -283,6 +283,90 @@ describe("application metrics", () => {
     assert.match(metrics, /outbound_dialer_esl_persistence_overflows_total [1-9][0-9]*/);
   });
 
+  it("exports application pool saturation without querying PostgreSQL", async () => {
+    const pool = {
+      totalCount: 10,
+      idleCount: 2,
+      waitingCount: 4
+    } as pg.Pool;
+
+    __testing.setDatabasePoolMetrics(pool);
+
+    const metrics = await __testing.metrics();
+    assert.match(metrics, /outbound_dialer_database_pool_connections\{state="total"\} 10/);
+    assert.match(metrics, /outbound_dialer_database_pool_connections\{state="idle"\} 2/);
+    assert.doesNotMatch(metrics, /outbound_dialer_database_pool_connections\{state="waiting"\}/);
+    assert.match(metrics, /outbound_dialer_database_pool_waiting_requests 4/);
+  });
+
+  it("serializes database snapshot queries so monitoring cannot exhaust the pool", async () => {
+    let activeQueries = 0;
+    let maximumActiveQueries = 0;
+    const pool = {
+      query: async (sql: string) => {
+        activeQueries += 1;
+        maximumActiveQueries = Math.max(maximumActiveQueries, activeQueries);
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        activeQueries -= 1;
+
+        const observability = emptyObservabilityResult(sql);
+        if (observability) return observability;
+        if (sql.includes("group by outcome")) return { rowCount: 0, rows: [] };
+        if (sql.includes("active_calls")) {
+          return {
+            rowCount: 1,
+            rows: [{ active_calls: "0", registered_agents: "0", stuck_calls: "0", total_agents: "0" }]
+          };
+        }
+        return { rowCount: 1, rows: [{ attempted: "0" }] };
+      }
+    } as unknown as pg.Pool;
+
+    assert.equal(await __testing.refreshDatabaseMetrics(withMetricsClient(pool), 120), true);
+    assert.equal(maximumActiveQueries, 1);
+  });
+
+  it("reports a failed database snapshot instead of marking it fresh", async () => {
+    let queryCount = 0;
+    const pool = {
+      query: () => {
+        queryCount += 1;
+        return Promise.reject(new Error("database unavailable"));
+      }
+    } as unknown as pg.Pool;
+
+    assert.equal(await __testing.refreshDatabaseMetrics(withMetricsClient(pool), 120), false);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(queryCount, 1);
+    assert.match(await __testing.metrics(), /outbound_dialer_database_metrics_up 0/);
+  });
+
+  it("bounds database snapshots with a read-only statement timeout", async () => {
+    const commands: string[] = [];
+    let released = false;
+    const pool = {
+      connect: async () =>
+        ({
+          query: async (sql: string) => {
+            commands.push(sql.trim());
+            if (sql.includes("active_calls")) throw new Error("statement timeout");
+            return { rowCount: 0, rows: [] };
+          },
+          release: () => {
+            released = true;
+          }
+        }) as unknown as pg.PoolClient
+    } as pg.Pool;
+
+    assert.equal(await __testing.refreshDatabaseMetrics(pool, 120), false);
+    assert.deepEqual(commands.slice(0, 2), [
+      "begin transaction read only",
+      "set local statement_timeout = '10s'"
+    ]);
+    assert.equal(commands.at(-1), "rollback");
+    assert.equal(released, true);
+  });
+
   it("exports FreeSWITCH active channels and registrations", async () => {
     const commands: string[] = [];
     const config = { FREESWITCH_ESL_ENABLED: true } as AppConfig;
@@ -308,3 +392,18 @@ describe("application metrics", () => {
     assert.equal(__testing.parseFreeSwitchCount("-ERR command failed"), 0);
   });
 });
+
+function withMetricsClient(pool: pg.Pool): pg.Pool {
+  return {
+    connect: async () =>
+      ({
+        query: (sql: string, values?: unknown[]) => {
+          if (/^(?:begin|commit|rollback|set local)/i.test(sql.trim())) {
+            return Promise.resolve({ rowCount: 0, rows: [] });
+          }
+          return pool.query(sql, values);
+        },
+        release: () => undefined
+      }) as unknown as pg.PoolClient
+  } as pg.Pool;
+}

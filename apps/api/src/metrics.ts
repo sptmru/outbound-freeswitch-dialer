@@ -34,6 +34,26 @@ const databaseSnapshotUp = new Gauge({
   help: "Whether the most recent application metrics query against PostgreSQL succeeded.",
   registers: [registry]
 });
+const databasePoolConnections = new Gauge({
+  name: "outbound_dialer_database_pool_connections",
+  help: "PostgreSQL application-pool connections by state.",
+  labelNames: ["state"] as const,
+  registers: [registry]
+});
+const databasePoolWaitingRequests = new Gauge({
+  name: "outbound_dialer_database_pool_waiting_requests",
+  help: "Requests waiting for a PostgreSQL application-pool connection.",
+  registers: [registry]
+});
+const metricsSnapshotLastRefresh = gauge(
+  "outbound_dialer_metrics_snapshot_last_refresh_timestamp_seconds",
+  "Unix timestamp of the most recent successful background metrics snapshot refresh."
+);
+const metricsSnapshotRefreshFailures = new Counter({
+  name: "outbound_dialer_metrics_snapshot_refresh_failures_total",
+  help: "Unexpected failures while refreshing the background metrics snapshot.",
+  registers: [registry]
+});
 
 const mediaCoverageValues = ["eligible", "complete", "partial", "missing"] as const;
 const mediaLegTypes = ["agent", "customer"] as const;
@@ -316,6 +336,33 @@ const sipTrunkReady = new Gauge({
 eslListenerConnected.set(0);
 
 export function registerMetrics(app: FastifyInstance, config: AppConfig, pool: pg.Pool): void {
+  const refreshIntervalMilliseconds = (config.METRICS_REFRESH_INTERVAL_SECONDS ?? 15) * 1_000;
+  let refreshTimer: NodeJS.Timeout | null = null;
+  let refreshPromise: Promise<void> | null = null;
+
+  const refreshSnapshot = (): Promise<void> => {
+    if (refreshPromise) return refreshPromise;
+    refreshPromise = Promise.all([
+      refreshDatabaseMetrics(pool, config.MONITORING_STUCK_CALL_SECONDS),
+      refreshSipTrunkMetrics(config),
+      refreshFreeSwitchRuntimeMetrics(config)
+    ])
+      .then((results) => {
+        if (results.every(Boolean)) {
+          metricsSnapshotLastRefresh.set(Date.now() / 1_000);
+        } else {
+          metricsSnapshotRefreshFailures.inc();
+        }
+      })
+      .catch(() => {
+        metricsSnapshotRefreshFailures.inc();
+      })
+      .finally(() => {
+        refreshPromise = null;
+      });
+    return refreshPromise;
+  };
+
   eslListenerEnabled.set(config.FREESWITCH_ESL_ENABLED ? 1 : 0);
   retentionEnabled.set(config.RETENTION_ENABLED ? 1 : 0);
   pcapCaptureEnabled.set(config.PCAP_CAPTURE_ENABLED ? 1 : 0);
@@ -335,16 +382,29 @@ export function registerMetrics(app: FastifyInstance, config: AppConfig, pool: p
     }
   });
 
+  app.addHook("onReady", async () => {
+    void refreshSnapshot();
+    refreshTimer = setInterval(() => void refreshSnapshot(), refreshIntervalMilliseconds);
+    refreshTimer.unref();
+  });
+
+  app.addHook("onClose", async () => {
+    if (refreshTimer) clearInterval(refreshTimer);
+    refreshTimer = null;
+  });
+
   app.get("/metrics", async (_request, reply) => {
     retentionEnabled.set(config.RETENTION_ENABLED ? 1 : 0);
     pcapCaptureEnabled.set(config.PCAP_CAPTURE_ENABLED ? 1 : 0);
-    await Promise.all([
-      refreshDatabaseMetrics(pool, config.MONITORING_STUCK_CALL_SECONDS),
-      refreshSipTrunkMetrics(config),
-      refreshFreeSwitchRuntimeMetrics(config)
-    ]);
+    setDatabasePoolMetrics(pool);
     return reply.header("Content-Type", registry.contentType).send(await registry.metrics());
   });
+}
+
+function setDatabasePoolMetrics(pool: pg.Pool): void {
+  databasePoolConnections.set({ state: "total" }, pool.totalCount ?? 0);
+  databasePoolConnections.set({ state: "idle" }, pool.idleCount ?? 0);
+  databasePoolWaitingRequests.set(pool.waitingCount ?? 0);
 }
 
 export function setFreeSwitchEventListenerConnected(connected: boolean): void {
@@ -396,8 +456,23 @@ export function recordRetentionFailure(): void {
   retentionFailures.inc();
 }
 
-async function refreshDatabaseMetrics(pool: pg.Pool, stuckCallSeconds: number): Promise<void> {
+async function refreshDatabaseMetrics(pool: pg.Pool, stuckCallSeconds: number): Promise<boolean> {
+  let client: pg.PoolClient | null = null;
   try {
+    client = await pool.connect();
+    await client.query("begin transaction read only");
+    await client.query("set local statement_timeout = '10s'");
+    // A refresh is deliberately serialized onto at most one pool connection at
+    // a time. Running these independent reads with Promise.all can consume most
+    // of the default application pool and delay product traffic.
+    let previousQuery: Promise<unknown> = Promise.resolve();
+    const query = <Row extends pg.QueryResultRow>(text: string, values?: unknown[]) => {
+      const result = previousQuery.then(() => client!.query<Row>(text, values));
+      // Preserve a rejection in the chain so a failed query prevents every
+      // later monitoring scan from starting during this refresh.
+      previousQuery = result;
+      return result;
+    };
     const [
       snapshot,
       window,
@@ -409,7 +484,7 @@ async function refreshDatabaseMetrics(pool: pg.Pool, stuckCallSeconds: number): 
       mediaLegs,
       mediaCodecs
     ] = await Promise.all([
-      pool.query<{
+      query<{
         active_calls: string;
         active_voicemail_jobs: string;
         recording_finalization_backlog: string;
@@ -430,7 +505,7 @@ async function refreshDatabaseMetrics(pool: pg.Pool, stuckCallSeconds: number): 
         `,
         [stuckCallSeconds]
       ),
-      pool.query<{
+      query<{
         answered: string;
         attempted: string;
         failed: string;
@@ -450,7 +525,7 @@ async function refreshDatabaseMetrics(pool: pg.Pool, stuckCallSeconds: number): 
           (select coalesce(sum(file_size_bytes), 0) from call_pcaps where status = 'available') as pcap_storage_bytes,
           (select count(*) from calls where voicemail_playback_completed_at >= now() - interval '24 hours' and outcome = 'voicemail_dropped') as voicemail_drops
       `),
-      pool.query<{ count: string; outcome: string }>(
+      query<{ count: string; outcome: string }>(
         `
           select outcome, count(*) as count
           from calls
@@ -461,7 +536,7 @@ async function refreshDatabaseMetrics(pool: pg.Pool, stuckCallSeconds: number): 
         `,
         [Array.from(callOutcomes)]
       ),
-      pool.query<{
+      query<{
         active_call_reconcile_status: string | null;
         active_calls_closed_last_run: number | null;
         active_calls_db_count: number | null;
@@ -489,7 +564,7 @@ async function refreshDatabaseMetrics(pool: pg.Pool, stuckCallSeconds: number): 
         from telephony_observability_state
         where singleton = true
       `),
-      pool.query<{
+      query<{
         average_latency_ms: string | null;
         max_latency_ms: string | null;
         measured_calls: string;
@@ -526,13 +601,13 @@ async function refreshDatabaseMetrics(pool: pg.Pool, stuckCallSeconds: number): 
         from calls
         where terminal_persisted_at >= now() - interval '15 minutes'
       `),
-      pool.query<{ count: string; terminal_source: string | null }>(`
+      query<{ count: string; terminal_source: string | null }>(`
         select terminal_source, count(*) as count
         from calls
         where terminal_persisted_at >= now() - interval '15 minutes'
         group by terminal_source
       `),
-      pool.query<{
+      query<{
         complete_calls: string;
         eligible_calls: string;
         missing_calls: string;
@@ -568,7 +643,7 @@ async function refreshDatabaseMetrics(pool: pg.Pool, stuckCallSeconds: number): 
           count(*) filter (where observed_legs = 0) as missing_calls
         from coverage
       `),
-      pool.query<{
+      query<{
         inbound_all_packets: string;
         inbound_jitter_loss_rate_average: string | null;
         inbound_jitter_loss_rate_p95: string | null;
@@ -617,7 +692,7 @@ async function refreshDatabaseMetrics(pool: pg.Pool, stuckCallSeconds: number): 
           and calls.ended_at >= calls.answered_at + interval '10 seconds'
         group by media.leg_type
       `),
-      pool.query<{ codec: string | null; codec_direction: string; count: string; leg_type: string }>(`
+      query<{ codec: string | null; codec_direction: string; count: string; leg_type: string }>(`
         select leg_type, 'read' as codec_direction, read_codec as codec, count(*) as count
         from call_media_stats
         where captured_at >= now() - interval '15 minutes'
@@ -659,9 +734,15 @@ async function refreshDatabaseMetrics(pool: pg.Pool, stuckCallSeconds: number): 
     setTelephonyStateMetrics(telephonyState.rows[0]);
     setTerminalMetrics(terminalLatency.rows[0], terminalSources.rows);
     setMediaMetrics(mediaCoverage.rows[0], mediaLegs.rows, mediaCodecs.rows);
+    await client.query("commit");
     databaseSnapshotUp.set(1);
+    return true;
   } catch {
+    if (client) await client.query("rollback").catch(() => undefined);
     databaseSnapshotUp.set(0);
+    return false;
+  } finally {
+    client?.release();
   }
 }
 
@@ -912,7 +993,7 @@ function isCodecDirection(value: string): value is (typeof codecDirections)[numb
   return (codecDirections as readonly string[]).includes(value);
 }
 
-async function refreshSipTrunkMetrics(config: AppConfig): Promise<void> {
+async function refreshSipTrunkMetrics(config: AppConfig): Promise<boolean> {
   const mode = config.SIP_TRUNK_MODE;
   const configured = canOriginateCustomerLeg(config);
   sipTrunkConfigured.reset();
@@ -921,38 +1002,47 @@ async function refreshSipTrunkMetrics(config: AppConfig): Promise<void> {
 
   if (!configured) {
     sipTrunkReady.set({ mode }, 0);
-    return;
+    return true;
   }
   if (mode === "ip_auth") {
     sipTrunkReady.set({ mode }, 1);
-    return;
+    return true;
   }
 
   try {
     const response = await sendFreeSwitchApiCommand(config, "sofia status gateway sip-trunk");
     const value = (response.body || response.raw).toLowerCase();
     sipTrunkReady.set({ mode }, /\breged\b/.test(value) ? 1 : 0);
+    return true;
   } catch {
     sipTrunkReady.set({ mode }, 0);
+    return false;
   }
 }
 
 async function refreshFreeSwitchRuntimeMetrics(
   config: AppConfig,
   sendApiCommand: typeof sendFreeSwitchApiCommand = sendFreeSwitchApiCommand
-): Promise<void> {
+): Promise<boolean> {
   if (!config.FREESWITCH_ESL_ENABLED) {
     freeSwitchActiveChannels.set(0);
     freeSwitchRegistrations.set(0);
-    return;
+    return true;
   }
 
-  const [channels, registrations] = await Promise.all([
-    readFreeSwitchCount(config, "show channels count", sendApiCommand),
-    readFreeSwitchCount(config, "show registrations count", sendApiCommand)
-  ]);
-  freeSwitchActiveChannels.set(channels);
-  freeSwitchRegistrations.set(registrations);
+  try {
+    const [channels, registrations] = await Promise.all([
+      readFreeSwitchCount(config, "show channels count", sendApiCommand),
+      readFreeSwitchCount(config, "show registrations count", sendApiCommand)
+    ]);
+    freeSwitchActiveChannels.set(channels);
+    freeSwitchRegistrations.set(registrations);
+    return true;
+  } catch {
+    freeSwitchActiveChannels.set(0);
+    freeSwitchRegistrations.set(0);
+    return false;
+  }
 }
 
 async function readFreeSwitchCount(
@@ -960,12 +1050,12 @@ async function readFreeSwitchCount(
   command: string,
   sendApiCommand: typeof sendFreeSwitchApiCommand
 ): Promise<number> {
-  try {
-    const response = await sendApiCommand(config, command);
-    return parseFreeSwitchCount(response.body || response.raw);
-  } catch {
-    return 0;
+  const response = await sendApiCommand(config, command);
+  const value = response.body || response.raw;
+  if (!/(?:^|\n)\s*\d+\s+total\.\s*(?:$|\n)/i.test(value)) {
+    throw new Error(`FreeSWITCH returned an invalid count for ${command}`);
   }
+  return parseFreeSwitchCount(value);
 }
 
 function parseFreeSwitchCount(value: string): number {
@@ -1007,5 +1097,6 @@ export const __testing = {
   parseFreeSwitchCount,
   refreshDatabaseMetrics,
   refreshFreeSwitchRuntimeMetrics,
+  setDatabasePoolMetrics,
   toNumber
 };

@@ -12,6 +12,7 @@ export interface SoftphoneRuntime {
   microphoneAllowed: boolean;
   state: SoftphoneRuntimeState;
   callState: "none" | "incoming" | "answering" | "active";
+  audioPlaybackState: "idle" | "starting" | "playing" | "blocked" | "unavailable";
   label: string;
   detail: string;
   error: string | null;
@@ -19,6 +20,7 @@ export interface SoftphoneRuntime {
   answerIncomingCall: () => Promise<void>;
   declineIncomingCall: () => Promise<void>;
   hangUpSoftphoneCall: () => Promise<void>;
+  retryRemoteAudio: () => Promise<void>;
 }
 
 const idleRuntime: SoftphoneRuntime = {
@@ -26,13 +28,15 @@ const idleRuntime: SoftphoneRuntime = {
   microphoneAllowed: false,
   state: "idle",
   callState: "none",
+  audioPlaybackState: "idle",
   label: "Softphone idle",
   detail: "Sign in to register this browser",
   error: null,
   incomingCallLabel: null,
   answerIncomingCall: async () => undefined,
   declineIncomingCall: async () => undefined,
-  hangUpSoftphoneCall: async () => undefined
+  hangUpSoftphoneCall: async () => undefined,
+  retryRemoteAudio: async () => undefined
 };
 
 const registrationTimeoutMs = 20_000;
@@ -58,6 +62,7 @@ function toRegistrationFailureRuntime(
     registered: false,
     state: "failed",
     callState: "none",
+    audioPlaybackState: "idle",
     label: "Softphone offline",
     detail,
     error,
@@ -69,6 +74,7 @@ function toCallIdleRuntime(current: SoftphoneRuntime, registeredDetail: string):
   return {
     ...current,
     callState: "none",
+    audioPlaybackState: "idle",
     label: current.registered ? "Softphone registered" : current.label,
     detail: current.registered ? registeredDetail : current.detail,
     incomingCallLabel: null
@@ -91,10 +97,21 @@ async function stopSoftphoneRegistration(
   await userAgent?.stop().catch(() => undefined);
 }
 
+async function stopInvitation(invitation: Invitation): Promise<void> {
+  if (invitation.state === SessionState.Established) {
+    await invitation.bye().catch(() => undefined);
+    return;
+  }
+  await invitation.reject().catch(async () => {
+    await invitation.bye().catch(() => undefined);
+  });
+}
+
 export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRuntime {
   const invitationRef = useRef<Invitation | null>(null);
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
   const browserMediaTelemetryRef = useRef<ActiveBrowserMediaTelemetry | null>(null);
+  const registrationGenerationRef = useRef(0);
   const [runtime, setRuntime] = useState<SoftphoneRuntime>(idleRuntime);
 
   async function answerIncomingCall() {
@@ -102,10 +119,19 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
     if (!invitation) {
       return;
     }
-    await acceptInvitation(invitation, runtime.incomingCallLabel ?? "Connecting");
+    const generation = registrationGenerationRef.current;
+    await acceptInvitation(
+      invitation,
+      runtime.incomingCallLabel ?? "Connecting",
+      () => registrationGenerationRef.current === generation
+    );
   }
 
-  async function acceptInvitation(invitation: Invitation, incomingCallLabel: string) {
+  async function acceptInvitation(
+    invitation: Invitation,
+    incomingCallLabel: string,
+    isCurrent: () => boolean
+  ) {
     setRuntime((current) => ({
       ...current,
       callState: "answering",
@@ -121,6 +147,9 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
         }
       }
     });
+    if (!isCurrent()) {
+      await stopInvitation(invitation);
+    }
   }
 
   async function declineIncomingCall() {
@@ -139,15 +168,14 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
     if (!invitation) {
       return;
     }
-    await invitation.bye().catch(async () => {
-      await invitation.reject().catch(() => undefined);
-    });
+    await stopInvitation(invitation);
     invitationRef.current = null;
     clearRemoteAudio();
     setRuntime((current) => toCallIdleRuntime(current, "Ready for calls"));
   }
 
   useEffect(() => {
+    const generation = ++registrationGenerationRef.current;
     if (!user) {
       invitationRef.current = null;
       setRuntime(idleRuntime);
@@ -160,25 +188,42 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
     let registerer: Registerer | null = null;
     let registrationTimer: number | null = null;
     let userAgent: UserAgent | null = null;
+    let registrationCleanupStarted = false;
+    const isCurrent = () => !cancelled && registrationGenerationRef.current === generation;
     const clearRegistrationTimer = () => {
       if (registrationTimer) {
         window.clearTimeout(registrationTimer);
         registrationTimer = null;
       }
     };
+    const stopCurrentRegistration = async () => {
+      if (registrationCleanupStarted) return;
+      registrationCleanupStarted = true;
+      clearRegistrationTimer();
+      const currentRegisterer = registerer;
+      const currentUserAgent = userAgent;
+      registerer = null;
+      userAgent = null;
+      await stopSoftphoneRegistration(currentRegisterer, currentUserAgent);
+    };
     const getActions = () => ({
       answerIncomingCall,
       declineIncomingCall,
-      hangUpSoftphoneCall
+      hangUpSoftphoneCall,
+      retryRemoteAudio
     });
     const failRegistration = (
       detail: string,
       error: string,
       options: { preserveExistingError?: boolean } = {}
     ) => {
+      if (!isCurrent()) {
+        return;
+      }
       clearRegistrationTimer();
       invitationRef.current = null;
       clearRemoteAudio();
+      void stopCurrentRegistration();
       setRuntime((current) => {
         if (options.preserveExistingError && current.state === "failed" && current.error) {
           return current;
@@ -194,6 +239,7 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
           microphoneAllowed: false,
           state: "requesting_microphone",
           callState: "none",
+          audioPlaybackState: "idle",
           label: "Mic permission",
           detail: "Waiting for browser access",
           error: null,
@@ -209,18 +255,19 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
           audio: microphoneConstraints,
           video: false
         });
-        microphoneAllowed = true;
-        if (cancelled) {
-          return;
-        }
         mediaStream.getTracks().forEach((track) => track.stop());
         mediaStream = null;
+        if (!isCurrent()) {
+          return;
+        }
+        microphoneAllowed = true;
 
         setRuntime({
           registered: false,
           microphoneAllowed: true,
           state: "registering",
           callState: "none",
+          audioPlaybackState: "idle",
           label: "Registering",
           detail: "Connecting this browser to the calling server",
           error: null,
@@ -229,6 +276,9 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
         });
 
         const provisioning = await fetchSoftphoneProvisioning();
+        if (!isCurrent()) {
+          return;
+        }
         const uri = UserAgent.makeURI(provisioning.sipUri);
         if (!uri) {
           throw new Error("Invalid SIP provisioning URI");
@@ -242,6 +292,10 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
           logLevel: sipDiagnosticsEnabled ? "debug" : "warn",
           delegate: {
             onInvite: (invitation) => {
+              if (!isCurrent()) {
+                void invitation.reject().catch(() => undefined);
+                return;
+              }
               if (invitationRef.current) {
                 void invitation.reject();
                 return;
@@ -250,9 +304,10 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
               const incomingCallLabel = invitation.remoteIdentity.displayName || "Outbound Dialer Test";
               invitationRef.current = invitation;
               invitation.stateChange.addListener((state) => {
+                if (!isCurrent()) {
+                  return;
+                }
                 if (state === SessionState.Established) {
-                  attachRemoteAudio(invitation);
-                  startBrowserMediaTelemetry(invitation);
                   setRuntime((current) => ({
                     ...current,
                     callState: "active",
@@ -261,6 +316,8 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
                     error: null,
                     incomingCallLabel
                   }));
+                  void attachRemoteAudio(invitation, isCurrent);
+                  startBrowserMediaTelemetry(invitation);
                 }
                 if (state === SessionState.Terminated) {
                   finalizeBrowserMediaTelemetry();
@@ -272,7 +329,11 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
                 }
               });
 
-              void acceptInvitation(invitation, incomingCallLabel).catch((error: unknown) => {
+              void acceptInvitation(invitation, incomingCallLabel, isCurrent).catch((error: unknown) => {
+                if (!isCurrent()) {
+                  void invitation.reject().catch(() => undefined);
+                  return;
+                }
                 invitationRef.current = null;
                 clearRemoteAudio();
                 setRuntime((current) => ({
@@ -282,7 +343,7 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
               });
             },
             onDisconnect: (error) => {
-              if (cancelled) {
+              if (!isCurrent()) {
                 return;
               }
               failRegistration(
@@ -309,7 +370,7 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
         });
         registerer = new Registerer(userAgent);
         registerer.stateChange.addListener((state) => {
-          if (cancelled) {
+          if (!isCurrent()) {
             return;
           }
 
@@ -346,28 +407,23 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
           }
         });
         await userAgent.start();
+        if (!isCurrent()) {
+          await stopSoftphoneRegistration(registerer, userAgent);
+          return;
+        }
         registrationTimer = window.setTimeout(() => {
-          if (cancelled) {
+          if (!isCurrent()) {
             return;
           }
-          setRuntime((current) => {
-            if (current.registered || current.state === "registered") {
-              return current;
-            }
-            return {
-              ...current,
-              registered: false,
-              state: "failed",
-              label: "Softphone offline",
-              detail: "SIP registration timed out",
-              error: `No accepted REGISTER response within ${registrationTimeoutMs / 1000}s. Check browser console for SIP.js logs.`
-            };
-          });
+          failRegistration(
+            "SIP registration timed out",
+            `No accepted REGISTER response within ${registrationTimeoutMs / 1000}s. Check browser console for SIP.js logs.`
+          );
         }, registrationTimeoutMs);
         await registerer.register({
           requestDelegate: {
             onAccept: () => {
-              if (cancelled) {
+              if (!isCurrent()) {
                 return;
               }
               setRuntime((current) => ({
@@ -383,7 +439,7 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
               }));
             },
             onReject: (response) => {
-              if (cancelled) {
+              if (!isCurrent()) {
                 return;
               }
               failRegistration(
@@ -394,7 +450,11 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
           }
         });
 
-        if (cancelled) {
+        if (!isCurrent()) {
+          await stopSoftphoneRegistration(registerer, userAgent);
+          return;
+        }
+        if (registrationCleanupStarted) {
           return;
         }
 
@@ -409,15 +469,19 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
           ...getActions()
         }));
       } catch (error) {
-        if (cancelled) {
+        if (!isCurrent()) {
+          mediaStream?.getTracks().forEach((track) => track.stop());
+          await stopSoftphoneRegistration(registerer, userAgent);
           return;
         }
         clearRegistrationTimer();
+        await stopCurrentRegistration();
         setRuntime({
           registered: false,
           microphoneAllowed,
           state: "failed",
           callState: "none",
+          audioPlaybackState: "idle",
           label: "Softphone offline",
           detail: "Registration failed",
           error: error instanceof Error ? error.message : "Softphone registration failed",
@@ -431,21 +495,40 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
 
     return () => {
       cancelled = true;
+      if (registrationGenerationRef.current === generation) {
+        registrationGenerationRef.current += 1;
+      }
       clearRegistrationTimer();
       finalizeBrowserMediaTelemetry();
-      void invitationRef.current?.bye().catch(() => undefined);
+      if (invitationRef.current) void stopInvitation(invitationRef.current);
       invitationRef.current = null;
       mediaStream?.getTracks().forEach((track) => track.stop());
       clearRemoteAudio();
-      const currentRegisterer = registerer;
-      const currentUserAgent = userAgent;
-      void stopSoftphoneRegistration(currentRegisterer, currentUserAgent);
+      void stopCurrentRegistration();
     };
   }, [user?.id]);
 
   return runtime;
 
-  function attachRemoteAudio(invitation: Invitation) {
+  async function retryRemoteAudio() {
+    const audio = remoteAudioRef.current;
+    if (!audio) {
+      return;
+    }
+    setRuntime((current) => ({ ...current, audioPlaybackState: "starting" }));
+    try {
+      await audio.play();
+      if (remoteAudioRef.current === audio) {
+        setRuntime((current) => ({ ...current, audioPlaybackState: "playing" }));
+      }
+    } catch {
+      if (remoteAudioRef.current === audio) {
+        setRuntime((current) => ({ ...current, audioPlaybackState: "blocked" }));
+      }
+    }
+  }
+
+  async function attachRemoteAudio(invitation: Invitation, isCurrent: () => boolean) {
     const handler = invitation.sessionDescriptionHandler as
       | {
           peerConnection?: RTCPeerConnection;
@@ -453,6 +536,11 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
       | undefined;
     const peerConnection = handler?.peerConnection;
     if (!peerConnection) {
+      setRuntime((current) => ({
+        ...current,
+        audioPlaybackState: "unavailable",
+        error: "The browser did not expose a remote audio connection for this call"
+      }));
       return;
     }
 
@@ -471,7 +559,17 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
       document.body.appendChild(audio);
       remoteAudioRef.current = audio;
     }
-    void audio.play().catch(() => undefined);
+    setRuntime((current) => ({ ...current, audioPlaybackState: "starting" }));
+    try {
+      await audio.play();
+      if (isCurrent() && remoteAudioRef.current === audio) {
+        setRuntime((current) => ({ ...current, audioPlaybackState: "playing" }));
+      }
+    } catch {
+      if (isCurrent() && remoteAudioRef.current === audio) {
+        setRuntime((current) => ({ ...current, audioPlaybackState: "blocked" }));
+      }
+    }
   }
 
   function clearRemoteAudio() {

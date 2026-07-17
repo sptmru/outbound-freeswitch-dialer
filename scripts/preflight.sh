@@ -61,7 +61,7 @@ public_ipv4() {
   (( first != 192 || second != 168 )) || return 1
 }
 
-for command in awk crontab curl docker find git grep mktemp node npm openssl stat tar; do
+for command in awk crontab curl docker find flock git grep mktemp node npm openssl stat tar; do
   command -v "${command}" >/dev/null || fail "missing required command: ${command}"
 done
 

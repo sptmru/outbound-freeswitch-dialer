@@ -2038,6 +2038,17 @@
         "required": ["webhook", "slack", "telegram"],
         "additionalProperties": false
       },
+      "alertmanagerApplyStatus": {
+        "type": "object",
+        "properties": {
+          "state": { "type": "string", "enum": ["not_configured", "pending", "applied", "failed"] },
+          "lastAttemptAt": { "type": ["string", "null"] },
+          "lastSuccessAt": { "type": ["string", "null"] },
+          "error": { "type": ["string", "null"] }
+        },
+        "required": ["state", "lastAttemptAt", "lastSuccessAt", "error"],
+        "additionalProperties": false
+      },
       "updatedAt": { "type": ["string", "null"] }
     },
     "required": [

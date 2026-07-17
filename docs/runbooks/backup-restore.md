@@ -36,7 +36,7 @@ Install the daily cron job:
 ./scripts/install-backup-cron.sh
 ```
 
-The installer reads `BACKUP_CRON_SCHEDULE` from `ENV_FILE` (default `.env`), requires a single five-field expression, asks `crontab` to validate/install the resulting file atomically, and preserves that `ENV_FILE` path in the cron command.
+The installer reads `BACKUP_CRON_SCHEDULE` from `ENV_FILE` (default `.env`), requires a single five-field expression, asks `crontab` to validate/install the resulting file atomically, and preserves that `ENV_FILE` path in the cron command. The installed command also records an explicit `PATH` containing the resolved Node.js, Docker, `flock`, and, when `BACKUP_S3_URI` is set, AWS CLI directories. Missing or non-absolute executables fail installation, so cron does not depend on interactive shell initialization, NVM startup files, or a user-local AWS path being present by accident.
 
 ## Run And Verify
 
@@ -46,7 +46,7 @@ Create a backup:
 ./scripts/backup.sh
 ```
 
-The script refuses to run while a call/background voicemail is active. With the production default `BACKUP_QUIESCE_SERVICES=true`, it briefly pauses the running API and FreeSWITCH containers while `pg_dump` and the recordings archive are captured, then resumes them before encryption and verification. This prevents application/media writes from splitting the database and filesystem snapshot. `BACKUP_QUIESCE_SERVICES=false` requires the explicit `ALLOW_NON_QUIESCED_BACKUP=true` break-glass acknowledgement and is not an accepted recovery point.
+The script refuses to run while a call/background voicemail is active. It also takes the same non-blocking host-operation `flock` used by deploy, restore, rollback, and certificate maintenance, so these workflows cannot overlap. Nested backup verification inherits that lock. With the production default `BACKUP_QUIESCE_SERVICES=true`, it briefly pauses the running API and FreeSWITCH containers while `pg_dump` and the recordings archive are captured, then resumes them before encryption and verification. A failed resume is retried during cleanup and fails the backup before encryption, upload, success metrics, or success output; remaining paused services require immediate operator recovery. This prevents application/media writes from splitting the database and filesystem snapshot. `BACKUP_QUIESCE_SERVICES=false` requires the explicit `ALLOW_NON_QUIESCED_BACKUP=true` break-glass acknowledgement and is not an accepted recovery point.
 
 The local file is mode `0600`. Before any S3 upload or success-metric publication, `backup.sh` calls `verify-backup.sh` to authenticate/decrypt the envelope, validate both archives, and inspect the PostgreSQL restore list. Only a verified local archive is uploaded and allowed to update `monitoring/textfile/outbound_dialer_backup.prom`; alerts treat a missing or stale marker as a problem.
 
@@ -57,7 +57,7 @@ latest_backup="$(find backups -maxdepth 1 -name 'outbound-dialer-*.tar.gz.enc' -
 ./scripts/verify-backup.sh "${latest_backup}"
 ```
 
-Verification must print `Backup verification passed`. It authenticates/decrypts the `ODBACKUP2` envelope, validates the bundle/recordings tar archives, starts PostgreSQL if needed, and runs `pg_restore --list` on the database dump. It does not modify the target database.
+Verification must print `Backup verification passed`. It authenticates/decrypts the `ODBACKUP2` envelope, validates the bundle/recordings tar archives, starts PostgreSQL with a bounded Compose health wait if needed, and runs `pg_restore --list` on the database dump. It does not modify the target database.
 
 Also verify the object exists in the off-host destination and record its object version/checksum/timestamp. Local verification alone does not prove off-host delivery.
 
@@ -68,7 +68,7 @@ Use an isolated host for drills. For a real recovery, establish incident ownersh
 1. Check out the matching release with a clean working tree. A newer release requires recorded compatibility review and explicit `ALLOW_COMPATIBLE_RESTORE_VERSION=true` because both the checked-out controller scripts and the selected runtime/backup SHA are checked.
 2. Place the archive on the isolated/recovery host through an approved secure channel.
 3. Load the correct passphrase from the external secret manager.
-4. Configure `.env` for the target, including database, domains, and non-production provider isolation for a drill.
+4. Configure `.env` for the target, including database, domains, and non-production provider isolation for a drill. Current authenticated archives must identify the same `postgres_database` as the target `POSTGRES_DB`.
 5. Confirm sufficient disk space for the decrypted bundle plus the pre-restore recordings snapshot.
 6. Run `scripts/verify-backup.sh` first.
 7. Record pre-restore database/file counts and the target's current recordings path.
@@ -83,17 +83,17 @@ export RESTORE_CONFIRM="restore-${POSTGRES_DB}"
 
 The script:
 
-1. authenticates/decrypts the envelope, validates the recordings archive, and compares source/runtime SHA metadata;
+1. authenticates/decrypts the envelope, validates the recordings archive, compares source/runtime SHA metadata, and requires authenticated `postgres_database` metadata to match the restore target before any destructive work;
 2. resolves the release version from `APP_VERSION`, stable deployment state, or the checked-out Git SHA; requires a clean controller checkout; builds missing release images only when that checkout exactly matches the selected SHA; renders monitoring configuration; and validates every monitoring config with its runtime binary;
 3. atomically records `DEPLOYMENT_STATUS=pending_restore` before stopping or changing runtime services;
 4. stops API and FreeSWITCH so application writes/calls cannot race restore;
-5. starts PostgreSQL;
-6. runs `pg_restore --clean --if-exists --no-owner --no-privileges --exit-on-error --single-transaction`, then creates/rotates the dedicated read-only `outbound_dialer_exporter` monitoring role;
-7. when `RESTORE_RECORDINGS` is not `false`, copies the current recordings directory to a timestamped `.pre-restore-*` snapshot, clears current content except `.gitkeep`, and extracts the archive;
-8. starts the full stack with health waits, bootstraps or refreshes TLS, and runs the published web smoke test;
+5. when `RESTORE_RECORDINGS` is not `false`, extracts media into same-filesystem staging and finishes a timestamped current-recordings snapshot before deleting the database;
+6. starts PostgreSQL with a health wait, verifies `pg_isready`, validates `pg_restore --list`, refuses PostgreSQL system databases, force-disconnects and drops the selected application database, recreates it with the configured owner, then runs `pg_restore --no-owner --no-privileges --exit-on-error --single-transaction` into that empty database and creates/rotates the dedicated read-only `outbound_dialer_exporter` monitoring role;
+7. activates the already staged recordings with same-filesystem renames only after the database restore succeeds, restoring the previous directory if activation itself fails;
+8. starts the full stack with health waits, bootstraps or refreshes TLS, verifies every in-scope non-firewall mandatory Compose service is running and every configured container health check is healthy, and runs the published readiness smoke test;
 9. reinstalls certificate-renewal and backup cron jobs using the selected `ENV_FILE`, then promotes the restored SHA to a stable deployment state. An interrupted/failed restore retains its pending/failed target for explicit recovery.
 
-The PostgreSQL change is transactional: a database restore error rolls back that database transaction. Recordings replacement is filesystem work and is not part of the PostgreSQL transaction; the pre-restore snapshot is the recovery point. Keep it until formal acceptance.
+The old application database is deliberately removed before restore so objects omitted from the archive cannot survive. The custom-format dump is validated first, and `--single-transaction` prevents a failed `pg_restore` from leaving a partially populated replacement database; after a restore failure the replacement can be empty and must not be promoted. Recordings replacement is filesystem work and is not part of the PostgreSQL transaction, but extraction and snapshot creation now fail before database deletion, and activation uses prepared same-filesystem directories with rollback. The `.pre-restore-*` snapshot remains the recovery point; keep it until formal acceptance.
 
 Set `RESTORE_RECORDINGS=false` only for an intentional database-only recovery and record the resulting database/filesystem consistency decision.
 
@@ -105,11 +105,12 @@ For one specifically trusted pre-upgrade archive only:
 
 ```bash
 export ALLOW_LEGACY_UNAUTHENTICATED_BACKUP=true
+export ALLOW_LEGACY_RESTORE_WITHOUT_DATABASE_MATCH=true
 export RESTORE_CONFIRM="restore-${POSTGRES_DB}"
 ./scripts/restore.sh /secure/path/trusted-legacy-backup.tar.gz.enc
 ```
 
-Because the legacy format cannot prove integrity, validate provenance/checksums through an independent trusted source and document the exception. Never use the flag to bypass an authentication failure on an expected `ODBACKUP2` archive.
+The first bypass accepts the legacy format's missing integrity proof. The second acknowledges that its `postgres_database` identity is unauthenticated even when a metadata file is present. Independently validate the source database, intended target, provenance, checksum, custody, and contents, and document both exceptions. Never use these flags to bypass an authentication failure on an expected `ODBACKUP2` archive.
 
 ## Post-Restore Acceptance
 
