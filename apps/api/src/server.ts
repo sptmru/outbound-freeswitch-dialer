@@ -4,8 +4,9 @@ import multipart from "@fastify/multipart";
 import Fastify from "fastify";
 import { ZodError } from "zod";
 import { registerAdminAudit } from "./admin-audit.js";
+import { registerApiDocumentation } from "./api-documentation.js";
 import { startAgentRegistrationReconciler } from "./agent-registrations.js";
-import { registerAuthRoutes } from "./auth/routes.js";
+import { registerAuthRoutes, requireUser } from "./auth/routes.js";
 import { startCallRecordingFinalizer } from "./call-recording-finalizer.js";
 import { loadConfig } from "./config.js";
 import { registerDashboardRoutes } from "./dashboard/routes.js";
@@ -112,6 +113,16 @@ await app.register(multipart, {
     fileSize: config.VOICEMAIL_UPLOAD_MAX_BYTES,
     files: 1
   }
+});
+await registerApiDocumentation(app, async (request) => {
+  const user = await requireUser(request, config, pool);
+  if (!user) {
+    return { allowed: false, statusCode: 401, message: "Unauthorized" };
+  }
+  if (user.role !== "admin") {
+    return { allowed: false, statusCode: 403, message: "Admin role required" };
+  }
+  return { allowed: true };
 });
 registerLoginRateLimit(app, config);
 registerCookieCsrfProtection(app, config);

@@ -47,6 +47,8 @@ Only nginx is intended as the public HTTP entrypoint. Grafana is routed by hostn
 
 ### Fastify API
 
+The API publishes an admin-only Swagger UI at `/api/docs/` through the application proxy. The underlying OpenAPI document is available at `/api/docs/json` and describes the registered route catalog, authentication schemes, and any request/response schemas attached to Fastify routes. Administrators can use the existing session cookie or the bearer token returned by `POST /auth/login`.
+
 - Authentication, role authorization, cookie CSRF protection, login rate limiting, and safe proxy handling.
 - Campaign/contact selection, suppression checks, manual validation, and user/admin workflows.
 - Read-only admin analytics aggregate bounded date/campaign queries from PostgreSQL. Period facts and current contact-queue snapshots are returned as distinct sections so the UI does not imply historical snapshots that were never stored. AVMD quality is joined to explicit `call_avmd_reviews`; FreeSWITCH RTP quality comes from per-leg `call_media_stats`; browser playout and microphone evidence comes from the agent-owned `call_browser_media_stats`; point-in-time drift comes from the singleton `telephony_observability_state`.
