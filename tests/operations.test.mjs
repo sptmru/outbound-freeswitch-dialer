@@ -11,6 +11,19 @@ const lockScript = join(rootDirectory, "scripts", "host-operation-lock.sh");
 const cronPathScript = join(rootDirectory, "scripts", "cron-path.sh");
 const certificateScript = join(rootDirectory, "scripts", "certificate-runtime.sh");
 const runtimeScript = join(rootDirectory, "scripts", "verify-runtime-services.sh");
+const hostOperationLockEnvironmentKeys = [
+  "OUTBOUND_DIALER_OPERATION_LOCK_FD",
+  "OUTBOUND_DIALER_OPERATION_LOCK_FILE",
+  "OUTBOUND_DIALER_OPERATION_LOCK_OWNER"
+];
+
+function isolatedHostOperationEnvironment(overrides = {}) {
+  const environment = { ...process.env };
+  for (const key of hostOperationLockEnvironmentKeys) {
+    delete environment[key];
+  }
+  return { ...environment, ...overrides };
+}
 
 test("host operation lock rejects overlap and is inherited by nested maintenance scripts", async () => {
   const directory = await mkdtemp(join(tmpdir(), "outbound-dialer-operation-lock-"));
@@ -22,12 +35,11 @@ test("host operation lock rejects overlap and is inherited by nested maintenance
       'source "$LOCK_SCRIPT"; acquire_host_operation_lock "$TEST_ROOT" holder; printf "ready\\n"; read -r _'
     ],
     {
-      env: {
-        ...process.env,
+      env: isolatedHostOperationEnvironment({
         LOCK_SCRIPT: lockScript,
         OUTBOUND_DIALER_OPERATION_LOCK_FILE: lockFile,
         TEST_ROOT: directory
-      },
+      }),
       stdio: ["pipe", "pipe", "pipe"]
     }
   );
@@ -59,12 +71,11 @@ test("host operation lock rejects overlap and is inherited by nested maintenance
       ],
       {
         encoding: "utf8",
-        env: {
-          ...process.env,
+        env: isolatedHostOperationEnvironment({
           LOCK_SCRIPT: lockScript,
           OUTBOUND_DIALER_OPERATION_LOCK_FILE: join(nestedDirectory, "operation.lock"),
           TEST_ROOT: nestedDirectory
-        }
+        })
       }
     );
     assert.equal(nested.status, 0, nested.stderr || nested.stdout);
@@ -309,14 +320,13 @@ function runLock(directory, lockFile, operation, extraEnvironment = {}) {
     ["-c", 'source "$LOCK_SCRIPT"; acquire_host_operation_lock "$TEST_ROOT" "$OPERATION"'],
     {
       encoding: "utf8",
-      env: {
-        ...process.env,
+      env: isolatedHostOperationEnvironment({
         LOCK_SCRIPT: lockScript,
         OPERATION: operation,
         OUTBOUND_DIALER_OPERATION_LOCK_FILE: lockFile,
         TEST_ROOT: directory,
         ...extraEnvironment
-      }
+      })
     }
   );
 }

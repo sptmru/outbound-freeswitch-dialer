@@ -8,6 +8,19 @@ import test from "node:test";
 
 const rootDirectory = fileURLToPath(new URL("..", import.meta.url));
 const deployCommitScript = join(rootDirectory, "scripts", "deploy-commit.sh");
+const hostOperationLockEnvironmentKeys = [
+  "OUTBOUND_DIALER_OPERATION_LOCK_FD",
+  "OUTBOUND_DIALER_OPERATION_LOCK_FILE",
+  "OUTBOUND_DIALER_OPERATION_LOCK_OWNER"
+];
+
+function isolatedHostOperationEnvironment(overrides = {}) {
+  const environment = { ...process.env };
+  for (const key of hostOperationLockEnvironmentKeys) {
+    delete environment[key];
+  }
+  return { ...environment, ...overrides };
+}
 
 function git(directory, ...arguments_) {
   const result = spawnSync("git", ["-C", directory, ...arguments_], {
@@ -72,14 +85,13 @@ test("remote deploy checks out and deploys the requested main-branch commit", as
     assert.equal(spawnSync("git", ["clone", remote, target]).status, 0);
     const result = spawnSync("bash", [deployCommitScript, firstSha], {
       encoding: "utf8",
-      env: {
-        ...process.env,
+      env: isolatedHostOperationEnvironment({
         DEPLOYED_SHA_FILE: deployedShaFile,
         DEPLOY_ROOT_DIR: target,
         NVM_DIR: nvmDirectory,
         NVM_FAKE_BIN: nvmBin,
         PATH: toolPath
-      }
+      })
     });
 
     assert.equal(result.status, 0, result.stderr || result.stdout);
