@@ -9,6 +9,8 @@
     "dev": "tsx watch src/server.ts",
     "lint": "eslint src --max-warnings 0",
     "migrate": "node dist/migrate.js",
+    "openapi:check": "node ../../scripts/generate-openapi-schemas.mjs --check",
+    "openapi:generate": "node ../../scripts/generate-openapi-schemas.mjs",
     "start": "node dist/server.js",
     "test": "npm --workspace @outbound-dialer/shared run build && tsc -p tsconfig.test.json && node --test dist-test/*.test.js dist-test/dashboard/*.test.js",
     "typecheck": "tsc -p tsconfig.json --noEmit"
@@ -28,8 +30,10 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@apidevtools/swagger-parser": "^12.1.0",
     "@types/node": "^22.5.5",
     "@types/pg": "^8.11.6",
+    "ts-json-schema-generator": "^2.9.0",
     "tsx": "^4.19.0",
     "typescript": "^5.5.4"
   }

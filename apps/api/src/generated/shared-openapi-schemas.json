@@ -1,0 +1,2100 @@
+{
+  "CallState": {
+    "$id": "CallState",
+    "type": "string",
+    "enum": [
+      "created",
+      "agent_ringing",
+      "agent_answered",
+      "customer_dialing",
+      "customer_ringing",
+      "bridged",
+      "voicemail_signal_detected",
+      "voicemail_drop_requested",
+      "voicemail_playback_started",
+      "agent_released",
+      "voicemail_playback_completed",
+      "completed",
+      "failed",
+      "canceled"
+    ]
+  },
+  "CallOutcome": {
+    "$id": "CallOutcome",
+    "type": "string",
+    "enum": [
+      "answered",
+      "not_answered",
+      "busy",
+      "failed",
+      "voicemail_detected",
+      "voicemail_dropped",
+      "agent_canceled",
+      "customer_hung_up",
+      "suppressed"
+    ]
+  },
+  "CallRecordingStatus": {
+    "$id": "CallRecordingStatus",
+    "type": "string",
+    "enum": ["disabled", "pending", "recording", "finalizing", "available", "expired", "failed"]
+  },
+  "CallPcapStatus": {
+    "$id": "CallPcapStatus",
+    "type": "string",
+    "enum": ["pending", "capturing", "available", "failed", "expired"]
+  },
+  "UserRole": { "$id": "UserRole", "type": "string", "enum": ["agent", "admin"] },
+  "AgentAvailabilityStatus": {
+    "$id": "AgentAvailabilityStatus",
+    "type": "string",
+    "enum": ["available", "paused", "wrap_up"]
+  },
+  "CampaignStatus": {
+    "$id": "CampaignStatus",
+    "type": "string",
+    "enum": ["active", "paused", "draft", "archived"]
+  },
+  "HealthResponse": {
+    "$id": "HealthResponse",
+    "type": "object",
+    "properties": {
+      "status": { "type": "string", "enum": ["ok", "degraded"] },
+      "service": { "type": "string", "const": "api" },
+      "uptimeSeconds": { "type": "number" },
+      "checks": {
+        "type": "object",
+        "properties": {
+          "postgres": { "$ref": "HealthCheck#" },
+          "freeswitchEsl": { "$ref": "HealthCheck#" },
+          "freeswitchEventListener": { "$ref": "HealthCheck#" }
+        },
+        "required": ["postgres", "freeswitchEsl", "freeswitchEventListener"],
+        "additionalProperties": false
+      }
+    },
+    "required": ["status", "service", "uptimeSeconds", "checks"],
+    "additionalProperties": false
+  },
+  "HealthCheck": {
+    "$id": "HealthCheck",
+    "type": "object",
+    "properties": {
+      "status": { "type": "string", "enum": ["ok", "error", "skipped"] },
+      "message": { "type": "string" }
+    },
+    "required": ["status"],
+    "additionalProperties": false
+  },
+  "PublicUser": {
+    "$id": "PublicUser",
+    "type": "object",
+    "properties": {
+      "id": { "type": "string" },
+      "email": { "type": "string" },
+      "name": { "type": "string" },
+      "role": { "$ref": "UserRole#" },
+      "isActive": { "type": "boolean" }
+    },
+    "required": ["id", "email", "name", "role", "isActive"],
+    "additionalProperties": false
+  },
+  "AdminAuditResponse": {
+    "$id": "AdminAuditResponse",
+    "type": "object",
+    "properties": {
+      "page": { "type": "number" },
+      "pageSize": { "type": "number" },
+      "total": { "type": "number" },
+      "items": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": { "type": "string" },
+            "actorName": { "type": "string" },
+            "actorEmail": { "type": "string" },
+            "method": { "type": "string" },
+            "route": { "type": "string" },
+            "statusCode": { "type": "number" },
+            "sourceIp": { "type": ["string", "null"] },
+            "metadata": { "type": "object", "additionalProperties": {} },
+            "createdAt": { "type": "string" }
+          },
+          "required": [
+            "id",
+            "actorName",
+            "actorEmail",
+            "method",
+            "route",
+            "statusCode",
+            "sourceIp",
+            "metadata",
+            "createdAt"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    "required": ["page", "pageSize", "total", "items"],
+    "additionalProperties": false
+  },
+  "LeadSummary": {
+    "$id": "LeadSummary",
+    "type": "object",
+    "properties": {
+      "id": { "type": "string" },
+      "name": { "type": "string" },
+      "company": { "type": "string" },
+      "phoneNumber": { "type": "string" },
+      "status": {
+        "type": "string",
+        "enum": ["ready", "calling", "retry_wait", "exhausted", "suppressed", "completed"]
+      },
+      "fields": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": { "label": { "type": "string" }, "value": { "type": "string" } },
+          "required": ["label", "value"],
+          "additionalProperties": false
+        }
+      }
+    },
+    "required": ["id", "name", "company", "phoneNumber", "status", "fields"],
+    "additionalProperties": false
+  },
+  "AgentDeskResponse": {
+    "$id": "AgentDeskResponse",
+    "type": "object",
+    "properties": {
+      "user": { "$ref": "PublicUser#" },
+      "availability": {
+        "type": "object",
+        "properties": {
+          "status": { "$ref": "AgentAvailabilityStatus#" },
+          "wrapUpUntil": { "type": ["string", "null"] }
+        },
+        "required": ["status", "wrapUpUntil"],
+        "additionalProperties": false
+      },
+      "campaign": {
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "name": { "type": "string" },
+              "status": { "type": "string", "enum": ["active", "paused", "draft"] },
+              "callableLeads": { "type": "number" },
+              "manualDialingEnabled": { "type": "boolean" },
+              "callRecordingEnabled": { "type": "boolean" },
+              "earlyMediaAvmdEnabled": { "type": "boolean" }
+            },
+            "required": [
+              "id",
+              "name",
+              "status",
+              "callableLeads",
+              "manualDialingEnabled",
+              "callRecordingEnabled",
+              "earlyMediaAvmdEnabled"
+            ],
+            "additionalProperties": false
+          },
+          { "type": "null" }
+        ]
+      },
+      "availableCampaigns": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": { "type": "string" },
+            "name": { "type": "string" },
+            "status": { "type": "string", "enum": ["active", "paused", "draft"] },
+            "callableLeads": { "type": "number" }
+          },
+          "required": ["id", "name", "status", "callableLeads"],
+          "additionalProperties": false
+        }
+      },
+      "softphone": {
+        "type": "object",
+        "properties": {
+          "registered": { "type": "boolean" },
+          "microphoneAllowed": { "type": "boolean" },
+          "status": { "type": "string", "enum": ["ready", "in_call", "offline"] }
+        },
+        "required": ["registered", "microphoneAllowed", "status"],
+        "additionalProperties": false
+      },
+      "metrics": {
+        "type": "object",
+        "properties": {
+          "todayCalls": { "type": "number" },
+          "voicemailsDropped": { "type": "number" },
+          "suppressed": { "type": "number" }
+        },
+        "required": ["todayCalls", "voicemailsDropped", "suppressed"],
+        "additionalProperties": false
+      },
+      "voicemailJobs": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "callId": { "type": "string" },
+            "leadName": { "type": "string" },
+            "phoneNumber": { "type": "string" },
+            "status": {
+              "type": "string",
+              "enum": ["requested", "playing", "completed", "interrupted", "failed"]
+            },
+            "requestedAt": { "type": "string" },
+            "updatedAt": { "type": "string" }
+          },
+          "required": ["callId", "leadName", "phoneNumber", "status", "requestedAt", "updatedAt"],
+          "additionalProperties": false
+        }
+      },
+      "recentCalls": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": { "type": "string" },
+            "phoneNumber": { "type": "string" },
+            "leadName": { "type": "string" },
+            "outcome": { "anyOf": [{ "$ref": "CallOutcome#" }, { "type": "null" }] },
+            "state": { "$ref": "CallState#" },
+            "createdAt": { "type": "string" }
+          },
+          "required": ["id", "phoneNumber", "leadName", "outcome", "state", "createdAt"],
+          "additionalProperties": false
+        }
+      },
+      "leads": { "type": "array", "items": { "$ref": "LeadSummary#" } },
+      "recordings": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": { "type": "string" },
+            "name": { "type": "string" },
+            "status": { "type": "string" }
+          },
+          "required": ["id", "name", "status"],
+          "additionalProperties": false
+        }
+      },
+      "activeCall": {
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "state": { "$ref": "CallState#" },
+              "outcome": { "$ref": "CallOutcome#" },
+              "leadName": { "type": "string" },
+              "phoneNumber": { "type": "string" },
+              "durationSeconds": { "type": "number" },
+              "status": {
+                "type": "string",
+                "enum": ["dialing", "ringing", "bridged", "voicemail_drop", "completed"]
+              },
+              "voicemailSignal": { "type": "string", "enum": ["none", "possible", "detected"] },
+              "recordingId": { "type": ["string", "null"] },
+              "recordingName": { "type": "string" },
+              "callRecordingEnabled": { "type": "boolean" },
+              "callRecordingStatus": { "$ref": "CallRecordingStatus#" },
+              "actions": {
+                "type": "object",
+                "properties": {
+                  "dropVoicemail": { "$ref": "CallActionAvailability#" },
+                  "sendDtmf": { "$ref": "CallActionAvailability#" }
+                },
+                "required": ["dropVoicemail", "sendDtmf"],
+                "additionalProperties": false
+              },
+              "timeline": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": { "at": { "type": "string" }, "label": { "type": "string" } },
+                  "required": ["at", "label"],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "id",
+              "state",
+              "leadName",
+              "phoneNumber",
+              "durationSeconds",
+              "status",
+              "voicemailSignal",
+              "recordingId",
+              "recordingName",
+              "callRecordingEnabled",
+              "callRecordingStatus",
+              "actions",
+              "timeline"
+            ],
+            "additionalProperties": false
+          },
+          { "type": "null" }
+        ]
+      }
+    },
+    "required": [
+      "user",
+      "availability",
+      "campaign",
+      "availableCampaigns",
+      "softphone",
+      "metrics",
+      "voicemailJobs",
+      "recentCalls",
+      "leads",
+      "recordings",
+      "activeCall"
+    ],
+    "additionalProperties": false
+  },
+  "CallActionAvailability": {
+    "$id": "CallActionAvailability",
+    "type": "object",
+    "properties": { "allowed": { "type": "boolean" }, "reason": { "type": ["string", "null"] } },
+    "required": ["allowed", "reason"],
+    "additionalProperties": false
+  },
+  "UpdateAgentAvailabilityRequest": {
+    "$id": "UpdateAgentAvailabilityRequest",
+    "type": "object",
+    "properties": {
+      "status": { "type": "string", "enum": ["available", "paused"] },
+      "campaignId": { "type": "string" }
+    },
+    "required": ["status"],
+    "additionalProperties": false
+  },
+  "SoftphoneProvisioningResponse": {
+    "$id": "SoftphoneProvisioningResponse",
+    "type": "object",
+    "properties": {
+      "sipUri": { "type": "string" },
+      "sipUsername": { "type": "string" },
+      "sipPassword": { "type": "string" },
+      "displayName": { "type": "string" },
+      "websocketUrl": { "type": "string" },
+      "domain": { "type": "string" },
+      "iceServers": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "urls": { "type": "array", "items": { "type": "string" } },
+            "username": { "type": "string" },
+            "credential": { "type": "string" }
+          },
+          "required": ["urls"],
+          "additionalProperties": false
+        }
+      }
+    },
+    "required": [
+      "sipUri",
+      "sipUsername",
+      "sipPassword",
+      "displayName",
+      "websocketUrl",
+      "domain",
+      "iceServers"
+    ],
+    "additionalProperties": false
+  },
+  "BrowserMediaTelemetryRequest": {
+    "$id": "BrowserMediaTelemetryRequest",
+    "type": "object",
+    "properties": {
+      "schemaVersion": { "type": "number", "const": 1 },
+      "startedAt": { "type": "string" },
+      "endedAt": { "type": "string" },
+      "sampleCount": { "type": "number" },
+      "microphone": {
+        "type": "object",
+        "properties": {
+          "sampleRate": { "type": ["number", "null"] },
+          "sampleSize": { "type": ["number", "null"] },
+          "channelCount": { "type": ["number", "null"] },
+          "echoCancellation": { "type": ["boolean", "null"] },
+          "noiseSuppression": { "type": ["boolean", "null"] },
+          "autoGainControl": { "type": ["boolean", "null"] },
+          "latencySeconds": { "type": ["number", "null"] }
+        },
+        "required": [
+          "sampleRate",
+          "sampleSize",
+          "channelCount",
+          "echoCancellation",
+          "noiseSuppression",
+          "autoGainControl",
+          "latencySeconds"
+        ],
+        "additionalProperties": false
+      },
+      "inbound": {
+        "type": "object",
+        "properties": {
+          "codec": { "type": ["string", "null"] },
+          "packetsReceived": { "type": ["number", "null"] },
+          "packetsLost": { "type": ["number", "null"] },
+          "packetsDiscarded": { "type": ["number", "null"] },
+          "jitterSecondsMax": { "type": ["number", "null"] },
+          "jitterBufferDelaySeconds": { "type": ["number", "null"] },
+          "jitterBufferEmittedCount": { "type": ["number", "null"] },
+          "concealedSamples": { "type": ["number", "null"] },
+          "totalSamplesReceived": { "type": ["number", "null"] },
+          "concealmentEvents": { "type": ["number", "null"] },
+          "audioEnergy": { "type": ["number", "null"] },
+          "audioDurationSeconds": { "type": ["number", "null"] }
+        },
+        "required": [
+          "codec",
+          "packetsReceived",
+          "packetsLost",
+          "packetsDiscarded",
+          "jitterSecondsMax",
+          "jitterBufferDelaySeconds",
+          "jitterBufferEmittedCount",
+          "concealedSamples",
+          "totalSamplesReceived",
+          "concealmentEvents",
+          "audioEnergy",
+          "audioDurationSeconds"
+        ],
+        "additionalProperties": false
+      },
+      "outbound": {
+        "type": "object",
+        "properties": {
+          "codec": { "type": ["string", "null"] },
+          "packetsSent": { "type": ["number", "null"] },
+          "bytesSent": { "type": ["number", "null"] },
+          "remotePacketsLost": { "type": ["number", "null"] },
+          "remoteJitterSecondsMax": { "type": ["number", "null"] },
+          "roundTripTimeSecondsMax": { "type": ["number", "null"] }
+        },
+        "required": [
+          "codec",
+          "packetsSent",
+          "bytesSent",
+          "remotePacketsLost",
+          "remoteJitterSecondsMax",
+          "roundTripTimeSecondsMax"
+        ],
+        "additionalProperties": false
+      },
+      "connection": {
+        "type": "object",
+        "properties": {
+          "localCandidateType": { "type": ["string", "null"] },
+          "remoteCandidateType": { "type": ["string", "null"] },
+          "protocol": { "type": ["string", "null"] },
+          "relayProtocol": { "type": ["string", "null"] }
+        },
+        "required": ["localCandidateType", "remoteCandidateType", "protocol", "relayProtocol"],
+        "additionalProperties": false
+      }
+    },
+    "required": [
+      "schemaVersion",
+      "startedAt",
+      "endedAt",
+      "sampleCount",
+      "microphone",
+      "inbound",
+      "outbound",
+      "connection"
+    ],
+    "additionalProperties": false
+  },
+  "AdminOverviewResponse": {
+    "$id": "AdminOverviewResponse",
+    "type": "object",
+    "properties": {
+      "user": { "$ref": "PublicUser#" },
+      "stats": {
+        "type": "object",
+        "properties": {
+          "campaigns": { "type": "number" },
+          "activeAgents": { "type": "number" },
+          "callsToday": { "type": "number" },
+          "suppressionEntries": { "type": "number" },
+          "liveCalls": { "type": "number" },
+          "attemptedCallsToday": { "type": "number" },
+          "answeredCallsToday": { "type": "number" },
+          "contactRate": { "type": "number" },
+          "voicemailDropsToday": { "type": "number" },
+          "voicemailDropCompletionRate": { "type": "number" },
+          "failedCallsToday": { "type": "number" },
+          "callsPerHour": { "type": "number" },
+          "agentUtilization": { "type": "number" },
+          "outcomeDistribution": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": { "outcome": { "type": "string" }, "count": { "type": "number" } },
+              "required": ["outcome", "count"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "campaigns",
+          "activeAgents",
+          "callsToday",
+          "suppressionEntries",
+          "liveCalls",
+          "attemptedCallsToday",
+          "answeredCallsToday",
+          "contactRate",
+          "voicemailDropsToday",
+          "voicemailDropCompletionRate",
+          "failedCallsToday",
+          "callsPerHour",
+          "agentUtilization",
+          "outcomeDistribution"
+        ],
+        "additionalProperties": false
+      },
+      "campaigns": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": { "type": "string" },
+            "name": { "type": "string" },
+            "status": { "$ref": "CampaignStatus#" },
+            "loaded": { "type": "number" },
+            "callable": { "type": "number" },
+            "attempted": { "type": "number" },
+            "outcomeDistribution": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": { "outcome": { "type": "string" }, "count": { "type": "number" } },
+                "required": ["outcome", "count"],
+                "additionalProperties": false
+              }
+            },
+            "manualDialingEnabled": { "type": "boolean" },
+            "callRecordingEnabled": { "type": "boolean" },
+            "earlyMediaAvmdEnabled": { "type": "boolean" }
+          },
+          "required": [
+            "id",
+            "name",
+            "status",
+            "loaded",
+            "callable",
+            "attempted",
+            "outcomeDistribution",
+            "manualDialingEnabled",
+            "callRecordingEnabled",
+            "earlyMediaAvmdEnabled"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "recordings": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": { "type": "string" },
+            "name": { "type": "string" },
+            "durationSeconds": { "type": "number" },
+            "fileSizeBytes": { "type": "number" },
+            "status": { "type": "string" }
+          },
+          "required": ["id", "name", "durationSeconds", "fileSizeBytes", "status"],
+          "additionalProperties": false
+        }
+      },
+      "users": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "agentRegistered": { "type": ["boolean", "null"] },
+            "id": { "type": "string" },
+            "email": { "type": "string" },
+            "name": { "type": "string" },
+            "role": { "$ref": "UserRole#" },
+            "isActive": { "type": "boolean" }
+          },
+          "required": ["agentRegistered", "email", "id", "isActive", "name", "role"]
+        }
+      },
+      "callHistory": { "type": "array", "items": { "$ref": "CallHistoryItem#" } },
+      "suppression": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": { "type": "string" },
+            "phoneNumber": { "type": "string" },
+            "reason": { "type": "string" },
+            "createdAt": { "type": "string" }
+          },
+          "required": ["id", "phoneNumber", "reason", "createdAt"],
+          "additionalProperties": false
+        }
+      }
+    },
+    "required": ["user", "stats", "campaigns", "recordings", "users", "callHistory", "suppression"],
+    "additionalProperties": false
+  },
+  "CallHistoryItem": {
+    "$id": "CallHistoryItem",
+    "type": "object",
+    "properties": {
+      "id": { "type": "string" },
+      "leadName": { "type": "string" },
+      "agentName": { "type": "string" },
+      "phoneNumber": { "type": "string" },
+      "campaignName": { "type": "string" },
+      "campaignId": { "type": ["string", "null"] },
+      "agentId": { "type": ["string", "null"] },
+      "state": { "$ref": "CallState#" },
+      "outcome": { "anyOf": [{ "$ref": "CallOutcome#" }, { "type": "null" }] },
+      "createdAt": { "type": "string" },
+      "durationSeconds": { "type": "number" },
+      "recordingAvailable": { "type": "boolean" },
+      "pcapStatus": { "anyOf": [{ "$ref": "CallPcapStatus#" }, { "type": "null" }] },
+      "pcapAvailable": { "type": "boolean" },
+      "voicemailSignal": { "type": ["string", "null"] },
+      "avmdReviewStatus": {
+        "type": ["string", "null"],
+        "enum": ["needs_review", "reviewed", "uncertain", null]
+      }
+    },
+    "required": [
+      "id",
+      "leadName",
+      "agentName",
+      "phoneNumber",
+      "campaignName",
+      "campaignId",
+      "agentId",
+      "state",
+      "outcome",
+      "createdAt",
+      "durationSeconds",
+      "recordingAvailable",
+      "pcapStatus",
+      "pcapAvailable",
+      "voicemailSignal",
+      "avmdReviewStatus"
+    ],
+    "additionalProperties": false
+  },
+  "AdminAnalyticsResponse": {
+    "$id": "AdminAnalyticsResponse",
+    "type": "object",
+    "properties": {
+      "filters": {
+        "type": "object",
+        "properties": {
+          "from": { "type": "string" },
+          "to": { "type": "string" },
+          "campaignId": { "type": ["string", "null"] },
+          "timeZone": { "type": "string" }
+        },
+        "required": ["from", "to", "campaignId", "timeZone"],
+        "additionalProperties": false
+      },
+      "summary": {
+        "type": "object",
+        "properties": {
+          "attempts": { "type": "number" },
+          "uniqueContacts": { "type": "number" },
+          "answered": { "type": "number" },
+          "answerRate": { "type": "number" },
+          "connected": { "type": "number" },
+          "contactRate": { "type": "number" },
+          "averageTalkSeconds": { "type": "number" },
+          "failed": { "type": "number" },
+          "voicemailCompleted": { "type": "number" },
+          "voicemailCompletionRate": { "type": "number" }
+        },
+        "required": [
+          "attempts",
+          "uniqueContacts",
+          "answered",
+          "answerRate",
+          "connected",
+          "contactRate",
+          "averageTalkSeconds",
+          "failed",
+          "voicemailCompleted",
+          "voicemailCompletionRate"
+        ],
+        "additionalProperties": false
+      },
+      "funnel": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "stage": { "type": "string", "enum": ["Attempts", "Answered", "Connected", "Completed"] },
+            "count": { "type": "number" }
+          },
+          "required": ["stage", "count"],
+          "additionalProperties": false
+        }
+      },
+      "dailyTrend": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "date": { "type": "string" },
+            "attempts": { "type": "number" },
+            "answered": { "type": "number" },
+            "connected": { "type": "number" },
+            "failed": { "type": "number" },
+            "voicemailCompleted": { "type": "number" },
+            "averageTalkSeconds": { "type": "number" }
+          },
+          "required": [
+            "date",
+            "attempts",
+            "answered",
+            "connected",
+            "failed",
+            "voicemailCompleted",
+            "averageTalkSeconds"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "campaignPerformance": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": { "type": "string" },
+            "name": { "type": "string" },
+            "status": { "$ref": "CampaignStatus#" },
+            "loaded": { "type": "number" },
+            "callable": { "type": "number" },
+            "attemptedContacts": { "type": "number" },
+            "attempts": { "type": "number" },
+            "answered": { "type": "number" },
+            "connected": { "type": "number" },
+            "contactRate": { "type": "number" },
+            "averageTalkSeconds": { "type": "number" },
+            "retryEfficiency": { "type": "number" },
+            "voicemailCompleted": { "type": "number" }
+          },
+          "required": [
+            "id",
+            "name",
+            "status",
+            "loaded",
+            "callable",
+            "attemptedContacts",
+            "attempts",
+            "answered",
+            "connected",
+            "contactRate",
+            "averageTalkSeconds",
+            "retryEfficiency",
+            "voicemailCompleted"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "agentPerformance": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": { "type": "string" },
+            "name": { "type": "string" },
+            "isActive": { "type": "boolean" },
+            "registered": { "type": "boolean" },
+            "availabilityStatus": { "$ref": "AgentAvailabilityStatus#" },
+            "activeCall": { "type": "boolean" },
+            "attempts": { "type": "number" },
+            "answered": { "type": "number" },
+            "connected": { "type": "number" },
+            "contactRate": { "type": "number" },
+            "averageTalkSeconds": { "type": "number" },
+            "voicemailDrops": { "type": "number" },
+            "failed": { "type": "number" }
+          },
+          "required": [
+            "id",
+            "name",
+            "isActive",
+            "registered",
+            "availabilityStatus",
+            "activeCall",
+            "attempts",
+            "answered",
+            "connected",
+            "contactRate",
+            "averageTalkSeconds",
+            "voicemailDrops",
+            "failed"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "dataQuality": {
+        "type": "object",
+        "properties": {
+          "snapshotAt": { "type": "string" },
+          "totalContacts": { "type": "number" },
+          "callable": { "type": "number" },
+          "suppressed": { "type": "number" },
+          "exhausted": { "type": "number" },
+          "importedRows": { "type": "number" },
+          "rejectedRows": { "type": "number" },
+          "duplicateRows": { "type": "number" },
+          "invalidRows": { "type": "number" }
+        },
+        "required": [
+          "snapshotAt",
+          "totalContacts",
+          "callable",
+          "suppressed",
+          "exhausted",
+          "importedRows",
+          "rejectedRows",
+          "duplicateRows",
+          "invalidRows"
+        ],
+        "additionalProperties": false
+      },
+      "voicemail": {
+        "type": "object",
+        "properties": {
+          "requested": { "type": "number" },
+          "started": { "type": "number" },
+          "agentReleased": { "type": "number" },
+          "completed": { "type": "number" },
+          "failedOrInterrupted": { "type": "number" },
+          "completionRate": { "type": "number" },
+          "averageReleaseSeconds": { "type": "number" }
+        },
+        "required": [
+          "requested",
+          "started",
+          "agentReleased",
+          "completed",
+          "failedOrInterrupted",
+          "completionRate",
+          "averageReleaseSeconds"
+        ],
+        "additionalProperties": false
+      },
+      "avmdQuality": {
+        "type": "object",
+        "properties": {
+          "eligibleCalls": { "type": "number" },
+          "reviewedCalls": { "type": "number" },
+          "uncertainReviews": { "type": "number" },
+          "reviewCoverageRate": { "type": "number" },
+          "truePositives": { "type": "number" },
+          "falsePositives": { "type": "number" },
+          "trueNegatives": { "type": "number" },
+          "falseNegatives": { "type": "number" },
+          "precision": { "type": ["number", "null"] },
+          "recall": { "type": ["number", "null"] },
+          "falsePositiveRate": { "type": ["number", "null"] }
+        },
+        "required": [
+          "eligibleCalls",
+          "reviewedCalls",
+          "uncertainReviews",
+          "reviewCoverageRate",
+          "truePositives",
+          "falsePositives",
+          "trueNegatives",
+          "falseNegatives",
+          "precision",
+          "recall",
+          "falsePositiveRate"
+        ],
+        "additionalProperties": false
+      },
+      "mediaQuality": {
+        "type": "object",
+        "properties": {
+          "answeredCalls": { "type": "number" },
+          "observedCalls": { "type": "number" },
+          "coverageRate": { "type": "number" },
+          "suspectedOneWayCalls": { "type": "number" },
+          "averageMos": { "type": ["number", "null"] },
+          "p95JitterLossRate": { "type": ["number", "null"] },
+          "averageQualityPercentage": { "type": ["number", "null"] },
+          "providers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": { "provider": { "type": "string" }, "count": { "type": "number" } },
+              "required": ["provider", "count"],
+              "additionalProperties": false
+            }
+          },
+          "browser": {
+            "type": "object",
+            "properties": {
+              "observedCalls": { "type": "number" },
+              "coverageRate": { "type": "number" },
+              "averageInboundLossRate": { "type": ["number", "null"] },
+              "averageConcealedSampleRate": { "type": ["number", "null"] },
+              "averageJitterBufferMs": { "type": ["number", "null"] },
+              "p95JitterMs": { "type": ["number", "null"] },
+              "p95RoundTripTimeMs": { "type": ["number", "null"] },
+              "paths": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": { "path": { "type": "string" }, "count": { "type": "number" } },
+                  "required": ["path", "count"],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "observedCalls",
+              "coverageRate",
+              "averageInboundLossRate",
+              "averageConcealedSampleRate",
+              "averageJitterBufferMs",
+              "p95JitterMs",
+              "p95RoundTripTimeMs",
+              "paths"
+            ],
+            "additionalProperties": false
+          },
+          "legs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "legType": { "type": "string", "enum": ["agent", "customer"] },
+                "observedCalls": { "type": "number" },
+                "averageMos": { "type": ["number", "null"] },
+                "p95JitterLossRate": { "type": ["number", "null"] },
+                "averageQualityPercentage": { "type": ["number", "null"] },
+                "codecs": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": { "codec": { "type": "string" }, "count": { "type": "number" } },
+                    "required": ["codec", "count"],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": [
+                "legType",
+                "observedCalls",
+                "averageMos",
+                "p95JitterLossRate",
+                "averageQualityPercentage",
+                "codecs"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "answeredCalls",
+          "observedCalls",
+          "coverageRate",
+          "suspectedOneWayCalls",
+          "averageMos",
+          "p95JitterLossRate",
+          "averageQualityPercentage",
+          "providers",
+          "browser",
+          "legs"
+        ],
+        "additionalProperties": false
+      },
+      "telephonyReliability": {
+        "type": "object",
+        "properties": {
+          "finalizationSamples": { "type": "number" },
+          "averageFinalizationMs": { "type": ["number", "null"] },
+          "p95FinalizationMs": { "type": ["number", "null"] },
+          "maxFinalizationMs": { "type": ["number", "null"] },
+          "registrationDatabaseCount": { "type": ["number", "null"] },
+          "registrationFreeSwitchCount": { "type": ["number", "null"] },
+          "registrationDriftCount": { "type": ["number", "null"] },
+          "registrationCorrectionsLastRun": { "type": ["number", "null"] },
+          "registrationReconciledAt": { "type": ["string", "null"] },
+          "activeCallsDatabaseCount": { "type": ["number", "null"] },
+          "activeCallsMissingInFreeSwitch": { "type": ["number", "null"] },
+          "activeCallsClosedLastRun": { "type": ["number", "null"] },
+          "activeCallsReconciledAt": { "type": ["string", "null"] },
+          "reconciliationClosures": { "type": "number" }
+        },
+        "required": [
+          "finalizationSamples",
+          "averageFinalizationMs",
+          "p95FinalizationMs",
+          "maxFinalizationMs",
+          "registrationDatabaseCount",
+          "registrationFreeSwitchCount",
+          "registrationDriftCount",
+          "registrationCorrectionsLastRun",
+          "registrationReconciledAt",
+          "activeCallsDatabaseCount",
+          "activeCallsMissingInFreeSwitch",
+          "activeCallsClosedLastRun",
+          "activeCallsReconciledAt",
+          "reconciliationClosures"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "required": [
+      "filters",
+      "summary",
+      "funnel",
+      "dailyTrend",
+      "campaignPerformance",
+      "agentPerformance",
+      "dataQuality",
+      "voicemail",
+      "avmdQuality",
+      "mediaQuality",
+      "telephonyReliability"
+    ],
+    "additionalProperties": false
+  },
+  "AdminCampaignListResponse": { "$id": "AdminCampaignListResponse", "$ref": "GeneratedSchema2#" },
+  "GeneratedSchema2": {
+    "$id": "GeneratedSchema2",
+    "type": "object",
+    "properties": {
+      "items": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": { "type": "string" },
+            "name": { "type": "string" },
+            "status": { "$ref": "CampaignStatus#" },
+            "loaded": { "type": "number" },
+            "callable": { "type": "number" },
+            "attempted": { "type": "number" },
+            "outcomeDistribution": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": { "outcome": { "type": "string" }, "count": { "type": "number" } },
+                "required": ["outcome", "count"],
+                "additionalProperties": false
+              }
+            },
+            "manualDialingEnabled": { "type": "boolean" },
+            "callRecordingEnabled": { "type": "boolean" },
+            "earlyMediaAvmdEnabled": { "type": "boolean" }
+          },
+          "required": [
+            "id",
+            "name",
+            "status",
+            "loaded",
+            "callable",
+            "attempted",
+            "outcomeDistribution",
+            "manualDialingEnabled",
+            "callRecordingEnabled",
+            "earlyMediaAvmdEnabled"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "page": { "type": "number" },
+      "pageSize": { "type": "number" },
+      "total": { "type": "number" },
+      "totalPages": { "type": "number" }
+    },
+    "required": ["items", "page", "pageSize", "total", "totalPages"],
+    "additionalProperties": false
+  },
+  "AdminRecordingListResponse": { "$id": "AdminRecordingListResponse", "$ref": "GeneratedSchema3#" },
+  "GeneratedSchema3": {
+    "$id": "GeneratedSchema3",
+    "type": "object",
+    "properties": {
+      "items": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": { "type": "string" },
+            "name": { "type": "string" },
+            "durationSeconds": { "type": "number" },
+            "fileSizeBytes": { "type": "number" },
+            "status": { "type": "string" }
+          },
+          "required": ["id", "name", "durationSeconds", "fileSizeBytes", "status"],
+          "additionalProperties": false
+        }
+      },
+      "page": { "type": "number" },
+      "pageSize": { "type": "number" },
+      "total": { "type": "number" },
+      "totalPages": { "type": "number" }
+    },
+    "required": ["items", "page", "pageSize", "total", "totalPages"],
+    "additionalProperties": false
+  },
+  "AdminUserListResponse": { "$id": "AdminUserListResponse", "$ref": "GeneratedSchema1#" },
+  "GeneratedSchema1": {
+    "$id": "GeneratedSchema1",
+    "type": "object",
+    "properties": {
+      "items": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "agentRegistered": { "type": ["boolean", "null"] },
+            "id": { "type": "string" },
+            "email": { "type": "string" },
+            "name": { "type": "string" },
+            "role": { "$ref": "UserRole#" },
+            "isActive": { "type": "boolean" }
+          },
+          "required": ["agentRegistered", "email", "id", "isActive", "name", "role"]
+        }
+      },
+      "page": { "type": "number" },
+      "pageSize": { "type": "number" },
+      "total": { "type": "number" },
+      "totalPages": { "type": "number" }
+    },
+    "required": ["items", "page", "pageSize", "total", "totalPages"],
+    "additionalProperties": false
+  },
+  "CallHistoryResponse": {
+    "$id": "CallHistoryResponse",
+    "type": "object",
+    "properties": {
+      "items": { "type": "array", "items": { "$ref": "CallHistoryItem#" } },
+      "page": { "type": "number" },
+      "pageSize": { "type": "number" },
+      "total": { "type": "number" },
+      "totalPages": { "type": "number" }
+    },
+    "required": ["items", "page", "pageSize", "total", "totalPages"],
+    "additionalProperties": false
+  },
+  "CallDetailResponse": {
+    "$id": "CallDetailResponse",
+    "type": "object",
+    "properties": {
+      "call": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "startedAt": { "type": ["string", "null"] },
+          "answeredAt": { "type": ["string", "null"] },
+          "endedAt": { "type": ["string", "null"] },
+          "manualDial": { "type": "boolean" },
+          "voicemailSignal": { "type": ["string", "null"] },
+          "voicemailConfidence": { "type": ["number", "null"] },
+          "avmdAttempted": { "type": "boolean" },
+          "recordingStatus": { "$ref": "CallRecordingStatus#" },
+          "recordingDurationSeconds": { "type": ["number", "null"] },
+          "recordingFileSizeBytes": { "type": ["number", "null"] },
+          "recordingIntegrityCheckedAt": { "type": ["string", "null"] },
+          "recordingFailureReason": { "type": ["string", "null"] },
+          "pcapStatus": { "anyOf": [{ "$ref": "CallPcapStatus#" }, { "type": "null" }] },
+          "pcapFileSizeBytes": { "type": ["number", "null"] },
+          "pcapStartedAt": { "type": ["string", "null"] },
+          "pcapEndedAt": { "type": ["string", "null"] },
+          "pcapFailureReason": { "type": ["string", "null"] },
+          "pcapAvailable": { "type": "boolean" },
+          "lastReasonCode": { "type": ["string", "null"] },
+          "hangupCause": { "type": ["string", "null"] },
+          "freeswitchTerminalAt": { "type": ["string", "null"] },
+          "terminalPersistedAt": { "type": ["string", "null"] },
+          "terminalSource": { "type": ["string", "null"] },
+          "terminalEventName": { "type": ["string", "null"] },
+          "finalizationLatencyMs": { "type": ["number", "null"] },
+          "id": { "type": "string" },
+          "leadName": { "type": "string" },
+          "agentName": { "type": "string" },
+          "phoneNumber": { "type": "string" },
+          "campaignName": { "type": "string" },
+          "campaignId": { "type": ["string", "null"] },
+          "agentId": { "type": ["string", "null"] },
+          "state": { "$ref": "CallState#" },
+          "outcome": { "anyOf": [{ "$ref": "CallOutcome#" }, { "type": "null" }] },
+          "createdAt": { "type": "string" },
+          "durationSeconds": { "type": "number" },
+          "recordingAvailable": { "type": "boolean" },
+          "avmdReviewStatus": {
+            "type": ["string", "null"],
+            "enum": ["needs_review", "reviewed", "uncertain", null]
+          }
+        },
+        "required": [
+          "agentId",
+          "agentName",
+          "answeredAt",
+          "avmdAttempted",
+          "avmdReviewStatus",
+          "campaignId",
+          "campaignName",
+          "createdAt",
+          "durationSeconds",
+          "endedAt",
+          "finalizationLatencyMs",
+          "freeswitchTerminalAt",
+          "hangupCause",
+          "id",
+          "lastReasonCode",
+          "leadName",
+          "manualDial",
+          "outcome",
+          "pcapAvailable",
+          "pcapEndedAt",
+          "pcapFailureReason",
+          "pcapFileSizeBytes",
+          "pcapStartedAt",
+          "pcapStatus",
+          "phoneNumber",
+          "recordingAvailable",
+          "recordingDurationSeconds",
+          "recordingFailureReason",
+          "recordingFileSizeBytes",
+          "recordingIntegrityCheckedAt",
+          "recordingStatus",
+          "startedAt",
+          "state",
+          "terminalEventName",
+          "terminalPersistedAt",
+          "terminalSource",
+          "voicemailConfidence",
+          "voicemailSignal"
+        ]
+      },
+      "avmdReview": { "anyOf": [{ "$ref": "CallAvmdReview#" }, { "type": "null" }] },
+      "mediaQuality": { "type": "array", "items": { "$ref": "CallMediaQuality#" } },
+      "browserMedia": { "anyOf": [{ "$ref": "BrowserMediaTelemetry#" }, { "type": "null" }] },
+      "legs": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "type": { "type": "string", "enum": ["agent", "customer"] },
+            "state": { "type": "string" },
+            "freeswitchUuid": { "type": ["string", "null"] },
+            "sipUri": { "type": ["string", "null"] },
+            "startedAt": { "type": ["string", "null"] },
+            "answeredAt": { "type": ["string", "null"] },
+            "endedAt": { "type": ["string", "null"] },
+            "hangupCause": { "type": ["string", "null"] },
+            "reasonCode": { "type": ["string", "null"] }
+          },
+          "required": [
+            "type",
+            "state",
+            "freeswitchUuid",
+            "sipUri",
+            "startedAt",
+            "answeredAt",
+            "endedAt",
+            "hangupCause",
+            "reasonCode"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "timeline": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "at": { "type": "string" },
+            "eventType": { "type": "string" },
+            "state": { "type": "string" },
+            "label": { "type": "string" },
+            "reasonCode": { "type": ["string", "null"] },
+            "freeSwitchEventName": { "type": ["string", "null"] },
+            "apiCommandName": { "type": ["string", "null"] },
+            "agentLegUuid": { "type": ["string", "null"] },
+            "customerLegUuid": { "type": ["string", "null"] }
+          },
+          "required": [
+            "at",
+            "eventType",
+            "state",
+            "label",
+            "reasonCode",
+            "freeSwitchEventName",
+            "apiCommandName",
+            "agentLegUuid",
+            "customerLegUuid"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "timelineTotal": { "type": "number" },
+      "timelineTruncated": { "type": "boolean" }
+    },
+    "required": [
+      "call",
+      "avmdReview",
+      "mediaQuality",
+      "browserMedia",
+      "legs",
+      "timeline",
+      "timelineTotal",
+      "timelineTruncated"
+    ],
+    "additionalProperties": false
+  },
+  "CallAvmdReview": {
+    "$id": "CallAvmdReview",
+    "type": "object",
+    "properties": {
+      "actualParty": { "$ref": "AvmdActualParty#" },
+      "notes": { "type": ["string", "null"] },
+      "reviewedByName": { "type": "string" },
+      "reviewedAt": { "type": "string" },
+      "updatedAt": { "type": "string" }
+    },
+    "required": ["actualParty", "notes", "reviewedByName", "reviewedAt", "updatedAt"],
+    "additionalProperties": false
+  },
+  "AvmdActualParty": {
+    "$id": "AvmdActualParty",
+    "type": "string",
+    "enum": ["human", "machine", "uncertain"]
+  },
+  "CallMediaQuality": {
+    "$id": "CallMediaQuality",
+    "type": "object",
+    "properties": {
+      "legType": { "type": "string", "enum": ["agent", "customer"] },
+      "capturedAt": { "type": "string" },
+      "readCodec": { "type": ["string", "null"] },
+      "writeCodec": { "type": ["string", "null"] },
+      "sipGateway": { "type": ["string", "null"] },
+      "sipProfile": { "type": ["string", "null"] },
+      "inboundPacketCount": { "type": ["number", "null"] },
+      "outboundPacketCount": { "type": ["number", "null"] },
+      "inboundMediaPacketCount": { "type": ["number", "null"] },
+      "outboundMediaPacketCount": { "type": ["number", "null"] },
+      "inboundSkipPacketCount": { "type": ["number", "null"] },
+      "inboundJitterLossRate": { "type": ["number", "null"] },
+      "inboundJitterMaxVariance": { "type": ["number", "null"] },
+      "inboundMos": { "type": ["number", "null"] },
+      "inboundQualityPercentage": { "type": ["number", "null"] },
+      "suspectedOneWayAudio": { "type": "boolean" }
+    },
+    "required": [
+      "legType",
+      "capturedAt",
+      "readCodec",
+      "writeCodec",
+      "sipGateway",
+      "sipProfile",
+      "inboundPacketCount",
+      "outboundPacketCount",
+      "inboundMediaPacketCount",
+      "outboundMediaPacketCount",
+      "inboundSkipPacketCount",
+      "inboundJitterLossRate",
+      "inboundJitterMaxVariance",
+      "inboundMos",
+      "inboundQualityPercentage",
+      "suspectedOneWayAudio"
+    ],
+    "additionalProperties": false
+  },
+  "BrowserMediaTelemetry": {
+    "$id": "BrowserMediaTelemetry",
+    "type": "object",
+    "properties": {
+      "schemaVersion": { "type": "number", "const": 1 },
+      "startedAt": { "type": "string" },
+      "endedAt": { "type": "string" },
+      "sampleCount": { "type": "number" },
+      "microphone": {
+        "type": "object",
+        "properties": {
+          "sampleRate": { "type": ["number", "null"] },
+          "sampleSize": { "type": ["number", "null"] },
+          "channelCount": { "type": ["number", "null"] },
+          "echoCancellation": { "type": ["boolean", "null"] },
+          "noiseSuppression": { "type": ["boolean", "null"] },
+          "autoGainControl": { "type": ["boolean", "null"] },
+          "latencySeconds": { "type": ["number", "null"] }
+        },
+        "required": [
+          "sampleRate",
+          "sampleSize",
+          "channelCount",
+          "echoCancellation",
+          "noiseSuppression",
+          "autoGainControl",
+          "latencySeconds"
+        ],
+        "additionalProperties": false
+      },
+      "inbound": {
+        "type": "object",
+        "properties": {
+          "codec": { "type": ["string", "null"] },
+          "packetsReceived": { "type": ["number", "null"] },
+          "packetsLost": { "type": ["number", "null"] },
+          "packetsDiscarded": { "type": ["number", "null"] },
+          "jitterSecondsMax": { "type": ["number", "null"] },
+          "jitterBufferDelaySeconds": { "type": ["number", "null"] },
+          "jitterBufferEmittedCount": { "type": ["number", "null"] },
+          "concealedSamples": { "type": ["number", "null"] },
+          "totalSamplesReceived": { "type": ["number", "null"] },
+          "concealmentEvents": { "type": ["number", "null"] },
+          "audioEnergy": { "type": ["number", "null"] },
+          "audioDurationSeconds": { "type": ["number", "null"] }
+        },
+        "required": [
+          "codec",
+          "packetsReceived",
+          "packetsLost",
+          "packetsDiscarded",
+          "jitterSecondsMax",
+          "jitterBufferDelaySeconds",
+          "jitterBufferEmittedCount",
+          "concealedSamples",
+          "totalSamplesReceived",
+          "concealmentEvents",
+          "audioEnergy",
+          "audioDurationSeconds"
+        ],
+        "additionalProperties": false
+      },
+      "outbound": {
+        "type": "object",
+        "properties": {
+          "codec": { "type": ["string", "null"] },
+          "packetsSent": { "type": ["number", "null"] },
+          "bytesSent": { "type": ["number", "null"] },
+          "remotePacketsLost": { "type": ["number", "null"] },
+          "remoteJitterSecondsMax": { "type": ["number", "null"] },
+          "roundTripTimeSecondsMax": { "type": ["number", "null"] }
+        },
+        "required": [
+          "codec",
+          "packetsSent",
+          "bytesSent",
+          "remotePacketsLost",
+          "remoteJitterSecondsMax",
+          "roundTripTimeSecondsMax"
+        ],
+        "additionalProperties": false
+      },
+      "connection": {
+        "type": "object",
+        "properties": {
+          "localCandidateType": { "type": ["string", "null"] },
+          "remoteCandidateType": { "type": ["string", "null"] },
+          "protocol": { "type": ["string", "null"] },
+          "relayProtocol": { "type": ["string", "null"] }
+        },
+        "required": ["localCandidateType", "remoteCandidateType", "protocol", "relayProtocol"],
+        "additionalProperties": false
+      },
+      "capturedAt": { "type": "string" }
+    },
+    "required": [
+      "capturedAt",
+      "connection",
+      "endedAt",
+      "inbound",
+      "microphone",
+      "outbound",
+      "sampleCount",
+      "schemaVersion",
+      "startedAt"
+    ],
+    "additionalProperties": false
+  },
+  "UpsertCallAvmdReviewRequest": {
+    "$id": "UpsertCallAvmdReviewRequest",
+    "type": "object",
+    "properties": { "actualParty": { "$ref": "AvmdActualParty#" }, "notes": { "type": "string" } },
+    "required": ["actualParty"],
+    "additionalProperties": false
+  },
+  "CreateRecordingResponse": {
+    "$id": "CreateRecordingResponse",
+    "type": "object",
+    "properties": {
+      "item": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "durationSeconds": { "type": "number" },
+          "fileSizeBytes": { "type": "number" },
+          "status": { "type": "string" }
+        },
+        "required": ["id", "name", "durationSeconds", "fileSizeBytes", "status"],
+        "additionalProperties": false
+      }
+    },
+    "required": ["item"],
+    "additionalProperties": false
+  },
+  "CreateCampaignRequest": {
+    "$id": "CreateCampaignRequest",
+    "type": "object",
+    "properties": {
+      "name": { "type": "string" },
+      "status": { "$ref": "CampaignStatus#" },
+      "manualDialingEnabled": { "type": "boolean" },
+      "callRecordingEnabled": { "type": "boolean" },
+      "earlyMediaAvmdEnabled": { "type": "boolean" }
+    },
+    "required": ["name", "status", "manualDialingEnabled", "callRecordingEnabled", "earlyMediaAvmdEnabled"],
+    "additionalProperties": false
+  },
+  "UpdateCampaignRequest": {
+    "$id": "UpdateCampaignRequest",
+    "type": "object",
+    "properties": {
+      "name": { "type": "string" },
+      "status": { "$ref": "CampaignStatus#" },
+      "manualDialingEnabled": { "type": "boolean" },
+      "callRecordingEnabled": { "type": "boolean" },
+      "earlyMediaAvmdEnabled": { "type": "boolean" }
+    },
+    "required": ["name", "status", "manualDialingEnabled", "callRecordingEnabled", "earlyMediaAvmdEnabled"],
+    "additionalProperties": false
+  },
+  "CreateContactRequest": {
+    "$id": "CreateContactRequest",
+    "type": "object",
+    "properties": {
+      "campaignId": { "type": "string" },
+      "name": { "type": "string" },
+      "phoneNumber": { "type": "string" },
+      "company": { "type": "string" },
+      "fields": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": { "label": { "type": "string" }, "value": { "type": "string" } },
+          "required": ["label", "value"],
+          "additionalProperties": false
+        }
+      }
+    },
+    "required": ["campaignId", "name", "phoneNumber"],
+    "additionalProperties": false
+  },
+  "CreateSuppressionRequest": {
+    "$id": "CreateSuppressionRequest",
+    "type": "object",
+    "properties": { "phoneNumber": { "type": "string" }, "reason": { "type": "string" } },
+    "required": ["phoneNumber"],
+    "additionalProperties": false
+  },
+  "CreateUserRequest": {
+    "$id": "CreateUserRequest",
+    "type": "object",
+    "properties": {
+      "email": { "type": "string" },
+      "name": { "type": "string" },
+      "role": { "$ref": "UserRole#" },
+      "password": { "type": "string" }
+    },
+    "required": ["email", "name", "role", "password"],
+    "additionalProperties": false
+  },
+  "CreateUserResponse": {
+    "$id": "CreateUserResponse",
+    "type": "object",
+    "properties": { "user": { "$ref": "PublicUser#" } },
+    "required": ["user"],
+    "additionalProperties": false
+  },
+  "UpdateUserRequest": {
+    "$id": "UpdateUserRequest",
+    "type": "object",
+    "properties": {
+      "email": { "type": "string" },
+      "name": { "type": "string" },
+      "role": { "$ref": "UserRole#" },
+      "isActive": { "type": "boolean" },
+      "password": { "type": "string" }
+    },
+    "additionalProperties": false
+  },
+  "UpdateUserResponse": {
+    "$id": "UpdateUserResponse",
+    "type": "object",
+    "properties": { "user": { "$ref": "PublicUser#" } },
+    "required": ["user"],
+    "additionalProperties": false
+  },
+  "MediaTicketResponse": {
+    "$id": "MediaTicketResponse",
+    "type": "object",
+    "properties": { "url": { "type": "string" }, "expiresAt": { "type": "string" } },
+    "required": ["url", "expiresAt"],
+    "additionalProperties": false
+  },
+  "SuppressionListResponse": {
+    "$id": "SuppressionListResponse",
+    "type": "object",
+    "properties": {
+      "items": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": { "type": "string" },
+            "phoneNumber": { "type": "string" },
+            "reason": { "type": "string" },
+            "createdAt": { "type": "string" }
+          },
+          "required": ["id", "phoneNumber", "reason", "createdAt"],
+          "additionalProperties": false
+        }
+      },
+      "page": { "type": "number" },
+      "pageSize": { "type": "number" },
+      "total": { "type": "number" },
+      "totalPages": { "type": "number" }
+    },
+    "required": ["items", "page", "pageSize", "total", "totalPages"],
+    "additionalProperties": false
+  },
+  "SuppressionImportResponse": {
+    "$id": "SuppressionImportResponse",
+    "type": "object",
+    "properties": {
+      "filename": { "type": "string" },
+      "totalRows": { "type": "number" },
+      "importedRows": { "type": "number" },
+      "updatedRows": { "type": "number" },
+      "failedRows": { "type": "number" },
+      "failures": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": { "rowNumber": { "type": "number" }, "reason": { "type": "string" } },
+          "required": ["rowNumber", "reason"],
+          "additionalProperties": false
+        }
+      }
+    },
+    "required": ["filename", "totalRows", "importedRows", "updatedRows", "failedRows", "failures"],
+    "additionalProperties": false
+  },
+  "RetentionRunResponse": {
+    "$id": "RetentionRunResponse",
+    "type": "object",
+    "properties": {
+      "dryRun": { "type": "boolean" },
+      "callRetentionDays": { "type": "number" },
+      "recordingRetentionDays": { "type": "number" },
+      "pcapRetentionDays": { "type": "number" },
+      "calls": { "type": "number" },
+      "recordingFiles": { "type": "number" },
+      "pcapFiles": { "type": "number" }
+    },
+    "required": [
+      "dryRun",
+      "callRetentionDays",
+      "recordingRetentionDays",
+      "pcapRetentionDays",
+      "calls",
+      "recordingFiles",
+      "pcapFiles"
+    ],
+    "additionalProperties": false
+  },
+  "ImportCsvRequest": {
+    "$id": "ImportCsvRequest",
+    "type": "object",
+    "properties": { "filename": { "type": "string" }, "csvText": { "type": "string" } },
+    "required": ["filename", "csvText"],
+    "additionalProperties": false
+  },
+  "ImportCsvResponse": {
+    "$id": "ImportCsvResponse",
+    "type": "object",
+    "properties": {
+      "importId": { "type": "string" },
+      "filename": { "type": "string" },
+      "totalRows": { "type": "number" },
+      "importedRows": { "type": "number" },
+      "failedRows": { "type": "number" },
+      "duplicateRows": { "type": "number" },
+      "detectedColumns": { "type": "array", "items": { "type": "string" } }
+    },
+    "required": [
+      "importId",
+      "filename",
+      "totalRows",
+      "importedRows",
+      "failedRows",
+      "duplicateRows",
+      "detectedColumns"
+    ],
+    "additionalProperties": false
+  },
+  "CsvImportSummary": {
+    "$id": "CsvImportSummary",
+    "type": "object",
+    "properties": {
+      "id": { "type": "string" },
+      "campaignId": { "type": "string" },
+      "campaignName": { "type": "string" },
+      "filename": { "type": "string" },
+      "status": { "type": "string" },
+      "totalRows": { "type": "number" },
+      "importedRows": { "type": "number" },
+      "failedRows": { "type": "number" },
+      "duplicateRows": { "type": "number" },
+      "createdAt": { "type": "string" },
+      "completedAt": { "type": "string" }
+    },
+    "required": [
+      "id",
+      "campaignId",
+      "campaignName",
+      "filename",
+      "status",
+      "totalRows",
+      "importedRows",
+      "failedRows",
+      "duplicateRows",
+      "createdAt"
+    ],
+    "additionalProperties": false
+  },
+  "CsvImportHistoryResponse": {
+    "$id": "CsvImportHistoryResponse",
+    "type": "object",
+    "properties": {
+      "imports": { "type": "array", "items": { "$ref": "CsvImportSummary#" } },
+      "page": { "type": "number" },
+      "pageSize": { "type": "number" },
+      "total": { "type": "number" },
+      "totalPages": { "type": "number" }
+    },
+    "required": ["imports", "page", "pageSize", "total", "totalPages"],
+    "additionalProperties": false
+  },
+  "CsvImportFailure": {
+    "$id": "CsvImportFailure",
+    "type": "object",
+    "properties": {
+      "id": { "type": "string" },
+      "rowNumber": { "type": "number" },
+      "reason": { "type": "string" },
+      "row": { "type": "object", "additionalProperties": { "type": "string" } }
+    },
+    "required": ["id", "rowNumber", "reason", "row"],
+    "additionalProperties": false
+  },
+  "CsvImportDetailResponse": {
+    "$id": "CsvImportDetailResponse",
+    "type": "object",
+    "properties": {
+      "import": { "$ref": "CsvImportSummary#" },
+      "failures": { "type": "array", "items": { "$ref": "CsvImportFailure#" } },
+      "failurePage": { "type": "number" },
+      "failurePageSize": { "type": "number" },
+      "failureTotalPages": { "type": "number" }
+    },
+    "required": ["import", "failures", "failurePage", "failurePageSize", "failureTotalPages"],
+    "additionalProperties": false
+  },
+  "CampaignContactStatus": {
+    "$id": "CampaignContactStatus",
+    "type": "string",
+    "enum": ["ready", "suppressed", "completed"]
+  },
+  "CampaignContactListItem": {
+    "$id": "CampaignContactListItem",
+    "type": "object",
+    "properties": {
+      "id": { "type": "string" },
+      "name": { "type": "string" },
+      "company": { "type": "string" },
+      "phoneNumber": { "type": "string" },
+      "status": { "$ref": "CampaignContactStatus#" },
+      "createdAt": { "type": "string" },
+      "fields": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": { "label": { "type": "string" }, "value": { "type": "string" } },
+          "required": ["label", "value"],
+          "additionalProperties": false
+        }
+      }
+    },
+    "required": ["id", "name", "company", "phoneNumber", "status", "createdAt", "fields"],
+    "additionalProperties": false
+  },
+  "CampaignContactsResponse": {
+    "$id": "CampaignContactsResponse",
+    "type": "object",
+    "properties": {
+      "contacts": { "type": "array", "items": { "$ref": "CampaignContactListItem#" } },
+      "page": { "type": "number" },
+      "pageSize": { "type": "number" },
+      "total": { "type": "number" },
+      "totalPages": { "type": "number" }
+    },
+    "required": ["contacts", "page", "pageSize", "total", "totalPages"],
+    "additionalProperties": false
+  },
+  "SuppressContactRequest": {
+    "$id": "SuppressContactRequest",
+    "type": "object",
+    "properties": { "reason": { "type": "string" } },
+    "additionalProperties": false
+  },
+  "StartManualCallRequest": {
+    "$id": "StartManualCallRequest",
+    "type": "object",
+    "properties": { "phoneNumber": { "type": "string" }, "campaignId": { "type": "string" } },
+    "required": ["phoneNumber"],
+    "additionalProperties": false
+  },
+  "StartNextCallRequest": {
+    "$id": "StartNextCallRequest",
+    "type": "object",
+    "properties": { "campaignId": { "type": "string" } },
+    "additionalProperties": false
+  },
+  "EndCallRequest": {
+    "$id": "EndCallRequest",
+    "type": "object",
+    "properties": { "campaignId": { "type": "string" } },
+    "additionalProperties": false
+  },
+  "DropVoicemailRequest": {
+    "$id": "DropVoicemailRequest",
+    "type": "object",
+    "properties": { "campaignId": { "type": "string" }, "recordingId": { "type": "string" } },
+    "additionalProperties": false
+  },
+  "SendDtmfRequest": {
+    "$id": "SendDtmfRequest",
+    "type": "object",
+    "properties": { "digit": { "type": "string" }, "campaignId": { "type": "string" } },
+    "required": ["digit"],
+    "additionalProperties": false
+  },
+  "DeleteResponse": {
+    "$id": "DeleteResponse",
+    "type": "object",
+    "properties": { "ok": { "type": "boolean", "const": true } },
+    "required": ["ok"],
+    "additionalProperties": false
+  },
+  "ManualDialValidationResponse": {
+    "$id": "ManualDialValidationResponse",
+    "type": "object",
+    "properties": {
+      "normalizedNumber": { "type": "string" },
+      "allowed": { "type": "boolean" },
+      "reason": { "type": "string" },
+      "checks": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "label": { "type": "string" },
+            "status": { "type": "string", "enum": ["pass", "warn", "fail"] },
+            "detail": { "type": "string" }
+          },
+          "required": ["label", "status", "detail"],
+          "additionalProperties": false
+        }
+      }
+    },
+    "required": ["normalizedNumber", "allowed", "reason", "checks"],
+    "additionalProperties": false
+  },
+  "FreeSwitchTrunkStatus": {
+    "$id": "FreeSwitchTrunkStatus",
+    "type": "string",
+    "enum": ["ready", "not_configured", "registration_failed", "dns_error", "error", "unknown"]
+  },
+  "FreeSwitchDiagnosticsResponse": {
+    "$id": "FreeSwitchDiagnosticsResponse",
+    "type": "object",
+    "properties": {
+      "checkedAt": { "type": "string" },
+      "esl": { "$ref": "HealthCheck#" },
+      "trunk": {
+        "type": "object",
+        "properties": {
+          "mode": { "type": "string", "enum": ["registration", "ip_auth"] },
+          "configured": { "type": "boolean" },
+          "status": { "$ref": "FreeSwitchTrunkStatus#" },
+          "summary": { "type": "string" },
+          "gatewayName": { "type": "string" },
+          "proxyConfigured": { "type": "boolean" },
+          "usernameConfigured": { "type": "boolean" },
+          "callerIdConfigured": { "type": "boolean" },
+          "raw": { "type": "string" }
+        },
+        "required": [
+          "mode",
+          "configured",
+          "status",
+          "summary",
+          "proxyConfigured",
+          "usernameConfigured",
+          "callerIdConfigured"
+        ],
+        "additionalProperties": false
+      },
+      "controlPlane": {
+        "type": "object",
+        "properties": {
+          "safeTestAvailable": { "type": "boolean" },
+          "listenerEnabled": { "type": "boolean" },
+          "lastSafeTestAt": { "type": "string" }
+        },
+        "required": ["safeTestAvailable", "listenerEnabled"],
+        "additionalProperties": false
+      }
+    },
+    "required": ["checkedAt", "esl", "trunk", "controlPlane"],
+    "additionalProperties": false
+  },
+  "FreeSwitchSafeTestResponse": {
+    "$id": "FreeSwitchSafeTestResponse",
+    "type": "object",
+    "properties": {
+      "ok": { "type": "boolean" },
+      "checkedAt": { "type": "string" },
+      "uuidCreated": { "type": "boolean" },
+      "apiStatusOk": { "type": "boolean" },
+      "bgapiStatusQueued": { "type": "boolean" },
+      "generatedUuid": { "type": "string" },
+      "jobUuid": { "type": "string" },
+      "message": { "type": "string" }
+    },
+    "required": ["ok", "checkedAt", "uuidCreated", "apiStatusOk", "bgapiStatusQueued", "message"],
+    "additionalProperties": false
+  },
+  "AdminSystemSettings": {
+    "$id": "AdminSystemSettings",
+    "type": "object",
+    "properties": {
+      "defaultPhoneCountryCode": { "type": "string" },
+      "contactMaxAttempts": { "type": "number" },
+      "contactRetryDelaySeconds": { "type": "number" },
+      "callHistoryExportMaxRows": { "type": "number" },
+      "callLogRetentionDays": { "type": "number" },
+      "callRecordingRetentionDays": { "type": "number" },
+      "pcapRetentionDays": { "type": "number" },
+      "retentionEnabled": { "type": "boolean" },
+      "pcapCaptureEnabled": { "type": "boolean" },
+      "sipTrunkCallerId": { "type": ["string", "null"] },
+      "alertmanagerRepeatInterval": { "type": "string" },
+      "alertmanagerWebhookEnabled": { "type": "boolean" },
+      "alertmanagerSlackEnabled": { "type": "boolean" },
+      "alertmanagerTelegramEnabled": { "type": "boolean" },
+      "availableAlertChannels": {
+        "type": "object",
+        "properties": {
+          "webhook": { "type": "boolean" },
+          "slack": { "type": "boolean" },
+          "telegram": { "type": "boolean" }
+        },
+        "required": ["webhook", "slack", "telegram"],
+        "additionalProperties": false
+      },
+      "updatedAt": { "type": ["string", "null"] }
+    },
+    "required": [
+      "defaultPhoneCountryCode",
+      "contactMaxAttempts",
+      "contactRetryDelaySeconds",
+      "callHistoryExportMaxRows",
+      "callLogRetentionDays",
+      "callRecordingRetentionDays",
+      "pcapRetentionDays",
+      "retentionEnabled",
+      "pcapCaptureEnabled",
+      "sipTrunkCallerId",
+      "alertmanagerRepeatInterval",
+      "alertmanagerWebhookEnabled",
+      "alertmanagerSlackEnabled",
+      "alertmanagerTelegramEnabled",
+      "availableAlertChannels",
+      "updatedAt"
+    ],
+    "additionalProperties": false
+  },
+  "UpdateAdminSystemSettingsRequest": {
+    "$id": "UpdateAdminSystemSettingsRequest",
+    "type": "object",
+    "properties": {
+      "defaultPhoneCountryCode": { "type": "string" },
+      "contactMaxAttempts": { "type": "number" },
+      "contactRetryDelaySeconds": { "type": "number" },
+      "callHistoryExportMaxRows": { "type": "number" },
+      "callLogRetentionDays": { "type": "number" },
+      "callRecordingRetentionDays": { "type": "number" },
+      "pcapRetentionDays": { "type": "number" },
+      "retentionEnabled": { "type": "boolean" },
+      "pcapCaptureEnabled": { "type": "boolean" },
+      "sipTrunkCallerId": { "type": ["string", "null"] },
+      "alertmanagerRepeatInterval": { "type": "string" },
+      "alertmanagerWebhookEnabled": { "type": "boolean" },
+      "alertmanagerSlackEnabled": { "type": "boolean" },
+      "alertmanagerTelegramEnabled": { "type": "boolean" }
+    },
+    "required": [
+      "defaultPhoneCountryCode",
+      "contactMaxAttempts",
+      "contactRetryDelaySeconds",
+      "callHistoryExportMaxRows",
+      "callLogRetentionDays",
+      "callRecordingRetentionDays",
+      "pcapRetentionDays",
+      "retentionEnabled",
+      "pcapCaptureEnabled",
+      "sipTrunkCallerId",
+      "alertmanagerRepeatInterval",
+      "alertmanagerWebhookEnabled",
+      "alertmanagerSlackEnabled",
+      "alertmanagerTelegramEnabled"
+    ],
+    "additionalProperties": false
+  }
+}

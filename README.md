@@ -83,6 +83,12 @@ npm run test:freeswitch
 npm run test:load:desk
 ```
 
+Authenticated administrators can open the complete OpenAPI 3.1 documentation at `/api/docs/`; the JSON document is available at `/api/docs/json`. Shared TypeScript response contracts are converted into OpenAPI components and checked for drift by `npm run quality`. After changing an exported contract, regenerate the checked-in components with:
+
+```bash
+npm --workspace @outbound-dialer/api run openapi:generate
+```
+
 Validate the Compose model with example values:
 
 ```bash

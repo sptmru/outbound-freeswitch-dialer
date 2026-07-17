@@ -1,6 +1,8 @@
 import swagger from "@fastify/swagger";
 import swaggerUi from "@fastify/swagger-ui";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import sharedOpenApiSchemas from "./generated/shared-openapi-schemas.json" with { type: "json" };
+import { getDocumentedRouteSchema, manualOpenApiSchemas } from "./openapi-routes.js";
 import { SESSION_COOKIE_NAME } from "./security.js";
 
 export type ApiDocumentationAccess =
@@ -22,13 +24,21 @@ export async function registerApiDocumentation(
   app: FastifyInstance,
   authorize: AuthorizeApiDocumentation
 ): Promise<void> {
+  for (const schema of [...Object.values(sharedOpenApiSchemas), ...manualOpenApiSchemas]) {
+    app.addSchema(schema);
+  }
+
   await app.register(swagger, {
+    refResolver: {
+      buildLocalReference: (schema, _baseUri, _fragment, index) =>
+        typeof schema.$id === "string" ? schema.$id : `schema-${index}`
+    },
     openapi: {
-      openapi: "3.0.3",
+      openapi: "3.1.0",
       info: {
         title: "Outbound Dialer API",
         description:
-          "Interactive route catalog for the Outbound Dialer API. Request and response schemas are documented where Fastify schemas are available; runtime Zod validation remains authoritative for other routes.",
+          "Complete interactive contract for the Outbound Dialer API, including request bodies, path and query parameters, success responses, and error responses for every route.",
         version: "0.1.0"
       },
       servers: [{ url: "/api", description: "Application proxy" }],
@@ -55,15 +65,20 @@ export async function registerApiDocumentation(
         }
       }
     },
-    transform: ({ schema, url }) => ({
-      schema: {
-        ...schema,
-        tags: schema?.tags ?? [tagForUrl(url)],
-        security:
-          schema?.security ?? (publicRoutes.has(url) ? [] : [{ bearerAuth: [] }, { sessionCookie: [] }])
-      },
-      url
-    })
+    transform: ({ schema, url, route }) => {
+      if (schema?.hide || url.startsWith("/docs")) return { schema, url };
+      const documented = getDocumentedRouteSchema(route.method, url);
+      return {
+        schema: {
+          ...documented,
+          ...schema,
+          tags: schema?.tags ?? [tagForUrl(url)],
+          security:
+            schema?.security ?? (publicRoutes.has(url) ? [] : [{ bearerAuth: [] }, { sessionCookie: [] }])
+        },
+        url
+      };
+    }
   });
 
   await app.register(swaggerUi, {
