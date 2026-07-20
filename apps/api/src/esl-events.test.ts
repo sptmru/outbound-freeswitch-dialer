@@ -460,10 +460,7 @@ describe("FreeSWITCH event helpers", () => {
       }
     );
 
-    assert.deepEqual(commands, [
-      "module_exists mod_avmd",
-      "avmd 22222222-2222-4222-8222-222222222222 start"
-    ]);
+    assert.deepEqual(commands, ["module_exists mod_avmd", "avmd 22222222-2222-4222-8222-222222222222 start"]);
   });
 
   it("does not restart early AVMD on answer and still attempts mod_amd", async () => {
