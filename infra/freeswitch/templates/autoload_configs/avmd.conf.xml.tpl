@@ -3,7 +3,7 @@
     <!-- Outbound dialer tuning surface for FreeSWITCH mod_avmd voicemail beep detection. -->
 
     <!-- Global settings -->
-    <param name="debug" value="1"/>
+    <param name="debug" value="0"/>
     <param name="report_status" value="1"/>
     <param name="fast_math" value="0"/>
 

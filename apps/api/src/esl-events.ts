@@ -47,8 +47,17 @@ const EVENT_NAMES = [
   "CHANNEL_HANGUP_COMPLETE",
   "CHANNEL_DESTROY",
   // FreeSWITCH treats every token after CUSTOM as a custom event subclass.
-  // Keep it last so CHANNEL_* names remain regular event subscriptions.
-  "CUSTOM"
+  // Keep CUSTOM and its explicit subclasses last so CHANNEL_* names remain
+  // regular event subscriptions.
+  "CUSTOM",
+  "avmd::beep",
+  "amd::result",
+  "sofia::register",
+  "sofia::unregister",
+  "sofia::expire",
+  "outbound_dialer::voicemail_playback_started",
+  "outbound_dialer::voicemail_playback_completed",
+  "outbound_dialer::voicemail_playback_failed"
 ].join(" ");
 
 const AGENT_SIP_PROFILE = "internal-webrtc";
@@ -889,7 +898,7 @@ function isVoicemailPlaybackEvent(frame: EslFrame): boolean {
 }
 
 function mapVoicemailPlaybackEventKind(frame: EslFrame): VoicemailPlaybackEventKind | null {
-  const eventSubclass = frame.headers["event-subclass"]?.toLowerCase() ?? "";
+  const eventSubclass = normalizedEventSubclass(frame);
   if (!eventSubclass.startsWith(VOICEMAIL_PLAYBACK_EVENT_PREFIX)) {
     return null;
   }
@@ -1405,13 +1414,24 @@ async function persistVoicemailDetectionEvent(pool: pg.Pool, frame: EslFrame): P
   const client = await pool.connect();
   try {
     await client.query("begin");
-    const call = await client.query<{ call_id: string; agent_id: string | null; call_state: string }>(
+    const call = await client.query<{
+      agent_id: string | null;
+      call_id: string;
+      call_state: string;
+      customer_leg_uuid: string | null;
+    }>(
       `
-        select calls.id as call_id, calls.agent_id, calls.state as call_state
-        from call_legs
-        join calls on calls.id = call_legs.call_id
-        where call_legs.freeswitch_uuid = $1
-          and call_legs.type = 'customer'
+        select
+          calls.id as call_id,
+          calls.agent_id,
+          calls.state as call_state,
+          customer_leg.freeswitch_uuid as customer_leg_uuid
+        from call_legs event_leg
+        join calls on calls.id = event_leg.call_id
+        left join call_legs customer_leg
+          on customer_leg.call_id = calls.id
+         and customer_leg.type = 'customer'
+        where event_leg.freeswitch_uuid = $1
           and calls.ended_at is null
           and calls.state not in ('completed', 'failed', 'canceled')
         order by calls.created_at desc
@@ -1444,7 +1464,15 @@ async function persistVoicemailDetectionEvent(pool: pg.Pool, frame: EslFrame): P
           do nothing
         returning id
       `,
-      [row.call_id, row.agent_id, signal.eventType, row.call_state, eventUuid, legUuid, raw]
+      [
+        row.call_id,
+        row.agent_id,
+        signal.eventType,
+        row.call_state,
+        eventUuid,
+        row.customer_leg_uuid ?? legUuid,
+        raw
+      ]
     );
     if (eventUuid && !claimed.rowCount) {
       await client.query("rollback");
@@ -1915,7 +1943,7 @@ function parseHeaders(value: string): Record<string, string> {
 }
 
 function isVoicemailDetectionEvent(frame: EslFrame): boolean {
-  const eventSubclass = frame.headers["event-subclass"]?.toLowerCase() ?? "";
+  const eventSubclass = normalizedEventSubclass(frame);
   if (eventSubclass === "avmd::beep") {
     return true;
   }
@@ -1933,7 +1961,7 @@ function isVoicemailDetectionEvent(frame: EslFrame): boolean {
 }
 
 function isAgentRegistrationEvent(frame: EslFrame): boolean {
-  const eventSubclass = frame.headers["event-subclass"]?.toLowerCase();
+  const eventSubclass = normalizedEventSubclass(frame);
   return (
     eventSubclass === "sofia::register" ||
     eventSubclass === "sofia::unregister" ||
@@ -1942,7 +1970,7 @@ function isAgentRegistrationEvent(frame: EslFrame): boolean {
 }
 
 function mapAgentRegistrationEvent(config: AppConfig, frame: EslFrame): AgentRegistrationEvent | null {
-  const eventSubclass = frame.headers["event-subclass"]?.toLowerCase();
+  const eventSubclass = normalizedEventSubclass(frame);
   if (
     eventSubclass !== "sofia::register" &&
     eventSubclass !== "sofia::unregister" &&
@@ -1985,7 +2013,7 @@ function mapVoicemailDetectionSignal(frame: EslFrame): {
   signalType: string;
   status: "possible" | "detected";
 } | null {
-  const eventSubclass = frame.headers["event-subclass"]?.toLowerCase() ?? "";
+  const eventSubclass = normalizedEventSubclass(frame);
   if (eventSubclass === "avmd::beep") {
     return {
       confidence: null,
@@ -2042,6 +2070,15 @@ function parseConfidence(value: string | undefined): number | null {
   }
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function normalizedEventSubclass(frame: EslFrame): string {
+  const value = frame.headers["event-subclass"] ?? "";
+  try {
+    return decodeURIComponent(value).toLowerCase();
+  } catch {
+    return value.toLowerCase();
+  }
 }
 
 function firstHeader(headers: Record<string, string>, keys: string[]): string | null {

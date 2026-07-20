@@ -437,6 +437,35 @@ describe("FreeSWITCH event helpers", () => {
     assert.match(String(started?.params[3]), /"phase":"early_media"/);
   });
 
+  it("keeps AVMD on the customer leg when an agent leg is available", async () => {
+    const commands: string[] = [];
+    const pool = createQueryPool((sql) => {
+      if (sql.includes("select early_media_avmd_enabled")) {
+        return rows([{ early_media_avmd_enabled: true }]);
+      }
+      return rows([]);
+    });
+
+    await __testing.startVoicemailDetection(
+      config,
+      pool,
+      {
+        callId: "11111111-1111-4111-8111-111111111111",
+        customerLegUuid: "22222222-2222-4222-8222-222222222222",
+        phase: "early_media"
+      },
+      async (_config, command) => {
+        commands.push(command);
+        return { body: command.startsWith("module_exists") ? "true" : "+OK Success", headers: {}, raw: "" };
+      }
+    );
+
+    assert.deepEqual(commands, [
+      "module_exists mod_avmd",
+      "avmd 22222222-2222-4222-8222-222222222222 start"
+    ]);
+  });
+
   it("does not restart early AVMD on answer and still attempts mod_amd", async () => {
     const commands: string[] = [];
     const pool = createQueryPool((sql) => {
@@ -553,6 +582,8 @@ describe("FreeSWITCH event helpers", () => {
 
   it("subscribes to customer early-media events", () => {
     assert.match(__testing.eventNames, /CHANNEL_PROGRESS_MEDIA/);
+    assert.match(__testing.eventNames, /CUSTOM avmd::beep amd::result/);
+    assert.match(__testing.eventNames, /outbound_dialer::voicemail_playback_completed/);
     assert.equal(__testing.mapEventToCallState("CHANNEL_PROGRESS_MEDIA"), "customer_dialing");
   });
 
@@ -763,6 +794,32 @@ describe("FreeSWITCH event helpers", () => {
         signalType: "machine",
         status: "detected"
       }
+    );
+  });
+
+  it("decodes URL-encoded FreeSWITCH custom event subclasses", () => {
+    assert.deepEqual(
+      __testing.mapVoicemailDetectionSignal({
+        body: "",
+        headers: {
+          "event-subclass": "avmd%3A%3Abeep"
+        }
+      }),
+      {
+        confidence: null,
+        eventType: "voicemail_beep_detected",
+        signalType: "beep",
+        status: "detected"
+      }
+    );
+    assert.equal(
+      __testing.mapVoicemailPlaybackEventKind({
+        body: "",
+        headers: {
+          "event-subclass": "outbound_dialer%3A%3Avoicemail_playback_completed"
+        }
+      }),
+      "completed"
     );
   });
 

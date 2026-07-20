@@ -1,0 +1,74 @@
+--- a/src/mod/applications/mod_avmd/mod_avmd.c
++++ b/src/mod/applications/mod_avmd/mod_avmd.c
+@@ -609,7 +609,7 @@
+ 						switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(fs_session), SWITCH_LOG_WARNING, "No read codec implementation assigned, default session rate to 8000 samples/s\n");
+ 						avmd_session->rate = 8000;
+ 					} else {
+-						avmd_session->rate = read_codec->implementation->samples_per_second;
++						avmd_session->rate = read_codec->implementation->actual_samples_per_second;
+ 					}
+ 				}
+ 			}
+@@ -623,7 +623,7 @@
+ 						switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(fs_session), SWITCH_LOG_WARNING, "No write codec implementation assigned, default session rate to 8000 samples/s\n");
+ 						avmd_session->rate = 8000;
+ 					} else {
+-						avmd_session->rate = write_codec->implementation->samples_per_second;
++						avmd_session->rate = write_codec->implementation->actual_samples_per_second;
+ 					}
+ 				}
+ 			}
+@@ -634,11 +634,23 @@
+ 
+ 		case SWITCH_ABC_TYPE_READ_REPLACE:
+ 			frame = switch_core_media_bug_get_read_replace_frame(bug);
++			if (frame != NULL && frame->rate > 0 && frame->rate != avmd_session->rate) {
++				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(fs_session), SWITCH_LOG_INFO,
++					"Avmd session sample rate updated from media frame, [%u] -> [%u] samples/s\n",
++					avmd_session->rate, frame->rate);
++				avmd_session->rate = frame->rate;
++			}
+ 			avmd_process(avmd_session, frame, AVMD_READ_REPLACE);
+ 			break;
+ 
+ 		case SWITCH_ABC_TYPE_WRITE_REPLACE:
+ 			frame = switch_core_media_bug_get_write_replace_frame(bug);
++			if (frame != NULL && frame->rate > 0 && frame->rate != avmd_session->rate) {
++				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(fs_session), SWITCH_LOG_INFO,
++					"Avmd session sample rate updated from media frame, [%u] -> [%u] samples/s\n",
++					avmd_session->rate, frame->rate);
++				avmd_session->rate = frame->rate;
++			}
+ 			avmd_process(avmd_session, frame, AVMD_WRITE_REPLACE);
+ 			break;
+ 
+@@ -1841,6 +1853,7 @@
+ 	}
+ 
+ 	avmd_session = (avmd_session_t *) switch_core_session_alloc(fs_session, sizeof(avmd_session_t)); /* Allocate memory attached to this FreeSWITCH session for use in the callback routine and to store state information */
++	memcpy(&avmd_session->settings, &avmd_globals.settings, sizeof(struct avmd_settings));
+ 	status = init_avmd_session_data(avmd_session, fs_session, NULL);
+ 	if (status != SWITCH_STATUS_SUCCESS) {
+ 		stream->write_function(stream, "-ERR, failed to initialize avmd session\n for FreeSWITCH session [%s]\n", uuid);
+@@ -1865,6 +1878,13 @@
+ 		goto end;
+ 	}
+ 
++	status = avmd_launch_threads(avmd_session);
++	if (status != SWITCH_STATUS_SUCCESS) {
++		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(fs_session), SWITCH_LOG_ERROR, "Failed to start detection threads\n");
++		avmd_join_threads(avmd_session);
++		goto end;
++	}
++
+ 	status = switch_core_media_bug_add(fs_session, "avmd", NULL, avmd_callback, avmd_session, 0, flags, &bug); /* Add a media bug that allows me to intercept the reading leg of the audio stream */
+ 
+ 	if (status != SWITCH_STATUS_SUCCESS) { /* If adding a media bug fails exit */
+@@ -2261,6 +2281,7 @@
+ 		resolution = d->buffer.resolution;
+ 		offset = d->buffer.offset;
+ 		samples = d->samples;
++		pos = s->pos;
+ 
+ 		if (d->lagged == 1) {
+ 			if (d->lag > 0) {
