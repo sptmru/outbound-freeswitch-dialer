@@ -2,6 +2,8 @@ import "dotenv/config";
 import { isSupportedCountry } from "libphonenumber-js";
 import { z } from "zod";
 
+const freeswitchToneSegment = String.raw`%\(\d{1,5},\d{1,5},\d{1,5}(?:\.\d+)?,\d{1,5}(?:\.\d+)?\)`;
+
 const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   API_HOST: z.string().default("0.0.0.0"),
@@ -73,6 +75,14 @@ const envSchema = z.object({
   FFMPEG_PATH: z.string().default("ffmpeg"),
   FFPROBE_PATH: z.string().default("ffprobe"),
   FREESWITCH_DOMAIN: z.string().default("localhost"),
+  FREESWITCH_RINGBACK_TONE: z
+    .string()
+    .max(256)
+    .regex(
+      new RegExp(`^${freeswitchToneSegment}(?:;${freeswitchToneSegment})*$`),
+      "FREESWITCH_RINGBACK_TONE must be a TGML tone cadence"
+    )
+    .default("%(400,200,400,450);%(400,2000,400,450)"),
   FREESWITCH_WEBRTC_WSS_PORT: z.coerce.number().int().positive().default(7443),
   FREESWITCH_WEBRTC_PUBLIC_WS_URL: z.string().url().optional(),
   ICE_STUN_URLS: z.string().default("stun:stun.l.google.com:19302,stun:stun1.l.google.com:19302"),

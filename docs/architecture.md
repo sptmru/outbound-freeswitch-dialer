@@ -127,7 +127,7 @@ This design avoids maintaining per-user product snapshots in the SSE layer. Auth
 2. The API verifies the authenticated agent, campaign flags, SIP registration/readiness, normalized destination, and suppression status.
 3. Inside a transaction, the API locks the agent and contact, rejects another interactive call, enforces retry age/attempts, creates call/leg/event rows, increments the contact attempt, and marks the agent in call.
 4. The API reserves FreeSWITCH UUIDs and sends an agent-first background originate.
-5. The browser answers its internal SIP leg. FreeSWITCH originates the customer leg through the configured trunk and bridges both legs.
+5. The browser answers its internal SIP leg. FreeSWITCH originates the customer leg through the configured trunk, plays the configured local ringback to the agent while ignoring provider early media, and bridges customer audio after the customer answers.
 6. ESL events update leg state, call state, answer timestamps, recording/AVMD status, hangup cause, automatic outcome, contact status, and agent availability.
 7. The originate watchdog and reconnect reconciliation close missing calls rather than leaving durable state stuck.
 

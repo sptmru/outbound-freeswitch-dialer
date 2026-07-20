@@ -62,20 +62,23 @@ Do not reuse these values. `DATABASE_URL` must contain the same application data
 
 ### FreeSWITCH, SIP trunk, and browser WSS
 
-| Variable group                                                                 | Configuration rule                                                                                 |
-| ------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------- |
-| `FREESWITCH_BASE_IMAGE`                                                        | Pin an immutable `@sha256` digest.                                                                 |
-| `FREESWITCH_EXTERNAL_SIP_IP`, `FREESWITCH_EXTERNAL_RTP_IP`                     | Literal, matching public/Elastic IPv4 addresses for the current single-host topology.              |
-| `FREESWITCH_RTP_START_PORT`, `FREESWITCH_RTP_END_PORT`                         | Dedicated UDP media range; it must not overlap the TURN relay range.                               |
-| `FREESWITCH_INTERNAL_SIP_PORT`                                                 | Browser/internal SIP profile, default `5060`.                                                      |
-| `FREESWITCH_EXTERNAL_PROFILE_SIP_PORT`, `FREESWITCH_EXTERNAL_PROFILE_TLS_PORT` | Provider-facing external profile, defaults `5080`/`5081`.                                          |
-| `FREESWITCH_WEBRTC_WSS_PORT`                                                   | Host WSS listener, default `7443`; public browsers reach it through nginx.                         |
-| `FREESWITCH_ESL_*`                                                             | API-to-FreeSWITCH control channel plus queue/retry/reconciliation bounds. ESL is not a public API. |
-| `SIP_TRUNK_MODE`                                                               | `registration` requires proxy, username, and password; `ip_auth` requires the proxy.               |
+| Variable group                                                                 | Configuration rule                                                                                      |
+| ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------- |
+| `FREESWITCH_BASE_IMAGE`                                                        | Pin an immutable `@sha256` digest.                                                                      |
+| `FREESWITCH_EXTERNAL_SIP_IP`, `FREESWITCH_EXTERNAL_RTP_IP`                     | Literal, matching public/Elastic IPv4 addresses for the current single-host topology.                   |
+| `FREESWITCH_RTP_START_PORT`, `FREESWITCH_RTP_END_PORT`                         | Dedicated UDP media range; it must not overlap the TURN relay range.                                    |
+| `FREESWITCH_INTERNAL_SIP_PORT`                                                 | Browser/internal SIP profile, default `5060`.                                                           |
+| `FREESWITCH_EXTERNAL_PROFILE_SIP_PORT`, `FREESWITCH_EXTERNAL_PROFILE_TLS_PORT` | Provider-facing external profile, defaults `5080`/`5081`.                                               |
+| `FREESWITCH_WEBRTC_WSS_PORT`                                                   | Host WSS listener, default `7443`; public browsers reach it through nginx.                              |
+| `FREESWITCH_RINGBACK_TONE`                                                     | Valid TGML cadence generated locally for agents until customer answer; defaults to Australian ringback. |
+| `FREESWITCH_ESL_*`                                                             | API-to-FreeSWITCH control channel plus queue/retry/reconciliation bounds. ESL is not a public API.      |
+| `SIP_TRUNK_MODE`                                                               | `registration` requires proxy, username, and password; `ip_auth` requires the proxy.                    |
 
 nginx connects to the host-network FreeSWITCH listener using `FREESWITCH_WS_UPSTREAM_SCHEME` and `FREESWITCH_WS_UPSTREAM`. Prefer certificate verification with `FREESWITCH_WS_UPSTREAM_TLS_VERIFY=on` and the matching `FREESWITCH_WS_UPSTREAM_TLS_SERVER_NAME`. `ALLOW_UNVERIFIED_FREESWITCH_WS_UPSTREAM=true` is a recorded break-glass exception for an approved same-host/self-signed endpoint, not a general production default.
 
 Keep `ALLOW_UNCONFIGURED_SIP_TRUNK=false` for a production dialer. Setting it to `true` acknowledges that customer calls cannot be accepted as working.
+
+The outbound bridge uses `FREESWITCH_RINGBACK_TONE` with `instant_ringback=true` and `ignore_early_media=true`. This guarantees an audible local tone even when a trunk sends `183 Session Progress` with SDP but no RTP. The tradeoff is intentional: provider-generated pre-answer announcements and tones are not relayed to the agent; customer audio replaces the local tone only after `200 OK`.
 
 ### STUN and TURN
 
