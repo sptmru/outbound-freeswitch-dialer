@@ -24,6 +24,7 @@ import {
   setFreeSwitchEventListenerConnected
 } from "./metrics.js";
 import { OrderedRetryQueue } from "./ordered-retry-queue.js";
+import { createEarlyMediaFallbackController } from "./early-media-fallback.js";
 
 interface Logger {
   error: (value: unknown, message?: string) => void;
@@ -75,6 +76,7 @@ export function startFreeSwitchEventListener(config: AppConfig, pool: pg.Pool, l
   let stopped = false;
   let socket: net.Socket | null = null;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  const earlyMediaFallback = createEarlyMediaFallbackController(config, logger);
 
   const persistenceQueue = new OrderedRetryQueue<EslFrame>({
     initialRetryMilliseconds: config.FREESWITCH_ESL_EVENT_RETRY_INITIAL_MS,
@@ -206,6 +208,7 @@ export function startFreeSwitchEventListener(config: AppConfig, pool: pg.Pool, l
         }
 
         if (stage === "events") {
+          earlyMediaFallback.handle(frame);
           const callId = frame.headers["variable_outbound_dialer_call_id"];
           if (callId) {
             logger.info(
@@ -282,6 +285,7 @@ export function startFreeSwitchEventListener(config: AppConfig, pool: pg.Pool, l
     }
     socket?.destroy();
     socket = null;
+    void earlyMediaFallback.stop();
     const discardedEvents = persistenceQueue.stop();
     if (discardedEvents) {
       logger.warn(

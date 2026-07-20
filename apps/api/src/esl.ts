@@ -83,8 +83,7 @@ function buildAgentBridgeOriginateCommand(config: AppConfig, input: OriginateAge
     "outbound_dialer_leg_type=agent",
     `sip_h_X-Outbound-Dialer-Call-ID=${input.callId}`,
     "originate_timeout=30",
-    `ringback=${encodeOriginateListValue(config.FREESWITCH_RINGBACK_TONE)}`,
-    "instant_ringback=true",
+    "bridge_early_media=true",
     "hangup_after_bridge=true",
     "continue_on_fail=false"
   ]);
@@ -92,7 +91,7 @@ function buildAgentBridgeOriginateCommand(config: AppConfig, input: OriginateAge
     `origination_uuid=${input.customerLegUuid}`,
     `outbound_dialer_call_id=${input.callId}`,
     "outbound_dialer_leg_type=customer",
-    "ignore_early_media=true",
+    "ignore_early_media=false",
     "media_bug_answer_req=false",
     "originate_timeout=45",
     config.SIP_TRUNK_CALLER_ID
@@ -212,10 +211,6 @@ function normalizeDestinationForDialString(value: string): string {
 
 function buildOriginateVariables(values: Array<string | null>): string {
   return values.filter(Boolean).join(",");
-}
-
-function encodeOriginateListValue(value: string): string {
-  return value.includes(",") ? `^^:${value.replaceAll(",", ":")}` : value;
 }
 
 function escapeOriginateVariable(value: string): string {

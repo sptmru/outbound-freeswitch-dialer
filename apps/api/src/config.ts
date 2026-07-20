@@ -83,6 +83,7 @@ const envSchema = z.object({
       "FREESWITCH_RINGBACK_TONE must be a TGML tone cadence"
     )
     .default("%(400,200,400,450);%(400,2000,400,450)"),
+  FREESWITCH_EARLY_MEDIA_FALLBACK_DELAY_MS: z.coerce.number().int().min(100).max(5_000).default(700),
   FREESWITCH_WEBRTC_WSS_PORT: z.coerce.number().int().positive().default(7443),
   FREESWITCH_WEBRTC_PUBLIC_WS_URL: z.string().url().optional(),
   ICE_STUN_URLS: z.string().default("stun:stun.l.google.com:19302,stun:stun1.l.google.com:19302"),

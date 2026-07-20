@@ -14,7 +14,7 @@ The page refreshes state from the server through live update signals and periodi
 ## Call Workflow
 
 - Use **Call** for the offered lead, or **Manual dial** only when the campaign permits it. Every destination is normalized and checked against suppression by the backend.
-- Listen for the locally generated ringback until the customer answers. The operator remains responsible for deciding whether a human or mailbox answered after answer audio begins.
+- Listen for carrier-provided ringback or announcements before answer. When the carrier supplies no audible early media, the dialer adds local ringback after a short delay. The operator remains responsible for deciding whether a human or mailbox answered after answer audio begins.
 - Use the keypad for DTMF only when it is enabled.
 - Use **Hang up** for the active interactive call. Outcomes are determined by backend lifecycle events; do not infer success from the timer or audio alone.
 - A failed/retryable contact is not immediately callable again. The server enforces the configured attempt limit and delay.

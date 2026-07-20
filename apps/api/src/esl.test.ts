@@ -38,7 +38,7 @@ describe("ESL helpers", () => {
     assert.equal(__testing.escapeOriginateVariable("a,b{c}"), "abc");
   });
 
-  it("generates local ringback while allowing media bugs to process customer early media", () => {
+  it("passes customer early media through for the fallback controller", () => {
     const command = __testing.buildAgentBridgeOriginateCommand(config, {
       agentLegUuid: "11111111-1111-4111-8111-111111111111",
       callId: "22222222-2222-4222-8222-222222222222",
@@ -47,11 +47,11 @@ describe("ESL helpers", () => {
       sipUsername: "agent1000"
     });
 
-    assert.match(command, /ringback=\^\^:%\(400:200:400:450\);%\(400:2000:400:450\)/);
-    assert.match(command, /instant_ringback=true/);
-    assert.doesNotMatch(command, /bridge_early_media=true/);
+    assert.match(command, /bridge_early_media=true/);
+    assert.doesNotMatch(command, /ringback=/);
+    assert.doesNotMatch(command, /instant_ringback=true/);
     assert.match(command, /sip_h_X-Outbound-Dialer-Call-ID=22222222-2222-4222-8222-222222222222/);
-    assert.match(command, /ignore_early_media=true,media_bug_answer_req=false/);
+    assert.match(command, /ignore_early_media=false,media_bug_answer_req=false/);
   });
 
   it("parses bgapi job UUIDs from command response body", () => {
