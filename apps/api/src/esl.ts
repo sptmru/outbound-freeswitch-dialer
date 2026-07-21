@@ -2,6 +2,8 @@ import net from "node:net";
 import { randomUUID } from "node:crypto";
 import type { AppConfig } from "./config.js";
 
+const TRUNK_ABSOLUTE_CODEC_STRING = "^^:PCMU:PCMA:G729";
+
 export interface EslCommandResponse {
   body: string;
   headers: Record<string, string>;
@@ -91,6 +93,7 @@ function buildAgentBridgeOriginateCommand(config: AppConfig, input: OriginateAge
     `origination_uuid=${input.customerLegUuid}`,
     `outbound_dialer_call_id=${input.callId}`,
     "outbound_dialer_leg_type=customer",
+    `absolute_codec_string=${TRUNK_ABSOLUTE_CODEC_STRING}`,
     "ignore_early_media=false",
     "media_bug_answer_req=false",
     "originate_timeout=45",

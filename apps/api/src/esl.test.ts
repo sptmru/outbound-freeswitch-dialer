@@ -51,6 +51,10 @@ describe("ESL helpers", () => {
     assert.doesNotMatch(command, /ringback=/);
     assert.doesNotMatch(command, /instant_ringback=true/);
     assert.match(command, /sip_h_X-Outbound-Dialer-Call-ID=22222222-2222-4222-8222-222222222222/);
+    assert.match(
+      command,
+      /bridge\(\{[^}]*absolute_codec_string=\^\^:PCMU:PCMA:G729[^}]*\}sofia\/gateway\/sip-trunk\//
+    );
     assert.match(command, /ignore_early_media=false,media_bug_answer_req=false/);
   });
 
