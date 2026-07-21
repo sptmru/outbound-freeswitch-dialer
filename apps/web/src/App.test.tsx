@@ -961,7 +961,8 @@ describe("App Agent Desk empty states", () => {
     );
     await waitFor(() => {
       expect(apiMocks.startLeadCall).toHaveBeenCalledWith("22222222-2222-4222-8222-222222222222", {
-        confirmCompletedLead: true
+        confirmCompletedLead: true,
+        confirmRetryWait: false
       });
     });
   });
@@ -987,6 +988,72 @@ describe("App Agent Desk empty states", () => {
     render(<App />);
     fireEvent.click(
       within(await screen.findByRole("table", { name: "Next leads" })).getByRole("button", { name: "Call" })
+    );
+
+    expect(apiMocks.startLeadCall).not.toHaveBeenCalled();
+  });
+
+  it("shows the last call result and confirms before calling a lead during retry timeout", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    apiMocks.useSoftphoneRegistration.mockReturnValue({ ...softphoneRuntime, registered: true });
+    apiMocks.fetchAgentDesk.mockResolvedValue(
+      deskResponse({
+        leads: [
+          {
+            id: "22222222-2222-4222-8222-222222222222",
+            name: "Avery Johnson",
+            company: "",
+            phoneNumber: "+15551234567",
+            status: "retry_wait",
+            lastCallState: "completed",
+            lastCallOutcome: "busy",
+            fields: []
+          }
+        ]
+      })
+    );
+
+    render(<App />);
+    const leadTable = within(await screen.findByRole("table", { name: "Next leads" }));
+    expect(leadTable.getByText("No answer")).toBeInTheDocument();
+    fireEvent.click(leadTable.getByRole("button", { name: "Call" }));
+
+    expect(confirm).toHaveBeenCalledWith(
+      "This lead is still in the retry timeout. Are you sure you want to call them now?"
+    );
+    await waitFor(() => {
+      expect(apiMocks.startLeadCall).toHaveBeenCalledWith("22222222-2222-4222-8222-222222222222", {
+        confirmCompletedLead: false,
+        confirmRetryWait: true
+      });
+    });
+  });
+
+  it("does not call a lead during retry timeout when confirmation is declined", async () => {
+    vi.spyOn(window, "confirm").mockReturnValue(false);
+    apiMocks.useSoftphoneRegistration.mockReturnValue({ ...softphoneRuntime, registered: true });
+    apiMocks.fetchAgentDesk.mockResolvedValue(
+      deskResponse({
+        leads: [
+          {
+            id: "22222222-2222-4222-8222-222222222222",
+            name: "Avery Johnson",
+            company: "",
+            phoneNumber: "+15551234567",
+            status: "retry_wait",
+            lastCallState: "failed",
+            lastCallOutcome: "failed",
+            fields: []
+          }
+        ]
+      })
+    );
+
+    render(<App />);
+    fireEvent.click(
+      within(await screen.findByRole("table", { name: "Next leads" })).getByRole("button", {
+        name: "Call"
+      })
     );
 
     expect(apiMocks.startLeadCall).not.toHaveBeenCalled();

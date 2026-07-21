@@ -142,7 +142,8 @@ const startNextCallSchema = z.object({
 }) satisfies z.ZodType<StartNextCallRequest>;
 
 const startLeadCallSchema = z.object({
-  confirmCompletedLead: z.boolean().optional()
+  confirmCompletedLead: z.boolean().optional(),
+  confirmRetryWait: z.boolean().optional()
 }) satisfies z.ZodType<StartLeadCallRequest>;
 
 const endCallSchema = z.object({
@@ -870,6 +871,7 @@ export function registerDashboardRoutes(
       callRecordingEnabled: false,
       earlyMediaAvmdEnabled: false,
       confirmCompletedLead: input.confirmCompletedLead === true,
+      confirmRetryWait: input.confirmRetryWait === true,
       eventType: "lead_call_started"
     });
     if (!created.ok) {

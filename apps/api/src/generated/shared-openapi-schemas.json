@@ -151,6 +151,8 @@
         "type": "string",
         "enum": ["ready", "calling", "retry_wait", "exhausted", "suppressed", "completed"]
       },
+      "lastCallState": { "anyOf": [{ "$ref": "CallState#" }, { "type": "null" }] },
+      "lastCallOutcome": { "anyOf": [{ "$ref": "CallOutcome#" }, { "type": "null" }] },
       "fields": {
         "type": "array",
         "items": {
@@ -1907,7 +1909,10 @@
   "StartLeadCallRequest": {
     "$id": "StartLeadCallRequest",
     "type": "object",
-    "properties": { "confirmCompletedLead": { "type": "boolean" } },
+    "properties": {
+      "confirmCompletedLead": { "type": "boolean" },
+      "confirmRetryWait": { "type": "boolean" }
+    },
     "additionalProperties": false
   },
   "EndCallRequest": {

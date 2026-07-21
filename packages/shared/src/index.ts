@@ -104,6 +104,8 @@ export interface LeadSummary {
   company: string;
   phoneNumber: string;
   status: "ready" | "calling" | "retry_wait" | "exhausted" | "suppressed" | "completed";
+  lastCallState?: CallState | null;
+  lastCallOutcome?: CallOutcome | null;
   fields: Array<{ label: string; value: string }>;
 }
 
@@ -753,6 +755,7 @@ export interface StartNextCallRequest {
 
 export interface StartLeadCallRequest {
   confirmCompletedLead?: boolean;
+  confirmRetryWait?: boolean;
 }
 
 export interface EndCallRequest {

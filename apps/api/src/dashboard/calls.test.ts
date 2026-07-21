@@ -98,13 +98,39 @@ describe("call lifecycle", () => {
         maxAttempts: 5,
         retryDelaySeconds: 60
       },
+      false,
       false
     );
 
-    assert.deepEqual(queries[0]?.params, ["contact-1", false, 5, 60]);
+    assert.deepEqual(queries[0]?.params, ["contact-1", false, 5, 60, false]);
     assert.match(queries[0]?.sql ?? "", /contacts\.status = 'completed' and \$2 = true/);
     assert.match(queries[0]?.sql ?? "", /attempt_count < \$3/);
     assert.match(queries[0]?.sql ?? "", /last_attempted_at <=/);
+  });
+
+  it("allows an explicitly confirmed contact during the retry cooldown", async () => {
+    const queries: Query[] = [];
+    const client = {
+      query: (sql: string, params: readonly unknown[] = []) => {
+        queries.push({ sql, params });
+        return Promise.resolve(rows([]));
+      }
+    } as unknown as pg.PoolClient;
+
+    await __testing.getCallableContactForUpdate(
+      client,
+      "contact-1",
+      {
+        maxAttempts: 5,
+        retryDelaySeconds: 60
+      },
+      false,
+      true
+    );
+
+    assert.deepEqual(queries[0]?.params, ["contact-1", false, 5, 60, true]);
+    assert.match(queries[0]?.sql ?? "", /\$5 = true/);
+    assert.match(queries[0]?.sql ?? "", /contacts\.attempt_count < \$3/);
   });
 
   it("claims a voicemail drop without ending the customer call before playback completes", async () => {

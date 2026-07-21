@@ -90,6 +90,7 @@ This document is the current product and operational contract. Items described a
 - Contact import requires mapped `name` and `phone` values, preserves additional CSV columns in the contact/import JSON fields, normalizes numbers, reports row errors, and avoids duplicates. Upload byte and row ceilings reject oversized work before database writes without imposing a column whitelist.
 - Campaign contacts and CSV row failures are paginated. Opening Contacts follows the campaign selected on Agent Desk, and every rejected CSV row remains reviewable instead of being silently limited to the first page.
 - Manual numbers and campaign contacts both pass backend authorization and normalized suppression checks before originate.
+- Agent Desk permits an explicit per-lead call during the retry cooldown only after confirmation. Automatic next-lead selection still observes the configured retry delay and attempt limit. Leads in cooldown show the latest call lifecycle result instead of a generic retry status.
 - Suppression supports add/update, search, pagination, CSV import, and removal.
 - Suppression changes and blocked manual-dial attempts create durable `suppression_events`.
 

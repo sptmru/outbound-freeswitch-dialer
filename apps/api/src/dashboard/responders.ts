@@ -130,6 +130,8 @@ async function getLeadQueue(
     phone_number: string;
     company: string | null;
     status: LeadSummary["status"];
+    last_call_state: CallState | null;
+    last_call_outcome: CallOutcome | null;
     mapped_fields_json: Record<string, unknown>;
   }>(
     `
@@ -138,6 +140,8 @@ async function getLeadQueue(
         contacts.display_name,
         contacts.phone_number,
         contacts.mapped_fields_json,
+        last_call.state as last_call_state,
+        last_call.outcome as last_call_outcome,
         coalesce(contacts.mapped_fields_json ->> 'Company', contacts.mapped_fields_json ->> 'company') as company,
         case
           when suppression_entries.id is not null then 'suppressed'
@@ -150,6 +154,13 @@ async function getLeadQueue(
       from contacts
       left join suppression_entries
         on suppression_entries.normalized_phone_number = contacts.normalized_phone_number
+      left join lateral (
+        select calls.state, calls.outcome
+        from calls
+        where calls.contact_id = contacts.id
+        order by calls.created_at desc, calls.id desc
+        limit 1
+      ) last_call on true
       where contacts.campaign_id = $1
       order by
         case
@@ -175,6 +186,8 @@ async function getLeadQueue(
     company: row.company ?? "",
     phoneNumber: row.phone_number,
     status: row.status,
+    lastCallState: row.last_call_state ?? null,
+    lastCallOutcome: row.last_call_outcome ?? null,
     fields: Object.entries(row.mapped_fields_json ?? {})
       .slice(0, 8)
       .map(([label, value]) => ({ label, value: String(value) }))

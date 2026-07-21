@@ -89,7 +89,8 @@ async function getCallableContactForUpdate(
   client: pg.PoolClient,
   contactId: string,
   retryPolicy: { maxAttempts: number; retryDelaySeconds: number },
-  confirmCompletedLead: boolean
+  confirmCompletedLead: boolean,
+  confirmRetryWait: boolean
 ): Promise<LockedCallableContact | null> {
   const result = await client.query<{
     id: string;
@@ -120,6 +121,8 @@ async function getCallableContactForUpdate(
             contacts.status <> 'completed'
             and contacts.attempt_count < $3
             and (
+              $5 = true
+              or
               contacts.last_attempted_at is null
               or contacts.last_attempted_at <= now() - make_interval(secs => $4)
             )
@@ -129,7 +132,13 @@ async function getCallableContactForUpdate(
       limit 1
       for update of contacts
     `,
-    [contactId, confirmCompletedLead, retryPolicy.maxAttempts, retryPolicy.retryDelaySeconds]
+    [
+      contactId,
+      confirmCompletedLead,
+      retryPolicy.maxAttempts,
+      retryPolicy.retryDelaySeconds,
+      confirmRetryWait
+    ]
   );
 
   const row = result.rows[0];
@@ -194,6 +203,7 @@ export async function createDialerCall(
     callRecordingEnabled: boolean;
     earlyMediaAvmdEnabled: boolean;
     confirmCompletedLead?: boolean;
+    confirmRetryWait?: boolean;
     eventType: string;
   }
 ): Promise<CreateDialerCallResult> {
@@ -293,7 +303,8 @@ export async function createDialerCall(
           maxAttempts: config.CONTACT_MAX_ATTEMPTS,
           retryDelaySeconds: config.CONTACT_RETRY_DELAY_SECONDS
         },
-        input.confirmCompletedLead === true
+        input.confirmCompletedLead === true,
+        input.confirmRetryWait === true
       );
       if (!contact) {
         await client.query("rollback");
@@ -381,7 +392,8 @@ export async function createDialerCall(
         JSON.stringify({
           destinationNumber: callContext.destinationNumber,
           manualDial: input.manualDial,
-          confirmCompletedLead: input.confirmCompletedLead === true
+          confirmCompletedLead: input.confirmCompletedLead === true,
+          confirmRetryWait: input.confirmRetryWait === true
         })
       ]
     );

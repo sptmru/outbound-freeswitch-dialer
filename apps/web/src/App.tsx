@@ -844,15 +844,22 @@ function AgentDesk({
       return;
     }
     const confirmCompletedLead = lead.status === "completed";
+    const confirmRetryWait = lead.status === "retry_wait";
     if (
       confirmCompletedLead &&
       !window.confirm("This lead has already been called. Are you sure you want to call them again?")
     ) {
       return;
     }
+    if (
+      confirmRetryWait &&
+      !window.confirm("This lead is still in the retry timeout. Are you sure you want to call them now?")
+    ) {
+      return;
+    }
     setCallNextError(null);
     try {
-      await runCallStart(() => startLeadCall(lead.id, { confirmCompletedLead }));
+      await runCallStart(() => startLeadCall(lead.id, { confirmCompletedLead, confirmRetryWait }));
     } catch (error) {
       setCallNextError(error instanceof Error ? error.message : "Could not start lead call");
     }
@@ -1174,12 +1181,12 @@ function LeadQueue({
                 <span>{lead.phoneNumber}</span>
               </div>
               <div className="lead-row-state" role="cell">
-                <b>{formatLeadStatus(lead.status)}</b>
+                <b>{formatLeadStatus(lead)}</b>
                 {showRecommendedCall && (
                   <button
                     className="pill-action"
                     disabled={
-                      pending || (lead.status !== "ready" && lead.status !== "completed") || !canStartCalls
+                      pending || !["ready", "retry_wait", "completed"].includes(lead.status) || !canStartCalls
                     }
                     onClick={() => onCallLead(lead)}
                     type="button"
@@ -1261,16 +1268,18 @@ function LeadContextPanel({ lead }: { lead?: LeadSummary }) {
   );
 }
 
-function formatLeadStatus(status: LeadSummary["status"]): string {
+function formatLeadStatus(lead: LeadSummary): string {
   const labels: Record<LeadSummary["status"], string> = {
     calling: "Connected",
     completed: "Completed",
     exhausted: "Attempt limit reached",
     ready: "Ready",
-    retry_wait: "Retry later",
+    retry_wait: lead.lastCallState
+      ? formatCallLifecycleStatus(lead.lastCallState, lead.lastCallOutcome ?? null)
+      : "No answer",
     suppressed: "Suppressed"
   };
-  return labels[status];
+  return labels[lead.status];
 }
 
 function leadAvailabilityCopy(status: LeadSummary["status"]): string {
