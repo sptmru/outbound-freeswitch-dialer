@@ -85,7 +85,7 @@ This document is the current product and operational contract. Items described a
 ## Campaigns, Contacts, And Suppression
 
 - Campaign states are `draft`, `active`, `paused`, and `archived`.
-- Admins can create/edit campaigns and configure manual dialing, call recording, and early-media AVMD per campaign.
+- Admins can create/edit campaigns and configure manual dialing, call recording, early-media AVMD, and automatic next-lead calling per campaign. Automatic next-lead calling is opt-in and runs only after the current call has reached a terminal state.
 - Archived campaigns preserve operational history and are not callable.
 - Contact import requires mapped `name` and `phone` values, preserves additional CSV columns in the contact/import JSON fields, normalizes numbers, reports row errors, and avoids duplicates. Upload byte and row ceilings reject oversized work before database writes without imposing a column whitelist.
 - Campaign contacts and CSV row failures are paginated. Opening Contacts follows the campaign selected on Agent Desk, and every rejected CSV row remains reviewable instead of being silently limited to the first page.

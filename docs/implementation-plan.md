@@ -67,7 +67,7 @@ Firewall and host-published-port changes were excluded by instruction. They are 
 
 ### 5. Agent Experience And Live Updates
 
-- Agent Desk with campaign selection, next lead, manual number validation, click-to-call, DTMF, hangup, call timer/state, action eligibility, and automatic outcomes.
+- Agent Desk with campaign selection, next lead, optional campaign-controlled automatic transition to the next callable lead after call completion, manual number validation, click-to-call, DTMF, hangup, call timer/state, action eligibility, and automatic outcomes.
 - Manual voicemail selection/drop with background job tray and failure/interruption visibility.
 - VM/beep/AVMD signals shown as advisory evidence, never as an automatic drop trigger.
 - Admin access to Agent Desk without starting SIP/microphone outside the desk view, with active-call navigation/history/deep links forced back to the desk so the browser phone remains registered.
@@ -78,7 +78,7 @@ Firewall and host-published-port changes were excluded by instruction. They are 
 
 - Dedicated period- and campaign-filtered admin Analytics view with summary KPIs, daily movement, call funnel, campaign/agent performance, data-quality snapshot, and voicemail lifecycle reporting.
 - Explicit metric definitions separate technical answers from connected contacts and separate period-filtered facts from current queue snapshots.
-- Campaign create/edit/status/archive plus manual-dial, recording, and early-media AVMD flags.
+- Campaign create/edit/status/archive plus manual-dial, recording, early-media AVMD, and automatic next-lead flags.
 - Paginated campaign contacts and CSV import failures, selected-campaign continuity from Agent Desk, row feedback, search, filters, and manual contact actions.
 - User create/edit/deactivate/reactivate/role/password lifecycle with preserved attribution and FreeSWITCH cleanup.
 - Suppression add/update/search/pagination/import/removal and durable change/blocked-dial events.

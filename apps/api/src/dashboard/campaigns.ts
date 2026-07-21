@@ -12,6 +12,7 @@ export type AgentCampaign = {
   manual_dialing_enabled: boolean;
   call_recording_enabled: boolean;
   early_media_avmd_enabled: boolean;
+  auto_advance_to_next_lead_enabled: boolean;
   callable_leads: string;
   agent_registered: boolean;
 };
@@ -42,6 +43,7 @@ type CampaignOverviewRow = {
   manual_dialing_enabled: boolean;
   call_recording_enabled: boolean;
   early_media_avmd_enabled: boolean;
+  auto_advance_to_next_lead_enabled: boolean;
   total_count: string;
 };
 
@@ -106,6 +108,7 @@ export async function getAgentCampaign(
       campaigns.manual_dialing_enabled,
       campaigns.call_recording_enabled,
       campaigns.early_media_avmd_enabled,
+      campaigns.auto_advance_to_next_lead_enabled,
       count(contacts.id) filter (
         where contacts.status not in ('completed', 'suppressed')
           and suppression_entries.id is null
@@ -242,6 +245,7 @@ async function queryCampaignLibrary(
       campaigns.manual_dialing_enabled,
       campaigns.call_recording_enabled,
       campaigns.early_media_avmd_enabled,
+      campaigns.auto_advance_to_next_lead_enabled,
       count(contacts.id) as loaded,
       (select count(*) from calls where calls.campaign_id = campaigns.id) as attempted,
       coalesce((
@@ -304,7 +308,8 @@ function mapCampaignOverviewRow(row: CampaignOverviewRow): AdminOverviewResponse
     outcomeDistribution: row.outcome_distribution ?? [],
     manualDialingEnabled: row.manual_dialing_enabled,
     callRecordingEnabled: row.call_recording_enabled,
-    earlyMediaAvmdEnabled: row.early_media_avmd_enabled
+    earlyMediaAvmdEnabled: row.early_media_avmd_enabled,
+    autoAdvanceToNextLeadEnabled: row.auto_advance_to_next_lead_enabled
   };
 }
 
@@ -324,6 +329,7 @@ export async function getCampaignOverviewItem(
     manual_dialing_enabled: boolean;
     call_recording_enabled: boolean;
     early_media_avmd_enabled: boolean;
+    auto_advance_to_next_lead_enabled: boolean;
   }>(
     `
       select
@@ -333,6 +339,7 @@ export async function getCampaignOverviewItem(
         campaigns.manual_dialing_enabled,
         campaigns.call_recording_enabled,
         campaigns.early_media_avmd_enabled,
+        campaigns.auto_advance_to_next_lead_enabled,
         count(contacts.id) as loaded,
         (select count(*) from calls where calls.campaign_id = campaigns.id) as attempted,
         coalesce((
@@ -378,6 +385,7 @@ export async function getCampaignOverviewItem(
     outcomeDistribution: row.outcome_distribution ?? [],
     manualDialingEnabled: row.manual_dialing_enabled,
     callRecordingEnabled: row.call_recording_enabled,
-    earlyMediaAvmdEnabled: row.early_media_avmd_enabled
+    earlyMediaAvmdEnabled: row.early_media_avmd_enabled,
+    autoAdvanceToNextLeadEnabled: row.auto_advance_to_next_lead_enabled
   };
 }

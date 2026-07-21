@@ -76,7 +76,8 @@ export async function buildAgentDeskResponse(
       callableLeads: Number(campaign.callable_leads),
       manualDialingEnabled: campaign.manual_dialing_enabled,
       callRecordingEnabled: campaign.call_recording_enabled,
-      earlyMediaAvmdEnabled: campaign.early_media_avmd_enabled
+      earlyMediaAvmdEnabled: campaign.early_media_avmd_enabled,
+      autoAdvanceToNextLeadEnabled: campaign.auto_advance_to_next_lead_enabled
     },
     availableCampaigns,
     softphone: {

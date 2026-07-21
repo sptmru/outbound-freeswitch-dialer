@@ -121,6 +121,7 @@ export interface AgentDeskResponse {
     manualDialingEnabled: boolean;
     callRecordingEnabled: boolean;
     earlyMediaAvmdEnabled: boolean;
+    autoAdvanceToNextLeadEnabled: boolean;
   } | null;
   availableCampaigns: Array<{
     id: string;
@@ -278,6 +279,7 @@ export interface AdminOverviewResponse {
     manualDialingEnabled: boolean;
     callRecordingEnabled: boolean;
     earlyMediaAvmdEnabled: boolean;
+    autoAdvanceToNextLeadEnabled: boolean;
   }>;
   recordings: Array<{
     id: string;
@@ -583,6 +585,7 @@ export interface CreateCampaignRequest {
   manualDialingEnabled: boolean;
   callRecordingEnabled: boolean;
   earlyMediaAvmdEnabled: boolean;
+  autoAdvanceToNextLeadEnabled?: boolean;
 }
 
 export interface UpdateCampaignRequest {
@@ -591,6 +594,7 @@ export interface UpdateCampaignRequest {
   manualDialingEnabled: boolean;
   callRecordingEnabled: boolean;
   earlyMediaAvmdEnabled: boolean;
+  autoAdvanceToNextLeadEnabled?: boolean;
 }
 
 export interface CreateContactRequest {

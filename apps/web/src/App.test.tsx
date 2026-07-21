@@ -175,7 +175,8 @@ describe("App Agent Desk empty states", () => {
       callableLeads: 4,
       manualDialingEnabled: true,
       callRecordingEnabled: false,
-      earlyMediaAvmdEnabled: false
+      earlyMediaAvmdEnabled: false,
+      autoAdvanceToNextLeadEnabled: false
     };
     window.localStorage.setItem(
       "outbound_dialer_selected_campaign_id",
@@ -208,7 +209,8 @@ describe("App Agent Desk empty states", () => {
       callableLeads: 4,
       manualDialingEnabled: true,
       callRecordingEnabled: false,
-      earlyMediaAvmdEnabled: false
+      earlyMediaAvmdEnabled: false,
+      autoAdvanceToNextLeadEnabled: false
     };
     window.localStorage.setItem("outbound_dialer_selected_campaign_id", campaignId);
     apiMocks.fetchAgentDesk.mockResolvedValue(
@@ -304,7 +306,8 @@ describe("App Agent Desk empty states", () => {
       outcomeDistribution: [],
       manualDialingEnabled: true,
       callRecordingEnabled: false,
-      earlyMediaAvmdEnabled: false
+      earlyMediaAvmdEnabled: false,
+      autoAdvanceToNextLeadEnabled: false
     };
     window.history.replaceState(
       {},
@@ -526,7 +529,8 @@ describe("App Agent Desk empty states", () => {
       callableLeads: 4,
       manualDialingEnabled: true,
       callRecordingEnabled: false,
-      earlyMediaAvmdEnabled: false
+      earlyMediaAvmdEnabled: false,
+      autoAdvanceToNextLeadEnabled: false
     };
     const adminCampaigns: AdminOverviewResponse["campaigns"] = [
       {
@@ -539,7 +543,8 @@ describe("App Agent Desk empty states", () => {
         outcomeDistribution: [],
         manualDialingEnabled: true,
         callRecordingEnabled: false,
-        earlyMediaAvmdEnabled: false
+        earlyMediaAvmdEnabled: false,
+        autoAdvanceToNextLeadEnabled: false
       },
       {
         id: selectedCampaignId,
@@ -551,7 +556,8 @@ describe("App Agent Desk empty states", () => {
         outcomeDistribution: [],
         manualDialingEnabled: true,
         callRecordingEnabled: false,
-        earlyMediaAvmdEnabled: false
+        earlyMediaAvmdEnabled: false,
+        autoAdvanceToNextLeadEnabled: false
       }
     ];
     apiMocks.fetchMe.mockResolvedValue({ user: admin });
@@ -809,7 +815,8 @@ describe("App Agent Desk empty states", () => {
       callableLeads: 0,
       manualDialingEnabled: true,
       callRecordingEnabled: false,
-      earlyMediaAvmdEnabled: false
+      earlyMediaAvmdEnabled: false,
+      autoAdvanceToNextLeadEnabled: false
     };
     const availableCampaigns = [
       ...initialDesk.availableCampaigns,
@@ -1264,6 +1271,30 @@ describe("App Agent Desk empty states", () => {
     });
   });
 
+  it("automatically starts the next lead after an active call ends when the campaign enables it", async () => {
+    apiMocks.useSoftphoneRegistration.mockReturnValue({
+      ...softphoneRuntime,
+      registered: true,
+      state: "registered"
+    });
+    const campaign = {
+      ...deskResponse().campaign!,
+      callableLeads: 1,
+      autoAdvanceToNextLeadEnabled: true
+    };
+    apiMocks.fetchAgentDesk.mockResolvedValue(deskResponse({ campaign, activeCall: activeCallRow() }));
+    apiMocks.endCall.mockResolvedValue(deskResponse({ campaign, activeCall: null }));
+    apiMocks.startNextCall.mockResolvedValue(deskResponse({ campaign, activeCall: activeCallRow() }));
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Hang up" }));
+
+    await waitFor(() => {
+      expect(apiMocks.startNextCall).toHaveBeenCalledTimes(1);
+      expect(apiMocks.startNextCall).toHaveBeenCalledWith({ campaignId: campaign.id });
+    });
+  });
+
   it("stops softphone registration and hides phone status outside Agent Desk", async () => {
     const admin = userRow({ role: "admin" });
     apiMocks.fetchMe.mockResolvedValue({ user: admin });
@@ -1353,7 +1384,8 @@ describe("App Agent Desk empty states", () => {
             outcomeDistribution: [],
             manualDialingEnabled: true,
             callRecordingEnabled: true,
-            earlyMediaAvmdEnabled: true
+            earlyMediaAvmdEnabled: true,
+            autoAdvanceToNextLeadEnabled: false
           }
         ]
       })
@@ -1618,7 +1650,8 @@ function deskResponse(overrides: Partial<AgentDeskResponse> = {}): AgentDeskResp
     callableLeads: 0,
     manualDialingEnabled: true,
     callRecordingEnabled: false,
-    earlyMediaAvmdEnabled: false
+    earlyMediaAvmdEnabled: false,
+    autoAdvanceToNextLeadEnabled: false
   };
 
   return {

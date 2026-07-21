@@ -189,7 +189,8 @@
               "callableLeads": { "type": "number" },
               "manualDialingEnabled": { "type": "boolean" },
               "callRecordingEnabled": { "type": "boolean" },
-              "earlyMediaAvmdEnabled": { "type": "boolean" }
+              "earlyMediaAvmdEnabled": { "type": "boolean" },
+              "autoAdvanceToNextLeadEnabled": { "type": "boolean" }
             },
             "required": [
               "id",
@@ -198,7 +199,8 @@
               "callableLeads",
               "manualDialingEnabled",
               "callRecordingEnabled",
-              "earlyMediaAvmdEnabled"
+              "earlyMediaAvmdEnabled",
+              "autoAdvanceToNextLeadEnabled"
             ],
             "additionalProperties": false
           },
@@ -592,7 +594,8 @@
             },
             "manualDialingEnabled": { "type": "boolean" },
             "callRecordingEnabled": { "type": "boolean" },
-            "earlyMediaAvmdEnabled": { "type": "boolean" }
+            "earlyMediaAvmdEnabled": { "type": "boolean" },
+            "autoAdvanceToNextLeadEnabled": { "type": "boolean" }
           },
           "required": [
             "id",
@@ -604,7 +607,8 @@
             "outcomeDistribution",
             "manualDialingEnabled",
             "callRecordingEnabled",
-            "earlyMediaAvmdEnabled"
+            "earlyMediaAvmdEnabled",
+            "autoAdvanceToNextLeadEnabled"
           ],
           "additionalProperties": false
         }
@@ -1111,7 +1115,8 @@
             },
             "manualDialingEnabled": { "type": "boolean" },
             "callRecordingEnabled": { "type": "boolean" },
-            "earlyMediaAvmdEnabled": { "type": "boolean" }
+            "earlyMediaAvmdEnabled": { "type": "boolean" },
+            "autoAdvanceToNextLeadEnabled": { "type": "boolean" }
           },
           "required": [
             "id",
@@ -1123,7 +1128,8 @@
             "outcomeDistribution",
             "manualDialingEnabled",
             "callRecordingEnabled",
-            "earlyMediaAvmdEnabled"
+            "earlyMediaAvmdEnabled",
+            "autoAdvanceToNextLeadEnabled"
           ],
           "additionalProperties": false
         }
@@ -1575,7 +1581,8 @@
       "status": { "$ref": "CampaignStatus#" },
       "manualDialingEnabled": { "type": "boolean" },
       "callRecordingEnabled": { "type": "boolean" },
-      "earlyMediaAvmdEnabled": { "type": "boolean" }
+      "earlyMediaAvmdEnabled": { "type": "boolean" },
+      "autoAdvanceToNextLeadEnabled": { "type": "boolean" }
     },
     "required": ["name", "status", "manualDialingEnabled", "callRecordingEnabled", "earlyMediaAvmdEnabled"],
     "additionalProperties": false
@@ -1588,7 +1595,8 @@
       "status": { "$ref": "CampaignStatus#" },
       "manualDialingEnabled": { "type": "boolean" },
       "callRecordingEnabled": { "type": "boolean" },
-      "earlyMediaAvmdEnabled": { "type": "boolean" }
+      "earlyMediaAvmdEnabled": { "type": "boolean" },
+      "autoAdvanceToNextLeadEnabled": { "type": "boolean" }
     },
     "required": ["name", "status", "manualDialingEnabled", "callRecordingEnabled", "earlyMediaAvmdEnabled"],
     "additionalProperties": false

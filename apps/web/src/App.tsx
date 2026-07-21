@@ -809,6 +809,7 @@ function AgentDesk({
   const [callControlPending, setCallControlPending] = useState<"hangup" | "voicemail" | "dtmf" | null>(null);
   const callControlPendingRef = useRef<typeof callControlPending>(null);
   const [endCallError, setEndCallError] = useState<string | null>(null);
+  const previousActiveCallIdRef = useRef<string | null>(desk.activeCall?.id ?? null);
   const campaign = desk.campaign;
   const availabilityStatus = useEffectiveAvailability(desk.availability);
   const canStartCalls = softphone.registered && availabilityStatus === "available";
@@ -870,6 +871,21 @@ function AgentDesk({
       setCallNextPending(false);
     }
   }
+
+  useEffect(() => {
+    const previousActiveCallId = previousActiveCallIdRef.current;
+    previousActiveCallIdRef.current = desk.activeCall?.id ?? null;
+    if (
+      !previousActiveCallId ||
+      desk.activeCall ||
+      !campaign?.autoAdvanceToNextLeadEnabled ||
+      campaign.callableLeads <= 0 ||
+      !canStartCalls
+    ) {
+      return;
+    }
+    void callNext();
+  }, [desk.activeCall?.id]);
 
   async function hangUp(callId: string) {
     await runCallControl("hangup", () => endCall(callId, { campaignId: campaign?.id }), "Could not end call");
@@ -2813,6 +2829,9 @@ function CampaignCard({
   const [manualDialingEnabled, setManualDialingEnabled] = useState(campaign.manualDialingEnabled);
   const [callRecordingEnabled, setCallRecordingEnabled] = useState(campaign.callRecordingEnabled);
   const [earlyMediaAvmdEnabled, setEarlyMediaAvmdEnabled] = useState(campaign.earlyMediaAvmdEnabled);
+  const [autoAdvanceToNextLeadEnabled, setAutoAdvanceToNextLeadEnabled] = useState(
+    campaign.autoAdvanceToNextLeadEnabled
+  );
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -2822,7 +2841,9 @@ function CampaignCard({
     setManualDialingEnabled(campaign.manualDialingEnabled);
     setCallRecordingEnabled(campaign.callRecordingEnabled);
     setEarlyMediaAvmdEnabled(campaign.earlyMediaAvmdEnabled);
+    setAutoAdvanceToNextLeadEnabled(campaign.autoAdvanceToNextLeadEnabled);
   }, [
+    campaign.autoAdvanceToNextLeadEnabled,
     campaign.callRecordingEnabled,
     campaign.earlyMediaAvmdEnabled,
     campaign.manualDialingEnabled,
@@ -2840,7 +2861,8 @@ function CampaignCard({
         status,
         manualDialingEnabled,
         callRecordingEnabled,
-        earlyMediaAvmdEnabled
+        earlyMediaAvmdEnabled,
+        autoAdvanceToNextLeadEnabled
       });
       setEditing(false);
       await onChanged();
@@ -2863,7 +2885,8 @@ function CampaignCard({
         status: "archived",
         manualDialingEnabled: campaign.manualDialingEnabled,
         callRecordingEnabled: campaign.callRecordingEnabled,
-        earlyMediaAvmdEnabled: campaign.earlyMediaAvmdEnabled
+        earlyMediaAvmdEnabled: campaign.earlyMediaAvmdEnabled,
+        autoAdvanceToNextLeadEnabled: campaign.autoAdvanceToNextLeadEnabled
       });
       await onChanged();
     } catch (deleteError) {
@@ -2918,6 +2941,14 @@ function CampaignCard({
           </label>
           <label className="checkbox-label">
             <input
+              checked={autoAdvanceToNextLeadEnabled}
+              onChange={(event) => setAutoAdvanceToNextLeadEnabled(event.target.checked)}
+              type="checkbox"
+            />
+            Automatically call next lead
+          </label>
+          <label className="checkbox-label">
+            <input
               checked={manualDialingEnabled}
               onChange={(event) => setManualDialingEnabled(event.target.checked)}
               type="checkbox"
@@ -2957,6 +2988,7 @@ function CampaignCard({
           {campaign.manualDialingEnabled && <StatusBadge label="Manual dialing" tone="neutral" />}
           {campaign.callRecordingEnabled && <StatusBadge label="Call recording" tone="good" />}
           {campaign.earlyMediaAvmdEnabled && <StatusBadge label="Early-media AVMD" tone="warn" />}
+          {campaign.autoAdvanceToNextLeadEnabled && <StatusBadge label="Auto next lead" tone="good" />}
         </div>
       )}
       <div className="stat-row campaign-stat-row">
@@ -3411,6 +3443,7 @@ function CreateCampaignForm({ onChanged }: { onChanged: () => Promise<void> }) {
   const [manualDialingEnabled, setManualDialingEnabled] = useState(true);
   const [callRecordingEnabled, setCallRecordingEnabled] = useState(true);
   const [earlyMediaAvmdEnabled, setEarlyMediaAvmdEnabled] = useState(false);
+  const [autoAdvanceToNextLeadEnabled, setAutoAdvanceToNextLeadEnabled] = useState(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -3424,11 +3457,13 @@ function CreateCampaignForm({ onChanged }: { onChanged: () => Promise<void> }) {
         status,
         manualDialingEnabled,
         callRecordingEnabled,
-        earlyMediaAvmdEnabled
+        earlyMediaAvmdEnabled,
+        autoAdvanceToNextLeadEnabled
       });
       setName("");
       setStatus("draft");
       setEarlyMediaAvmdEnabled(false);
+      setAutoAdvanceToNextLeadEnabled(false);
       await onChanged();
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : "Could not create campaign");
@@ -3459,6 +3494,14 @@ function CreateCampaignForm({ onChanged }: { onChanged: () => Promise<void> }) {
           </select>
         </label>
         <div className="toggle-row">
+          <label>
+            <input
+              checked={autoAdvanceToNextLeadEnabled}
+              onChange={(event) => setAutoAdvanceToNextLeadEnabled(event.target.checked)}
+              type="checkbox"
+            />
+            Auto next lead
+          </label>
           <label>
             <input
               checked={manualDialingEnabled}

@@ -1318,6 +1318,7 @@ function campaignRow(
     agent_registered: boolean;
     call_recording_enabled: boolean;
     early_media_avmd_enabled: boolean;
+    auto_advance_to_next_lead_enabled: boolean;
     callable_leads: string;
     id: string;
     manual_dialing_enabled: boolean;
@@ -1332,6 +1333,7 @@ function campaignRow(
     manual_dialing_enabled: true,
     call_recording_enabled: false,
     early_media_avmd_enabled: false,
+    auto_advance_to_next_lead_enabled: false,
     callable_leads: "0",
     agent_registered: false,
     ...overrides

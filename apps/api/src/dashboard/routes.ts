@@ -164,7 +164,8 @@ const createCampaignSchema = z.object({
   status: z.enum(["active", "paused", "draft", "archived"]),
   manualDialingEnabled: z.boolean(),
   callRecordingEnabled: z.boolean(),
-  earlyMediaAvmdEnabled: z.boolean()
+  earlyMediaAvmdEnabled: z.boolean(),
+  autoAdvanceToNextLeadEnabled: z.boolean().optional()
 }) satisfies z.ZodType<CreateCampaignRequest>;
 
 const updateCampaignSchema = z.object({
@@ -172,7 +173,8 @@ const updateCampaignSchema = z.object({
   status: z.enum(["active", "paused", "draft", "archived"]),
   manualDialingEnabled: z.boolean(),
   callRecordingEnabled: z.boolean(),
-  earlyMediaAvmdEnabled: z.boolean()
+  earlyMediaAvmdEnabled: z.boolean(),
+  autoAdvanceToNextLeadEnabled: z.boolean().optional()
 }) satisfies z.ZodType<UpdateCampaignRequest>;
 
 const createContactSchema = z.object({
@@ -946,6 +948,7 @@ export function registerDashboardRoutes(
       }
 
       const input = createCampaignSchema.parse(request.body);
+      const autoAdvanceToNextLeadEnabled = input.autoAdvanceToNextLeadEnabled ?? false;
       const result = await pool.query<{
         id: string;
         name: string;
@@ -957,9 +960,10 @@ export function registerDashboardRoutes(
             status,
             manual_dialing_enabled,
             call_recording_enabled,
-            early_media_avmd_enabled
+            early_media_avmd_enabled,
+            auto_advance_to_next_lead_enabled
           )
-          values ($1, $2, $3, $4, $5)
+          values ($1, $2, $3, $4, $5, $6)
           returning id, name, status
         `,
         [
@@ -967,7 +971,8 @@ export function registerDashboardRoutes(
           input.status,
           input.manualDialingEnabled,
           input.callRecordingEnabled,
-          input.earlyMediaAvmdEnabled
+          input.earlyMediaAvmdEnabled,
+          autoAdvanceToNextLeadEnabled
         ]
       );
 
@@ -981,7 +986,8 @@ export function registerDashboardRoutes(
           callable: 0,
           manualDialingEnabled: input.manualDialingEnabled,
           callRecordingEnabled: input.callRecordingEnabled,
-          earlyMediaAvmdEnabled: input.earlyMediaAvmdEnabled
+          earlyMediaAvmdEnabled: input.earlyMediaAvmdEnabled,
+          autoAdvanceToNextLeadEnabled
         }
       });
     }
@@ -1005,6 +1011,7 @@ export function registerDashboardRoutes(
               manual_dialing_enabled = $4,
               call_recording_enabled = $5,
               early_media_avmd_enabled = $6,
+              auto_advance_to_next_lead_enabled = coalesce($7, auto_advance_to_next_lead_enabled),
               updated_at = now()
           where id = $1
         `,
@@ -1014,7 +1021,8 @@ export function registerDashboardRoutes(
           input.status,
           input.manualDialingEnabled,
           input.callRecordingEnabled,
-          input.earlyMediaAvmdEnabled
+          input.earlyMediaAvmdEnabled,
+          input.autoAdvanceToNextLeadEnabled
         ]
       );
 
