@@ -40,6 +40,7 @@ interface EslFrame {
 const EVENT_NAMES = [
   "BACKGROUND_JOB",
   "CHANNEL_CREATE",
+  "CHANNEL_PROGRESS",
   "CHANNEL_PROGRESS_MEDIA",
   "CHANNEL_ANSWER",
   "CHANNEL_BRIDGE",
@@ -568,6 +569,20 @@ async function persistGenericFreeSwitchEventState(
           where id = $1
             and ended_at is null
             and state in ('created', 'agent_ringing', 'agent_answered', 'customer_dialing')
+        `,
+        [input.callId]
+      );
+    }
+
+    if (input.eventName === "CHANNEL_PROGRESS" && input.legType === "customer") {
+      await client.query(
+        `
+          update calls
+          set state = 'customer_ringing',
+              updated_at = now()
+          where id = $1
+            and ended_at is null
+            and state in ('created', 'agent_ringing', 'agent_answered', 'customer_dialing', 'customer_ringing')
         `,
         [input.callId]
       );
@@ -2097,6 +2112,9 @@ function mapEventToCallState(eventName: string, hangupCause?: string, legType = 
   }
   if ((eventName === "CHANNEL_ANSWER" && legType === "customer") || eventName === "CHANNEL_BRIDGE") {
     return "bridged";
+  }
+  if (eventName === "CHANNEL_PROGRESS" && legType === "customer") {
+    return "customer_ringing";
   }
   if (isTerminalEvent(eventName)) {
     if (legType === "agent") {

@@ -43,6 +43,7 @@ This document is the current product and operational contract. Items described a
 - Browser SIP uses WSS. PSTN codec/routing behavior must be validated with the selected provider.
 - Use a backend-owned, agent-first originate/bridge flow; the browser never receives authority to choose the PSTN endpoint.
 - Store calls, legs, state-changing events, UUIDs, commands, hangup causes, and automatic outcomes required for diagnosis.
+- Present call lifecycle status with the product vocabulary `Calling`, `Ringing`, `Answered`, `In progress`, `Failed`, `No answer`, `Cancelled`, `Completed`, and `Completed (voicemail dropped)`; keep technical states and outcomes internal.
 - Allow DTMF only when the backend reports the action eligible.
 - Persist subscribed ESL events in arrival order through a bounded queue. Retry transient database failures with backoff; if the queue fills, disconnect/reconnect the listener and raise an observable overflow rather than silently discarding backlog.
 - Reconcile unfinished database calls with FreeSWITCH `uuid_exists` after ESL subscription/reconnect and periodically. Missing calls are closed, orphaned agent legs are released when possible, and active voicemail playback is recovered or finalized.

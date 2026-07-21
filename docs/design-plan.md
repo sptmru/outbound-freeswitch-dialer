@@ -32,14 +32,15 @@ Figma will be used as the source for visual design before implementation of prod
    - Softphone unregistered.
    - Microphone permission missing.
    - Agent unavailable.
-   - Dialing.
+   - Calling.
    - Ringing.
-   - Bridged.
-   - VM/beep signal detected.
-   - Voicemail playback starting.
-   - Agent released.
-   - Call completed.
-   - Call failed.
+   - Answered.
+   - In progress.
+   - Failed.
+   - No answer.
+   - Cancelled.
+   - Completed.
+   - Completed (voicemail dropped).
 5. Design admin screens:
    - Campaigns.
    - CSV import for the current `name` and `phone` contract.

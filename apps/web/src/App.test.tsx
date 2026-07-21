@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { App } from "./App";
+import { App, formatCallLifecycleStatus } from "./App";
 import type {
   AdminAnalyticsResponse,
   AdminOverviewResponse,
@@ -35,6 +35,22 @@ const apiMocks = vi.hoisted(() => ({
   updateSystemSettings: vi.fn(),
   useSoftphoneRegistration: vi.fn()
 }));
+
+describe("call lifecycle status labels", () => {
+  it.each([
+    ["created", null, "Calling"],
+    ["customer_ringing", null, "Ringing"],
+    ["agent_answered", null, "Answered"],
+    ["bridged", null, "In progress"],
+    ["failed", "failed", "Failed"],
+    ["completed", "not_answered", "No answer"],
+    ["canceled", "agent_canceled", "Cancelled"],
+    ["completed", "answered", "Completed"],
+    ["completed", "voicemail_dropped", "Completed (voicemail dropped)"]
+  ] as const)("maps %s / %s to %s", (state, outcome, label) => {
+    expect(formatCallLifecycleStatus(state, outcome)).toBe(label);
+  });
+});
 
 vi.mock("./api", async () => {
   const actual = await vi.importActual<typeof import("./api")>("./api");

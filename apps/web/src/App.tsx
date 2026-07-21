@@ -1018,7 +1018,7 @@ function RecentAgentCalls({ calls }: { calls: AgentDeskResponse["recentCalls"] }
   }
   return (
     <article className="panel recent-agent-calls">
-      <PanelHeader icon={History} title="Recent outcomes" meta={`${calls.length} calls`} />
+      <PanelHeader icon={History} title="Recent calls" meta={`${calls.length} calls`} />
       <div className="table-list">
         {calls.map((call) => (
           <div className="table-row recent-call-row" key={call.id}>
@@ -1027,7 +1027,7 @@ function RecentAgentCalls({ calls }: { calls: AgentDeskResponse["recentCalls"] }
               <small>{call.phoneNumber}</small>
             </span>
             <b className={`outcome-badge outcome-${call.outcome ?? call.state}`}>
-              {formatOutcome(call.outcome, call.state)}
+              {formatCallLifecycleStatus(call.state, call.outcome)}
             </b>
           </div>
         ))}
@@ -1542,7 +1542,7 @@ function ActiveCall({
     );
   }
 
-  const durationLabel = formatCallStatus(activeCall.status);
+  const durationLabel = formatCallLifecycleStatus(activeCall.state, activeCall.outcome ?? null);
   const voicemailSignal = formatVoicemailSignal(activeCall.voicemailSignal);
   const selectedRecording = desk.recordings.find((recording) => recording.id === selectedRecordingId);
   const dropRecordingId = selectedRecording?.id ?? activeCall.recordingId ?? undefined;
@@ -1728,17 +1728,6 @@ function formatDuration(totalSeconds: number): string {
   const minutes = Math.floor(safeSeconds / 60);
   const seconds = safeSeconds % 60;
   return `${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`;
-}
-
-function formatCallStatus(status: NonNullable<AgentDeskResponse["activeCall"]>["status"]): string {
-  const labels: Record<NonNullable<AgentDeskResponse["activeCall"]>["status"], string> = {
-    dialing: "Dialing",
-    ringing: "Ringing",
-    bridged: "Connected",
-    voicemail_drop: "Dropping voicemail",
-    completed: "Completed"
-  };
-  return labels[status];
 }
 
 function formatVoicemailSignal(signal: NonNullable<AgentDeskResponse["activeCall"]>["voicemailSignal"]): {
@@ -4495,7 +4484,7 @@ function HistoryView({ admin, refreshVersion }: { admin: AdminOverviewResponse; 
               "suppressed"
             ].map((item) => (
               <option key={item} value={item}>
-                {formatOutcome(item as never, "completed")}
+                {formatOutcomeFilterOption(item)}
               </option>
             ))}
           </select>
@@ -4586,7 +4575,7 @@ function HistoryView({ admin, refreshVersion }: { admin: AdminOverviewResponse; 
         <span>Campaign</span>
         <span>Agent</span>
         <span>Started</span>
-        <span>Outcome</span>
+        <span>Status</span>
       </div>
       <div className="table-list">
         {history.items.map((call) => (
@@ -4609,7 +4598,7 @@ function HistoryView({ admin, refreshVersion }: { admin: AdminOverviewResponse; 
               </span>
               <span className="history-outcome-stack">
                 <b className={`outcome-badge outcome-${call.outcome ?? call.state}`}>
-                  {formatOutcome(call.outcome, call.state)}
+                  {formatCallLifecycleStatus(call.state, call.outcome)}
                 </b>
                 {call.avmdReviewStatus && (
                   <small className={`avmd-review-badge ${call.avmdReviewStatus}`}>
@@ -5280,26 +5269,61 @@ function formatPcapStatus(status: NonNullable<CallDetailResponse["call"]["pcapSt
   return labels[status];
 }
 
-function formatOutcome(
-  outcome: AdminOverviewResponse["callHistory"][number]["outcome"],
-  state: AdminOverviewResponse["callHistory"][number]["state"]
+export function formatCallLifecycleStatus(
+  state: AdminOverviewResponse["callHistory"][number]["state"],
+  outcome: AdminOverviewResponse["callHistory"][number]["outcome"]
 ): string {
-  const value = outcome ?? state;
+  if (outcome === "voicemail_dropped" || state === "voicemail_playback_completed") {
+    return "Completed (voicemail dropped)";
+  }
+  if (outcome === "failed" || outcome === "suppressed" || state === "failed") {
+    return "Failed";
+  }
+  if (outcome === "not_answered" || outcome === "busy") {
+    return "No answer";
+  }
+  if (outcome === "agent_canceled" || state === "canceled") {
+    return "Cancelled";
+  }
+  if (
+    state === "completed" ||
+    outcome === "answered" ||
+    outcome === "customer_hung_up" ||
+    outcome === "voicemail_detected"
+  ) {
+    return "Completed";
+  }
+  if (state === "agent_ringing" || state === "customer_ringing") {
+    return "Ringing";
+  }
+  if (state === "agent_answered") {
+    return "Answered";
+  }
+  if (
+    state === "bridged" ||
+    state === "voicemail_signal_detected" ||
+    state === "voicemail_drop_requested" ||
+    state === "voicemail_playback_started" ||
+    state === "agent_released"
+  ) {
+    return "In progress";
+  }
+  return "Calling";
+}
+
+function formatOutcomeFilterOption(outcome: string): string {
   const labels: Record<string, string> = {
     answered: "Answered",
-    busy: "Busy",
     not_answered: "No answer",
-    voicemail_dropped: "VM dropped",
+    busy: "Busy",
     failed: "Failed",
-    agent_canceled: "Canceled",
-    dialing: "Dialing",
-    ringing: "Ringing",
-    bridged: "Connected",
-    voicemail_drop: "Dropping VM",
-    completed: "Completed",
-    canceled: "Canceled"
+    voicemail_detected: "Voicemail detected",
+    voicemail_dropped: "Voicemail dropped",
+    agent_canceled: "Agent cancelled",
+    customer_hung_up: "Customer hung up",
+    suppressed: "Suppressed"
   };
-  return labels[value] ?? value.replaceAll("_", " ");
+  return labels[outcome] ?? outcome.replaceAll("_", " ");
 }
 
 function SettingsView({

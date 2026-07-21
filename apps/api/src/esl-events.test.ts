@@ -578,9 +578,11 @@ describe("FreeSWITCH event helpers", () => {
   });
 
   it("subscribes to customer early-media events", () => {
+    assert.match(__testing.eventNames, /CHANNEL_PROGRESS CHANNEL_PROGRESS_MEDIA/);
     assert.match(__testing.eventNames, /CHANNEL_PROGRESS_MEDIA/);
     assert.match(__testing.eventNames, /CUSTOM avmd::beep amd::result/);
     assert.match(__testing.eventNames, /outbound_dialer::voicemail_playback_completed/);
+    assert.equal(__testing.mapEventToCallState("CHANNEL_PROGRESS"), "customer_ringing");
     assert.equal(__testing.mapEventToCallState("CHANNEL_PROGRESS_MEDIA"), "customer_dialing");
   });
 
