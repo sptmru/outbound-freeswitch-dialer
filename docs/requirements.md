@@ -8,6 +8,7 @@ This document is the current product and operational contract. Items described a
 - One interactive call per agent. A released voicemail customer leg may continue as a background job while the agent starts the next interactive call.
 - Browser softphone for agent media; all PSTN origination and call control remain backend-owned through FreeSWITCH ESL.
 - Local accounts with `agent` and `admin` roles. Admins may use Agent Desk, but SIP registration and microphone access start only while that view is open.
+- Agent Desk audio setup lets an idle user select microphone and speaker devices, choose a browser microphone-processing profile, inspect the settings actually applied by the browser, and run a bounded microphone-level and ICE-readiness check. Device identifiers and the selected profile remain local to that browser.
 - While an interactive call is active, the application keeps the user on Agent Desk. Sidebar navigation, browser history, deep links, and reload hydration must not leave the desk and stop the browser softphone.
 - Manual voicemail drop and automatically determined outcomes are the current product behavior. Progressive dialing, mandatory agent dispositions, and automatic voicemail drop are not part of this version.
 

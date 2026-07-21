@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { SoftphoneRuntime } from "./softphone";
 import { __testing } from "./softphone";
 
@@ -60,11 +60,31 @@ describe("softphone runtime helpers", () => {
 
     expect(actions).toEqual(["unregister-started", "unregister-finished", "transport-stopped"]);
   });
+
+  it("routes call audio to the selected speaker when the browser supports it", async () => {
+    const setSinkId = vi.fn().mockResolvedValue(undefined);
+    await __testing.applyAudioOutput({ setSinkId } as unknown as HTMLAudioElement, "speaker-2");
+    expect(setSinkId).toHaveBeenCalledWith("speaker-2");
+  });
 });
 
 function runtime(overrides: Partial<SoftphoneRuntime> = {}): SoftphoneRuntime {
   return {
     answerIncomingCall: async () => undefined,
+    audioSetup: {
+      appliedSettings: null,
+      checkError: null,
+      checkResult: null,
+      checking: false,
+      inputDevices: [],
+      inputLevel: 0,
+      outputDevices: [],
+      outputSelectionSupported: true,
+      processingProfile: "office",
+      selectedInputId: "",
+      selectedOutputId: "",
+      signalStatus: "idle"
+    },
     audioPlaybackState: "idle",
     callState: "none",
     declineIncomingCall: async () => undefined,
@@ -74,8 +94,13 @@ function runtime(overrides: Partial<SoftphoneRuntime> = {}): SoftphoneRuntime {
     incomingCallLabel: null,
     label: "Softphone registered",
     microphoneAllowed: true,
+    refreshAudioDevices: async () => undefined,
     registered: true,
     retryRemoteAudio: async () => undefined,
+    runAudioCheck: async () => undefined,
+    selectMicrophone: () => undefined,
+    selectSpeaker: async () => undefined,
+    setMicrophoneProcessingProfile: () => undefined,
     state: "registered",
     ...overrides
   };

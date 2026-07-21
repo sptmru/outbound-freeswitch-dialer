@@ -90,6 +90,27 @@ vi.mock("./softphone", () => ({
 const softphoneRuntime = {
   registered: false,
   microphoneAllowed: true,
+  audioSetup: {
+    appliedSettings: {
+      autoGainControl: true,
+      channelCount: 1,
+      deviceId: "default",
+      echoCancellation: true,
+      noiseSuppression: true,
+      sampleRate: 48_000
+    },
+    checkError: null,
+    checkResult: null,
+    checking: false,
+    inputDevices: [{ deviceId: "mic-1", label: "USB microphone" }],
+    inputLevel: 0,
+    outputDevices: [{ deviceId: "speaker-1", label: "USB headset" }],
+    outputSelectionSupported: true,
+    processingProfile: "office",
+    selectedInputId: "",
+    selectedOutputId: "",
+    signalStatus: "idle"
+  },
   state: "idle",
   callState: "none",
   audioPlaybackState: "idle",
@@ -97,6 +118,11 @@ const softphoneRuntime = {
   detail: "Not registered in tests",
   error: null,
   incomingCallLabel: null,
+  refreshAudioDevices: async () => undefined,
+  runAudioCheck: async () => undefined,
+  selectMicrophone: () => undefined,
+  selectSpeaker: async () => undefined,
+  setMicrophoneProcessingProfile: () => undefined,
   answerIncomingCall: async () => undefined,
   declineIncomingCall: async () => undefined,
   hangUpSoftphoneCall: async () => undefined,
@@ -848,6 +874,51 @@ describe("App Agent Desk empty states", () => {
 
     expect(selector).toHaveValue(nextCampaignId);
     expect(apiMocks.fetchAgentDesk).toHaveBeenCalledTimes(2);
+  });
+
+  it("lets an idle agent choose audio devices, select processing, and run the readiness check", async () => {
+    const runAudioCheck = vi.fn().mockResolvedValue(undefined);
+    const selectMicrophone = vi.fn();
+    const selectSpeaker = vi.fn().mockResolvedValue(undefined);
+    const setMicrophoneProcessingProfile = vi.fn();
+    apiMocks.fetchAgentDesk.mockResolvedValue(deskResponse());
+    apiMocks.useSoftphoneRegistration.mockReturnValue({
+      ...softphoneRuntime,
+      audioSetup: {
+        ...softphoneRuntime.audioSetup,
+        checkResult: {
+          appliedSettings: softphoneRuntime.audioSetup.appliedSettings!,
+          inputPeakPercent: 6,
+          networkDetail: "SIP signaling and a TURN relay route are available.",
+          networkStatus: "ready" as const,
+          signalDetail: "Input is quiet. Move the microphone closer or raise its input level.",
+          signalStatus: "quiet" as const
+        },
+        inputLevel: 0.06,
+        signalStatus: "quiet" as const
+      },
+      registered: true,
+      runAudioCheck,
+      selectMicrophone,
+      selectSpeaker,
+      setMicrophoneProcessingProfile
+    });
+
+    render(<App />);
+    fireEvent.click(await screen.findByText("Audio setup"));
+    fireEvent.change(screen.getByLabelText("Microphone"), { target: { value: "mic-1" } });
+    fireEvent.change(screen.getByLabelText("Speaker"), { target: { value: "speaker-1" } });
+    fireEvent.change(screen.getByLabelText("Microphone processing"), { target: { value: "headset" } });
+    fireEvent.click(screen.getByRole("button", { name: "Run audio and network check" }));
+
+    expect(selectMicrophone).toHaveBeenCalledWith("mic-1");
+    expect(selectSpeaker).toHaveBeenCalledWith("speaker-1");
+    expect(setMicrophoneProcessingProfile).toHaveBeenCalledWith("headset");
+    expect(runAudioCheck).toHaveBeenCalledTimes(1);
+    expect(screen.getAllByText("Too quiet")).not.toHaveLength(0);
+    expect(screen.getByText("Network ready")).toBeInTheDocument();
+    expect(screen.getByText(/TURN relay route/)).toBeInTheDocument();
+    expect(screen.getByText(/Echo on · Noise on · Auto gain on/)).toBeInTheDocument();
   });
 
   it("does not let an older live refresh overwrite a call mutation", async () => {

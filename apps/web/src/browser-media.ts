@@ -30,13 +30,6 @@ type AudioRtpStats = RTCStats & {
   state?: string;
 };
 
-export const microphoneConstraints: MediaTrackConstraints = {
-  autoGainControl: true,
-  channelCount: 1,
-  echoCancellation: true,
-  noiseSuppression: true
-};
-
 function nullableNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
 }

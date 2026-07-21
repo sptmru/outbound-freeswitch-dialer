@@ -594,6 +594,124 @@ input[type="checkbox"] {
   gap: 8px;
 }
 
+.audio-setup-panel {
+  border-bottom: 1px solid #e7ecf2;
+  border-top: 1px solid #e7ecf2;
+  padding: 10px 0;
+}
+
+.audio-setup-panel summary {
+  align-items: center;
+  color: #17202a;
+  cursor: pointer;
+  display: flex;
+  font-size: 13px;
+  font-weight: 700;
+  gap: 8px;
+  justify-content: space-between;
+  list-style: none;
+}
+
+.audio-setup-panel summary::-webkit-details-marker {
+  display: none;
+}
+
+.audio-setup-content {
+  display: grid;
+  gap: 12px;
+  padding-top: 12px;
+}
+
+.audio-device-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.audio-setup-content label {
+  display: grid;
+  gap: 5px;
+}
+
+.audio-setup-content label,
+.microphone-level-row span,
+.applied-dsp-settings span {
+  color: #526274;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.audio-setup-content label small,
+.audio-check-results small,
+.applied-dsp-settings small {
+  color: #667789;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.microphone-level-row {
+  display: grid;
+  gap: 6px;
+}
+
+.microphone-level-row > div:first-child {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+
+.microphone-level-row strong {
+  color: #17202a;
+  font-size: 12px;
+}
+
+.microphone-level-meter {
+  background: #e7ecf2;
+  border-radius: 999px;
+  height: 8px;
+  overflow: hidden;
+}
+
+.microphone-level-meter span {
+  background: #7b8da1;
+  display: block;
+  height: 100%;
+  min-width: 2px;
+  transition: width 80ms linear;
+}
+
+.microphone-level-meter.good span {
+  background: #16966f;
+}
+
+.microphone-level-meter.warn span {
+  background: #d99120;
+}
+
+.microphone-level-meter.bad span {
+  background: #d14b4b;
+}
+
+.audio-check-results {
+  display: grid;
+  gap: 8px;
+}
+
+.audio-check-results > div,
+.applied-dsp-settings {
+  background: #f7f9fc;
+  border: 1px solid #e1e7ef;
+  border-radius: 8px;
+  display: grid;
+  gap: 5px;
+  padding: 9px;
+}
+
+.audio-check-results .status-badge {
+  justify-self: start;
+}
+
 .inline-success {
   background: #e9f8f2;
   border: 1px solid #a9e4cb;
@@ -1623,7 +1741,8 @@ button.table-row {
   .suppression-row,
   .user-row,
   .contact-toolbar,
-  .inline-fields {
+  .inline-fields,
+  .audio-device-grid {
     grid-template-columns: 1fr;
   }
 

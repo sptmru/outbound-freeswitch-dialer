@@ -41,6 +41,7 @@ Only nginx is intended as the public HTTP entrypoint. Grafana is routed by hostn
 
 - React/Vite agent and administrator UI.
 - SIP.js softphone registration over WSS, started only on Agent Desk.
+- Agent Desk keeps audio-device and microphone-processing preferences in browser storage. The selected input is passed into SIP.js capture constraints, the selected output is applied with the browser `setSinkId` capability when available, and the readiness check analyzes a short local microphone sample plus ICE candidate gathering without persisting raw audio.
 - Credentialed REST calls and `EventSource` subscription to `/agent/events`.
 - Periodic HTTP refresh remains as fallback because SSE carries invalidation hints, not full state.
 - No browser persistence of the session JWT and no JWT-bearing audio URLs.

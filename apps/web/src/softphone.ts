@@ -1,13 +1,26 @@
 import { useEffect, useRef, useState } from "react";
 import { Invitation, Registerer, RegistererState, SessionState, UserAgent } from "sip.js";
 import { fetchSoftphoneProvisioning, submitBrowserMediaTelemetry } from "./api";
-import { BrowserMediaTelemetryCollector, microphoneConstraints } from "./browser-media";
+import {
+  buildMicrophoneConstraints,
+  classifyAudioSignal,
+  classifyNetworkReadiness,
+  readAppliedMicrophoneSettings
+} from "./audio-setup";
+import type {
+  AppliedMicrophoneSettings,
+  AudioCheckResult,
+  AudioDeviceOption,
+  AudioSignalStatus,
+  MicrophoneProcessingProfile
+} from "./audio-setup";
+import { BrowserMediaTelemetryCollector } from "./browser-media";
 import type { PublicUser } from "./types";
 
 export type SoftphoneRuntimeState =
   "idle" | "requesting_microphone" | "registering" | "registered" | "failed";
 
-export interface SoftphoneRuntime {
+interface SoftphoneCoreRuntime {
   registered: boolean;
   microphoneAllowed: boolean;
   state: SoftphoneRuntimeState;
@@ -23,7 +36,31 @@ export interface SoftphoneRuntime {
   retryRemoteAudio: () => Promise<void>;
 }
 
-const idleRuntime: SoftphoneRuntime = {
+export interface AudioSetupRuntime {
+  appliedSettings: AppliedMicrophoneSettings | null;
+  checkError: string | null;
+  checkResult: AudioCheckResult | null;
+  checking: boolean;
+  inputDevices: AudioDeviceOption[];
+  inputLevel: number;
+  outputDevices: AudioDeviceOption[];
+  outputSelectionSupported: boolean;
+  processingProfile: MicrophoneProcessingProfile;
+  selectedInputId: string;
+  selectedOutputId: string;
+  signalStatus: AudioSignalStatus;
+}
+
+export interface SoftphoneRuntime extends SoftphoneCoreRuntime {
+  audioSetup: AudioSetupRuntime;
+  refreshAudioDevices: () => Promise<void>;
+  runAudioCheck: () => Promise<void>;
+  selectMicrophone: (deviceId: string) => void;
+  selectSpeaker: (deviceId: string) => Promise<void>;
+  setMicrophoneProcessingProfile: (profile: MicrophoneProcessingProfile) => void;
+}
+
+const idleRuntime: SoftphoneCoreRuntime = {
   registered: false,
   microphoneAllowed: false,
   state: "idle",
@@ -39,6 +76,28 @@ const idleRuntime: SoftphoneRuntime = {
   retryRemoteAudio: async () => undefined
 };
 
+const initialAudioSetup: AudioSetupRuntime = {
+  appliedSettings: null,
+  checkError: null,
+  checkResult: null,
+  checking: false,
+  inputDevices: [],
+  inputLevel: 0,
+  outputDevices: [],
+  outputSelectionSupported:
+    typeof HTMLMediaElement !== "undefined" && "setSinkId" in HTMLMediaElement.prototype,
+  processingProfile: "office",
+  selectedInputId: "",
+  selectedOutputId: "",
+  signalStatus: "idle"
+};
+
+const audioInputStorageKey = "outbound_dialer_audio_input_id";
+const audioOutputStorageKey = "outbound_dialer_audio_output_id";
+const audioProfileStorageKey = "outbound_dialer_audio_processing_profile";
+const audioCheckDurationMs = 3_000;
+const iceGatheringTimeoutMs = 4_000;
+
 const registrationTimeoutMs = 20_000;
 const mediaTelemetrySampleIntervalMs = 5_000;
 const mediaTelemetryUploadEverySamples = 6;
@@ -53,10 +112,10 @@ type ActiveBrowserMediaTelemetry = {
 };
 
 function toRegistrationFailureRuntime(
-  current: SoftphoneRuntime,
+  current: SoftphoneCoreRuntime,
   detail: string,
   error: string
-): SoftphoneRuntime {
+): SoftphoneCoreRuntime {
   return {
     ...current,
     registered: false,
@@ -70,7 +129,7 @@ function toRegistrationFailureRuntime(
   };
 }
 
-function toCallIdleRuntime(current: SoftphoneRuntime, registeredDetail: string): SoftphoneRuntime {
+function toCallIdleRuntime(current: SoftphoneCoreRuntime, registeredDetail: string): SoftphoneCoreRuntime {
   return {
     ...current,
     callState: "none",
@@ -111,8 +170,116 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
   const invitationRef = useRef<Invitation | null>(null);
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
   const browserMediaTelemetryRef = useRef<ActiveBrowserMediaTelemetry | null>(null);
+  const iceServersRef = useRef<RTCIceServer[]>([]);
   const registrationGenerationRef = useRef(0);
-  const [runtime, setRuntime] = useState<SoftphoneRuntime>(idleRuntime);
+  const [runtime, setRuntime] = useState<SoftphoneCoreRuntime>(idleRuntime);
+  const [audioSetup, setAudioSetup] = useState<AudioSetupRuntime>(() => loadAudioSetup());
+  const selectedOutputRef = useRef(audioSetup.selectedOutputId);
+  selectedOutputRef.current = audioSetup.selectedOutputId;
+  const microphoneConstraints = buildMicrophoneConstraints(
+    audioSetup.processingProfile,
+    audioSetup.selectedInputId
+  );
+
+  function selectMicrophone(deviceId: string) {
+    if (runtime.callState !== "none") return;
+    persistPreference(audioInputStorageKey, deviceId);
+    setAudioSetup((current) => ({
+      ...current,
+      appliedSettings: null,
+      checkError: null,
+      checkResult: null,
+      selectedInputId: deviceId,
+      signalStatus: "idle"
+    }));
+  }
+
+  async function selectSpeaker(deviceId: string) {
+    persistPreference(audioOutputStorageKey, deviceId);
+    setAudioSetup((current) => ({ ...current, checkError: null, selectedOutputId: deviceId }));
+    const audio = remoteAudioRef.current;
+    if (audio) {
+      try {
+        await applyAudioOutput(audio, deviceId);
+      } catch (error) {
+        setAudioSetup((current) => ({
+          ...current,
+          checkError: error instanceof Error ? error.message : "Could not select this speaker"
+        }));
+      }
+    }
+  }
+
+  function setMicrophoneProcessingProfile(profile: MicrophoneProcessingProfile) {
+    if (runtime.callState !== "none") return;
+    persistPreference(audioProfileStorageKey, profile);
+    setAudioSetup((current) => ({
+      ...current,
+      appliedSettings: null,
+      checkError: null,
+      checkResult: null,
+      processingProfile: profile,
+      signalStatus: "idle"
+    }));
+  }
+
+  async function refreshAudioDevices() {
+    if (!navigator.mediaDevices?.enumerateDevices) return;
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    setAudioSetup((current) => reconcileAudioDevices(current, devices));
+  }
+
+  async function runAudioCheck() {
+    if (!navigator.mediaDevices?.getUserMedia || audioSetup.checking || runtime.callState !== "none") {
+      return;
+    }
+    setAudioSetup((current) => ({
+      ...current,
+      checkError: null,
+      checkResult: null,
+      checking: true,
+      inputLevel: 0,
+      signalStatus: "listening"
+    }));
+
+    let stream: MediaStream | null = null;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: microphoneConstraints, video: false });
+      const track = firstAudioTrack(stream);
+      if (!track) throw new Error("The selected microphone did not provide an audio track");
+      const appliedSettings = readAppliedMicrophoneSettings(track);
+      setAudioSetup((current) => ({ ...current, appliedSettings }));
+      await refreshAudioDevices();
+      const [signal, candidateTypes] = await Promise.all([
+        measureMicrophoneSignal(stream, (inputLevel) => {
+          setAudioSetup((current) => ({ ...current, inputLevel }));
+        }),
+        gatherIceCandidateTypes(iceServersRef.current)
+      ]);
+      const result: AudioCheckResult = {
+        appliedSettings,
+        ...classifyAudioSignal(signal),
+        ...classifyNetworkReadiness({ candidateTypes, registered: runtime.registered })
+      };
+      setAudioSetup((current) => ({
+        ...current,
+        checkResult: result,
+        checking: false,
+        inputLevel: result.inputPeakPercent / 100,
+        signalStatus: result.signalStatus
+      }));
+    } catch (error) {
+      setAudioSetup((current) => ({
+        ...current,
+        checkError: error instanceof Error ? error.message : "Audio check failed",
+        checking: false,
+        inputLevel: 0,
+        signalStatus: "idle"
+      }));
+    } finally {
+      stream?.getTracks().forEach((track) => track.stop());
+    }
+  }
 
   async function answerIncomingCall() {
     const invitation = invitationRef.current;
@@ -173,6 +340,14 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
     clearRemoteAudio();
     setRuntime((current) => toCallIdleRuntime(current, "Ready for calls"));
   }
+
+  useEffect(() => {
+    if (!user || !navigator.mediaDevices?.enumerateDevices) return;
+    const updateDevices = () => void refreshAudioDevices().catch(() => undefined);
+    updateDevices();
+    navigator.mediaDevices.addEventListener?.("devicechange", updateDevices);
+    return () => navigator.mediaDevices.removeEventListener?.("devicechange", updateDevices);
+  }, [user?.id]);
 
   useEffect(() => {
     const generation = ++registrationGenerationRef.current;
@@ -255,6 +430,12 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
           audio: microphoneConstraints,
           video: false
         });
+        const microphoneTrack = firstAudioTrack(mediaStream);
+        if (microphoneTrack) {
+          const appliedSettings = readAppliedMicrophoneSettings(microphoneTrack);
+          setAudioSetup((current) => ({ ...current, appliedSettings }));
+        }
+        await refreshAudioDevices();
         mediaStream.getTracks().forEach((track) => track.stop());
         mediaStream = null;
         if (!isCurrent()) {
@@ -279,6 +460,7 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
         if (!isCurrent()) {
           return;
         }
+        iceServersRef.current = provisioning.iceServers;
         const uri = UserAgent.makeURI(provisioning.sipUri);
         if (!uri) {
           throw new Error("Invalid SIP provisioning URI");
@@ -506,9 +688,17 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
       clearRemoteAudio();
       void stopCurrentRegistration();
     };
-  }, [user?.id]);
+  }, [audioSetup.processingProfile, audioSetup.selectedInputId, user?.id]);
 
-  return runtime;
+  return {
+    ...runtime,
+    audioSetup,
+    refreshAudioDevices,
+    runAudioCheck,
+    selectMicrophone,
+    selectSpeaker,
+    setMicrophoneProcessingProfile
+  };
 
   async function retryRemoteAudio() {
     const audio = remoteAudioRef.current;
@@ -554,6 +744,7 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
     const audio = remoteAudioRef.current ?? document.createElement("audio");
     audio.autoplay = true;
     audio.srcObject = remoteStream;
+    await applyAudioOutput(audio, selectedOutputRef.current).catch(() => undefined);
     if (!remoteAudioRef.current) {
       audio.style.display = "none";
       document.body.appendChild(audio);
@@ -640,7 +831,143 @@ function getPeerConnection(invitation: Invitation): RTCPeerConnection | null {
   return handler?.peerConnection ?? null;
 }
 
+function loadAudioSetup(): AudioSetupRuntime {
+  if (typeof window === "undefined") return initialAudioSetup;
+  const storedProfile = window.localStorage.getItem(audioProfileStorageKey);
+  const processingProfile: MicrophoneProcessingProfile =
+    storedProfile === "headset" || storedProfile === "natural" ? storedProfile : "office";
+  return {
+    ...initialAudioSetup,
+    processingProfile,
+    selectedInputId: window.localStorage.getItem(audioInputStorageKey) ?? "",
+    selectedOutputId: window.localStorage.getItem(audioOutputStorageKey) ?? ""
+  };
+}
+
+function persistPreference(key: string, value: string) {
+  if (typeof window === "undefined") return;
+  if (value) window.localStorage.setItem(key, value);
+  else window.localStorage.removeItem(key);
+}
+
+function reconcileAudioDevices(current: AudioSetupRuntime, devices: MediaDeviceInfo[]): AudioSetupRuntime {
+  const inputs = devices.filter((device) => device.kind === "audioinput");
+  const outputs = devices.filter((device) => device.kind === "audiooutput");
+  const inputDevices = toDeviceOptions(inputs, "Microphone");
+  const outputDevices = toDeviceOptions(outputs, "Speaker");
+  const selectedInputId = inputs.some((device) => device.deviceId === current.selectedInputId)
+    ? current.selectedInputId
+    : "";
+  const selectedOutputId = outputs.some((device) => device.deviceId === current.selectedOutputId)
+    ? current.selectedOutputId
+    : "";
+  if (selectedInputId !== current.selectedInputId) persistPreference(audioInputStorageKey, selectedInputId);
+  if (selectedOutputId !== current.selectedOutputId)
+    persistPreference(audioOutputStorageKey, selectedOutputId);
+  return { ...current, inputDevices, outputDevices, selectedInputId, selectedOutputId };
+}
+
+function toDeviceOptions(devices: MediaDeviceInfo[], fallback: string): AudioDeviceOption[] {
+  return devices.map((device, index) => ({
+    deviceId: device.deviceId,
+    label: device.label || `${fallback} ${index + 1}`
+  }));
+}
+
+function firstAudioTrack(stream: MediaStream): MediaStreamTrack | undefined {
+  return stream.getAudioTracks?.()[0] ?? stream.getTracks()[0];
+}
+
+async function applyAudioOutput(audio: HTMLAudioElement, deviceId: string): Promise<void> {
+  const sinkable = audio as HTMLAudioElement & { setSinkId?: (sinkId: string) => Promise<void> };
+  if (!sinkable.setSinkId) return;
+  await sinkable.setSinkId(deviceId || "default");
+}
+
+async function measureMicrophoneSignal(
+  stream: MediaStream,
+  onLevel: (level: number) => void
+): Promise<{ clippedSamples: number; maxPeak: number; maxRms: number; totalSamples: number }> {
+  if (typeof AudioContext === "undefined") {
+    throw new Error("This browser cannot analyze microphone levels");
+  }
+  const context = new AudioContext();
+  const source = context.createMediaStreamSource(stream);
+  const analyser = context.createAnalyser();
+  analyser.fftSize = 2048;
+  source.connect(analyser);
+  const samples = new Float32Array(analyser.fftSize);
+  let clippedSamples = 0;
+  let maxPeak = 0;
+  let maxRms = 0;
+  let totalSamples = 0;
+  const startedAt = performance.now();
+
+  try {
+    while (performance.now() - startedAt < audioCheckDurationMs) {
+      analyser.getFloatTimeDomainData(samples);
+      let squareTotal = 0;
+      let framePeak = 0;
+      for (const sample of samples) {
+        const absolute = Math.abs(sample);
+        squareTotal += sample * sample;
+        framePeak = Math.max(framePeak, absolute);
+        if (absolute >= 0.995) clippedSamples += 1;
+      }
+      const rms = Math.sqrt(squareTotal / samples.length);
+      maxPeak = Math.max(maxPeak, framePeak);
+      maxRms = Math.max(maxRms, rms);
+      totalSamples += samples.length;
+      onLevel(Math.min(1, Math.max(rms * 4, framePeak)));
+      await new Promise((resolve) => window.setTimeout(resolve, 80));
+    }
+  } finally {
+    source.disconnect();
+    analyser.disconnect();
+    await context.close().catch(() => undefined);
+  }
+  return { clippedSamples, maxPeak, maxRms, totalSamples };
+}
+
+async function gatherIceCandidateTypes(iceServers: RTCIceServer[]): Promise<Set<string>> {
+  if (typeof RTCPeerConnection === "undefined") return new Set();
+  const peerConnection = new RTCPeerConnection({ iceServers });
+  const candidateTypes = new Set<string>();
+  try {
+    peerConnection.createDataChannel("audio-readiness");
+    peerConnection.addEventListener("icecandidate", (event) => {
+      if (!event.candidate) return;
+      const type =
+        event.candidate.type || /\btyp\s+(host|srflx|prflx|relay)\b/.exec(event.candidate.candidate)?.[1];
+      if (type) candidateTypes.add(type);
+    });
+    await peerConnection.setLocalDescription(await peerConnection.createOffer());
+    await new Promise<void>((resolve) => {
+      if (peerConnection.iceGatheringState === "complete") {
+        resolve();
+        return;
+      }
+      const timeout = window.setTimeout(resolve, iceGatheringTimeoutMs);
+      peerConnection.addEventListener(
+        "icegatheringstatechange",
+        () => {
+          if (peerConnection.iceGatheringState === "complete") {
+            window.clearTimeout(timeout);
+            resolve();
+          }
+        },
+        { once: false }
+      );
+    });
+    return candidateTypes;
+  } finally {
+    peerConnection.close();
+  }
+}
+
 export const __testing = {
+  applyAudioOutput,
+  reconcileAudioDevices,
   formatRegisterRejectError,
   stopSoftphoneRegistration,
   toCallIdleRuntime,

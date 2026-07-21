@@ -1,17 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import { BrowserMediaTelemetryCollector, microphoneConstraints } from "./browser-media";
+import { BrowserMediaTelemetryCollector } from "./browser-media";
 
 describe("browser media telemetry", () => {
-  it("requests mono browser audio processing without forcing an 8 kHz capture rate", () => {
-    expect(microphoneConstraints).toEqual({
-      autoGainControl: true,
-      channelCount: 1,
-      echoCancellation: true,
-      noiseSuppression: true
-    });
-    expect(microphoneConstraints).not.toHaveProperty("sampleRate");
-  });
-
   it("summarizes browser playout, remote receive, microphone and ICE evidence", async () => {
     const report = new Map<string, Record<string, unknown>>([
       ["in-codec", { id: "in-codec", type: "codec", mimeType: "audio/PCMU" }],

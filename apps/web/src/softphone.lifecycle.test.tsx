@@ -81,6 +81,9 @@ import { useSoftphoneRegistration } from "./softphone";
 describe("softphone registration lifecycle", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    window.localStorage.removeItem("outbound_dialer_audio_input_id");
+    window.localStorage.removeItem("outbound_dialer_audio_output_id");
+    window.localStorage.removeItem("outbound_dialer_audio_processing_profile");
     mocks.registerers.length = 0;
     mocks.userAgents.length = 0;
     mocks.start.mockResolvedValue(undefined);
@@ -92,6 +95,27 @@ describe("softphone registration lifecycle", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  it("uses the saved microphone and processing profile for registration capture", async () => {
+    window.localStorage.setItem("outbound_dialer_audio_input_id", "usb-mic");
+    window.localStorage.setItem("outbound_dialer_audio_processing_profile", "headset");
+    setGetUserMedia(async () => mediaStream());
+
+    const { unmount } = renderHook(() => useSoftphoneRegistration(user));
+    await waitFor(() => expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalledTimes(1));
+
+    expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalledWith({
+      audio: {
+        autoGainControl: false,
+        channelCount: 1,
+        deviceId: { exact: "usb-mic" },
+        echoCancellation: true,
+        noiseSuppression: true
+      },
+      video: false
+    });
+    unmount();
   });
 
   it("stops microphone tracks that resolve after the desk unmounts", async () => {
