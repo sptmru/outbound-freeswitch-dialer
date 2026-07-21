@@ -187,7 +187,6 @@ async function getActiveCall(pool: pg.Pool, userId: string): Promise<AgentDeskRe
     destination_number: string;
     contact_name: string | null;
     started_at: Date | null;
-    answered_at: Date | null;
     voicemail_signal_status: string | null;
     recording_id: string | null;
     recording_name: string | null;
@@ -202,7 +201,6 @@ async function getActiveCall(pool: pg.Pool, userId: string): Promise<AgentDeskRe
         calls.destination_number,
         contacts.display_name as contact_name,
         calls.started_at,
-        calls.answered_at,
         calls.voicemail_signal_status,
         calls.recording_id,
         calls.call_recording_enabled,
@@ -228,8 +226,7 @@ async function getActiveCall(pool: pg.Pool, userId: string): Promise<AgentDeskRe
     return null;
   }
 
-  const startedAt = row.answered_at ?? row.started_at;
-  const durationSeconds = startedAt ? Math.max(0, Math.floor((Date.now() - startedAt.getTime()) / 1000)) : 0;
+  const durationSeconds = calculateActiveCallDuration(row.started_at);
 
   return {
     id: row.id,
@@ -246,6 +243,10 @@ async function getActiveCall(pool: pg.Pool, userId: string): Promise<AgentDeskRe
     actions: getActiveCallActions(row.state, row.customer_leg_uuid),
     timeline: await getCallTimeline(pool, row.id)
   };
+}
+
+export function calculateActiveCallDuration(startedAt: Date | null, now = Date.now()): number {
+  return startedAt ? Math.max(0, Math.floor((now - startedAt.getTime()) / 1000)) : 0;
 }
 
 export function getActiveCallActions(

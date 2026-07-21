@@ -1523,6 +1523,7 @@ function ActiveCall({
   softphone: SoftphoneRuntime;
 }) {
   const activeCall = desk.activeCall as ActiveCallUi | null;
+  const displayedDurationSeconds = useActiveCallDuration(activeCall);
   const defaultRecordingId = activeCall?.recordingId ?? desk.recordings[0]?.id ?? "";
   const [selectedRecordingId, setSelectedRecordingId] = useState(defaultRecordingId);
   useEffect(() => {
@@ -1578,8 +1579,8 @@ function ActiveCall({
       <div className="call-stage">
         <div className="call-stage-top">
           <span>{softphone.audioPlaybackState === "playing" ? "Live audio" : "Call audio"}</span>
-          <strong aria-label={`Call duration ${formatDuration(activeCall.durationSeconds)}`}>
-            {formatDuration(activeCall.durationSeconds)}
+          <strong aria-label={`Call duration ${formatDuration(displayedDurationSeconds)}`}>
+            {formatDuration(displayedDurationSeconds)}
           </strong>
         </div>
         <div className="audio-waveform" aria-hidden="true">
@@ -1719,6 +1720,42 @@ function ActiveCall({
       </div>
     </article>
   );
+}
+
+function useActiveCallDuration(activeCall: ActiveCallUi | null): number {
+  const callId = activeCall?.id ?? null;
+  const serverDurationSeconds = activeCall?.durationSeconds ?? 0;
+  const [durationSeconds, setDurationSeconds] = useState(serverDurationSeconds);
+  const clockRef = useRef<{ callId: string; startedAt: number } | null>(null);
+
+  useEffect(() => {
+    if (!callId) {
+      clockRef.current = null;
+      setDurationSeconds(0);
+      return;
+    }
+
+    const serverStartedAt = Date.now() - serverDurationSeconds * 1000;
+    if (clockRef.current?.callId !== callId) {
+      clockRef.current = { callId, startedAt: serverStartedAt };
+    } else {
+      clockRef.current.startedAt = Math.min(clockRef.current.startedAt, serverStartedAt);
+    }
+    setDurationSeconds(Math.floor((Date.now() - clockRef.current.startedAt) / 1000));
+  }, [callId, serverDurationSeconds]);
+
+  useEffect(() => {
+    if (!callId) return undefined;
+    const interval = window.setInterval(() => {
+      const clock = clockRef.current;
+      if (clock?.callId === callId) {
+        setDurationSeconds(Math.floor((Date.now() - clock.startedAt) / 1000));
+      }
+    }, 1000);
+    return () => window.clearInterval(interval);
+  }, [callId]);
+
+  return callId ? durationSeconds : 0;
 }
 
 type ActiveCallUi = NonNullable<AgentDeskResponse["activeCall"]> & { campaignName?: string };

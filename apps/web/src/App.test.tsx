@@ -1092,6 +1092,43 @@ describe("App Agent Desk empty states", () => {
     expect(screen.getByText("Wait until the customer is connected")).toBeInTheDocument();
   });
 
+  it("advances the active call timer every second without resetting on answer", async () => {
+    vi.useFakeTimers();
+    apiMocks.fetchAgentDesk
+      .mockResolvedValueOnce(
+        deskResponse({
+          activeCall: activeCallRow({ durationSeconds: 8, state: "customer_ringing", status: "ringing" })
+        })
+      )
+      .mockResolvedValue(
+        deskResponse({
+          activeCall: activeCallRow({ durationSeconds: 10, state: "bridged", status: "bridged" })
+        })
+      );
+
+    try {
+      render(<App />);
+      await vi.waitFor(() => expect(screen.getByLabelText("Call duration 00:08")).toBeInTheDocument());
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+      expect(screen.getByLabelText("Call duration 00:09")).toBeInTheDocument();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+      expect(screen.getByLabelText("Call duration 00:10")).toBeInTheDocument();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+      expect(screen.getByLabelText("Call duration 00:11")).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("fails closed when call-action eligibility is missing", async () => {
     apiMocks.fetchAgentDesk.mockResolvedValue(
       deskResponse({ activeCall: activeCallRow({ actions: undefined as never }) })

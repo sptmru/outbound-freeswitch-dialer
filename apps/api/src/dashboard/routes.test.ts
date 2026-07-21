@@ -20,7 +20,7 @@ import {
 import { CsvImportError, importContactsFromCsv, importSuppressionFromCsv, parseCsv } from "./csv.js";
 import { validateDialableNumber } from "./manual-dial.js";
 import { normalizePhoneNumber } from "./phone.js";
-import { getCallHistoryPage } from "./responders.js";
+import { calculateActiveCallDuration, getCallHistoryPage } from "./responders.js";
 import { __testing, registerDashboardRoutes } from "./routes.js";
 
 const selectedCampaignId = "11111111-1111-4111-8111-111111111111";
@@ -30,6 +30,13 @@ const config = {
 } as AppConfig;
 
 describe("dashboard route helpers", () => {
+  it("keeps active call duration anchored to the call start", () => {
+    const startedAt = new Date("2026-07-21T08:00:00.000Z");
+
+    assert.equal(calculateActiveCallDuration(startedAt, new Date("2026-07-21T08:00:12.900Z").getTime()), 12);
+    assert.equal(calculateActiveCallDuration(null), 0);
+  });
+
   it("rejects an oversized legacy JSON CSV body before authentication or database work", async () => {
     const app = Fastify();
     const pool = {
