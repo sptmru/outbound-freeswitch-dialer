@@ -91,13 +91,19 @@ describe("call lifecycle", () => {
       }
     } as unknown as pg.PoolClient;
 
-    await __testing.getCallableContactForUpdate(client, "contact-1", {
-      maxAttempts: 5,
-      retryDelaySeconds: 60
-    });
+    await __testing.getCallableContactForUpdate(
+      client,
+      "contact-1",
+      {
+        maxAttempts: 5,
+        retryDelaySeconds: 60
+      },
+      false
+    );
 
-    assert.deepEqual(queries[0]?.params, ["contact-1", 5, 60]);
-    assert.match(queries[0]?.sql ?? "", /attempt_count < \$2/);
+    assert.deepEqual(queries[0]?.params, ["contact-1", false, 5, 60]);
+    assert.match(queries[0]?.sql ?? "", /contacts\.status = 'completed' and \$2 = true/);
+    assert.match(queries[0]?.sql ?? "", /attempt_count < \$3/);
     assert.match(queries[0]?.sql ?? "", /last_attempted_at <=/);
   });
 

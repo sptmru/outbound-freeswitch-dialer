@@ -600,6 +600,7 @@ add(
   "Starts a call to a specific contact when it is eligible.",
   {
     params: contactParams,
+    body: ref("StartLeadCallRequest"),
     success: ref("AgentDeskResponse"),
     errors: [...agentErrors, 404, 409]
   }

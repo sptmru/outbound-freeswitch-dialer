@@ -37,6 +37,7 @@ import type {
   SuppressionListResponse,
   SendDtmfRequest,
   SoftphoneProvisioningResponse,
+  StartLeadCallRequest,
   StartNextCallRequest,
   StartManualCallRequest,
   SuppressContactRequest,
@@ -404,9 +405,13 @@ export async function startNextCall(input: StartNextCallRequest = {}): Promise<A
   });
 }
 
-export async function startLeadCall(contactId: string): Promise<AgentDeskResponse> {
+export async function startLeadCall(
+  contactId: string,
+  input: StartLeadCallRequest = {}
+): Promise<AgentDeskResponse> {
   return apiFetch<AgentDeskResponse>(`/agent/leads/${contactId}/call`, {
-    method: "POST"
+    method: "POST",
+    body: JSON.stringify(input)
   });
 }
 

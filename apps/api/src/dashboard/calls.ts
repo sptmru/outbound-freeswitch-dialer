@@ -88,7 +88,8 @@ async function getNextCallableContactForUpdate(
 async function getCallableContactForUpdate(
   client: pg.PoolClient,
   contactId: string,
-  retryPolicy: { maxAttempts: number; retryDelaySeconds: number }
+  retryPolicy: { maxAttempts: number; retryDelaySeconds: number },
+  confirmCompletedLead: boolean
 ): Promise<LockedCallableContact | null> {
   const result = await client.query<{
     id: string;
@@ -112,17 +113,23 @@ async function getCallableContactForUpdate(
         on suppression_entries.normalized_phone_number = contacts.normalized_phone_number
       where contacts.id = $1
         and campaigns.status = 'active'
-        and contacts.status not in ('calling', 'completed', 'suppressed')
-        and contacts.attempt_count < $2
+        and contacts.status not in ('calling', 'suppressed')
         and (
-          contacts.last_attempted_at is null
-          or contacts.last_attempted_at <= now() - make_interval(secs => $3)
+          (contacts.status = 'completed' and $2 = true)
+          or (
+            contacts.status <> 'completed'
+            and contacts.attempt_count < $3
+            and (
+              contacts.last_attempted_at is null
+              or contacts.last_attempted_at <= now() - make_interval(secs => $4)
+            )
+          )
         )
         and suppression_entries.id is null
       limit 1
       for update of contacts
     `,
-    [contactId, retryPolicy.maxAttempts, retryPolicy.retryDelaySeconds]
+    [contactId, confirmCompletedLead, retryPolicy.maxAttempts, retryPolicy.retryDelaySeconds]
   );
 
   const row = result.rows[0];
@@ -186,6 +193,7 @@ export async function createDialerCall(
     manualDial: boolean;
     callRecordingEnabled: boolean;
     earlyMediaAvmdEnabled: boolean;
+    confirmCompletedLead?: boolean;
     eventType: string;
   }
 ): Promise<CreateDialerCallResult> {
@@ -278,10 +286,15 @@ export async function createDialerCall(
         normalizedDestinationNumber: contact.normalizedPhoneNumber
       };
     } else if (input.contactId) {
-      const contact = await getCallableContactForUpdate(client, input.contactId, {
-        maxAttempts: config.CONTACT_MAX_ATTEMPTS,
-        retryDelaySeconds: config.CONTACT_RETRY_DELAY_SECONDS
-      });
+      const contact = await getCallableContactForUpdate(
+        client,
+        input.contactId,
+        {
+          maxAttempts: config.CONTACT_MAX_ATTEMPTS,
+          retryDelaySeconds: config.CONTACT_RETRY_DELAY_SECONDS
+        },
+        input.confirmCompletedLead === true
+      );
       if (!contact) {
         await client.query("rollback");
         return { ok: false, reason: "lead_not_callable" };
@@ -367,7 +380,8 @@ export async function createDialerCall(
         input.eventType,
         JSON.stringify({
           destinationNumber: callContext.destinationNumber,
-          manualDial: input.manualDial
+          manualDial: input.manualDial,
+          confirmCompletedLead: input.confirmCompletedLead === true
         })
       ]
     );

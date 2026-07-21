@@ -40,6 +40,7 @@ export type {
   SuppressionListResponse,
   SendDtmfRequest,
   SoftphoneProvisioningResponse,
+  StartLeadCallRequest,
   StartNextCallRequest,
   StartManualCallRequest,
   SuppressContactRequest,

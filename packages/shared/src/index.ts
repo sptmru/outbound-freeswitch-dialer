@@ -746,6 +746,10 @@ export interface StartNextCallRequest {
   campaignId?: string;
 }
 
+export interface StartLeadCallRequest {
+  confirmCompletedLead?: boolean;
+}
+
 export interface EndCallRequest {
   campaignId?: string;
 }

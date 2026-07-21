@@ -44,6 +44,7 @@ import type {
   SoftphoneProvisioningResponse,
   SuppressionImportResponse,
   SuppressionListResponse,
+  StartLeadCallRequest,
   StartNextCallRequest,
   StartManualCallRequest,
   SuppressContactRequest,
@@ -139,6 +140,10 @@ const manualDialValidationSchema = z.object({
 const startNextCallSchema = z.object({
   campaignId: z.string().uuid().optional()
 }) satisfies z.ZodType<StartNextCallRequest>;
+
+const startLeadCallSchema = z.object({
+  confirmCompletedLead: z.boolean().optional()
+}) satisfies z.ZodType<StartLeadCallRequest>;
 
 const endCallSchema = z.object({
   campaignId: z.string().uuid().optional()
@@ -852,6 +857,7 @@ export function registerDashboardRoutes(
 
     const publicUser = toPublicUser(user);
     const params = z.object({ contactId: z.string().uuid() }).parse(request.params);
+    const input = startLeadCallSchema.parse(request.body ?? {});
     const agent = await ensureAgentForUser(pool, config, publicUser);
     const created = await createDialerCall(pool, config, {
       agentId: agent.id,
@@ -861,6 +867,7 @@ export function registerDashboardRoutes(
       manualDial: false,
       callRecordingEnabled: false,
       earlyMediaAvmdEnabled: false,
+      confirmCompletedLead: input.confirmCompletedLead === true,
       eventType: "lead_call_started"
     });
     if (!created.ok) {

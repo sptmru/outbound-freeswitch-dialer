@@ -835,9 +835,16 @@ function AgentDesk({
       setCallNextError(callStartBlockedMessage(desk, softphone));
       return;
     }
+    const confirmCompletedLead = lead.status === "completed";
+    if (
+      confirmCompletedLead &&
+      !window.confirm("This lead has already been called. Are you sure you want to call them again?")
+    ) {
+      return;
+    }
     setCallNextError(null);
     try {
-      await runCallStart(() => startLeadCall(lead.id));
+      await runCallStart(() => startLeadCall(lead.id, { confirmCompletedLead }));
     } catch (error) {
       setCallNextError(error instanceof Error ? error.message : "Could not start lead call");
     }
@@ -1142,7 +1149,9 @@ function LeadQueue({
                 {showRecommendedCall && (
                   <button
                     className="pill-action"
-                    disabled={pending || lead.status !== "ready" || !canStartCalls}
+                    disabled={
+                      pending || (lead.status !== "ready" && lead.status !== "completed") || !canStartCalls
+                    }
                     onClick={() => onCallLead(lead)}
                     type="button"
                   >

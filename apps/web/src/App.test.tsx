@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App, formatCallLifecycleStatus } from "./App";
 import type {
   AdminAnalyticsResponse,
@@ -27,6 +27,7 @@ const apiMocks = vi.hoisted(() => ({
   getCallRecordingAudioUrl: vi.fn(),
   logout: vi.fn(),
   sendDtmf: vi.fn(),
+  startLeadCall: vi.fn(),
   startManualCall: vi.fn(),
   startNextCall: vi.fn(),
   subscribeAgentEvents: vi.fn(),
@@ -72,6 +73,7 @@ vi.mock("./api", async () => {
     getCallRecordingAudioUrl: apiMocks.getCallRecordingAudioUrl,
     logout: apiMocks.logout,
     sendDtmf: apiMocks.sendDtmf,
+    startLeadCall: apiMocks.startLeadCall,
     startManualCall: apiMocks.startManualCall,
     startNextCall: apiMocks.startNextCall,
     subscribeAgentEvents: apiMocks.subscribeAgentEvents,
@@ -102,6 +104,10 @@ const softphoneRuntime = {
 };
 
 describe("App Agent Desk empty states", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     window.history.replaceState({}, "", "/");
@@ -142,6 +148,7 @@ describe("App Agent Desk empty states", () => {
     apiMocks.getCallRecordingAudioUrl.mockResolvedValue("/api/media/ticketed-recording");
     apiMocks.logout.mockResolvedValue(undefined);
     apiMocks.sendDtmf.mockResolvedValue(deskResponse({ activeCall: activeCallRow() }));
+    apiMocks.startLeadCall.mockResolvedValue(deskResponse());
     apiMocks.startManualCall.mockResolvedValue(deskResponse());
     apiMocks.startNextCall.mockResolvedValue(deskResponse());
     apiMocks.subscribeAgentEvents.mockReturnValue(() => undefined);
@@ -917,6 +924,65 @@ describe("App Agent Desk empty states", () => {
     });
     expect(screen.queryByText("Pre-call checks")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Check number" })).not.toBeInTheDocument();
+  });
+
+  it("confirms before calling a completed lead again", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    apiMocks.useSoftphoneRegistration.mockReturnValue({ ...softphoneRuntime, registered: true });
+    apiMocks.fetchAgentDesk.mockResolvedValue(
+      deskResponse({
+        leads: [
+          {
+            id: "22222222-2222-4222-8222-222222222222",
+            name: "Avery Johnson",
+            company: "",
+            phoneNumber: "+15551234567",
+            status: "completed",
+            fields: []
+          }
+        ]
+      })
+    );
+
+    render(<App />);
+    fireEvent.click(
+      within(await screen.findByRole("table", { name: "Next leads" })).getByRole("button", { name: "Call" })
+    );
+
+    expect(confirm).toHaveBeenCalledWith(
+      "This lead has already been called. Are you sure you want to call them again?"
+    );
+    await waitFor(() => {
+      expect(apiMocks.startLeadCall).toHaveBeenCalledWith("22222222-2222-4222-8222-222222222222", {
+        confirmCompletedLead: true
+      });
+    });
+  });
+
+  it("does not call a completed lead when repeat confirmation is declined", async () => {
+    vi.spyOn(window, "confirm").mockReturnValue(false);
+    apiMocks.useSoftphoneRegistration.mockReturnValue({ ...softphoneRuntime, registered: true });
+    apiMocks.fetchAgentDesk.mockResolvedValue(
+      deskResponse({
+        leads: [
+          {
+            id: "22222222-2222-4222-8222-222222222222",
+            name: "Avery Johnson",
+            company: "",
+            phoneNumber: "+15551234567",
+            status: "completed",
+            fields: []
+          }
+        ]
+      })
+    );
+
+    render(<App />);
+    fireEvent.click(
+      within(await screen.findByRole("table", { name: "Next leads" })).getByRole("button", { name: "Call" })
+    );
+
+    expect(apiMocks.startLeadCall).not.toHaveBeenCalled();
   });
 
   it("does not start a manual and queued call concurrently", async () => {

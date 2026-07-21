@@ -51,7 +51,8 @@ This document is the current product and operational contract. Items described a
 ## Contact Retry Policy
 
 - Campaign contacts are selected transactionally with `FOR UPDATE SKIP LOCKED`.
-- Suppressed, completed, currently calling, and exhausted contacts are not callable.
+- Suppressed, currently calling, and exhausted contacts are not callable. Completed contacts are excluded
+  from automatic selection, but an agent may explicitly select one and confirm a repeat call.
 - `attempt_count` increments when a contact call is committed.
 - The default maximum is `CONTACT_MAX_ATTEMPTS=3`.
 - The default delay before a non-terminal contact becomes callable again is `CONTACT_RETRY_DELAY_SECONDS=900` (15 minutes).

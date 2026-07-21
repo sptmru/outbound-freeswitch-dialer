@@ -706,6 +706,60 @@ describe("dashboard route helpers", () => {
     assert.ok(clientQueries.some((query) => query.sql === "commit"));
   });
 
+  it("requires explicit confirmation to select a completed lead again", async () => {
+    const contactQueries: Array<{ params: readonly unknown[]; sql: string }> = [];
+    const pool = createTransactionalPool({
+      clientHandler: (sql, params) => {
+        if (sql.includes("select registered, availability_status from agents")) {
+          return rows([{ registered: true, availability_status: "available" }]);
+        }
+        if (sql.includes("from calls") && sql.includes("for update")) {
+          return rows([]);
+        }
+        if (sql.includes("from contacts") && sql.includes("for update of contacts")) {
+          contactQueries.push({ sql, params });
+          return params[1] === true
+            ? rows([
+                {
+                  id: "22222222-2222-4222-8222-222222222222",
+                  campaign_id: selectedCampaignId,
+                  phone_number: "+1 415 555 0100",
+                  normalized_phone_number: "+14155550100",
+                  call_recording_enabled: false,
+                  early_media_avmd_enabled: false
+                }
+              ])
+            : rows([]);
+        }
+        if (sql.includes("from recordings")) {
+          return rows([]);
+        }
+        if (sql.includes("insert into calls")) {
+          return rows([{ id: "44444444-4444-4444-8444-444444444444" }]);
+        }
+        return rows([]);
+      }
+    });
+
+    const result = await createDialerCall(pool, { ...config, FREESWITCH_ESL_ENABLED: false } as AppConfig, {
+      agentId: "33333333-3333-4333-8333-333333333333",
+      campaignId: null,
+      contactId: "22222222-2222-4222-8222-222222222222",
+      sipUsername: "agent1000",
+      manualDial: false,
+      callRecordingEnabled: false,
+      earlyMediaAvmdEnabled: false,
+      confirmCompletedLead: true,
+      eventType: "lead_call_started"
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(contactQueries.length, 1);
+    assert.equal(contactQueries[0]?.params[1], true);
+    assert.match(contactQueries[0]?.sql ?? "", /contacts\.status = 'completed' and \$2 = true/);
+    assert.match(contactQueries[0]?.sql ?? "", /contacts\.status not in \('calling', 'suppressed'\)/);
+  });
+
   it("maps call creation failure reasons to operator-facing messages", () => {
     assert.equal(createDialerCallFailureMessage("active_call"), "An active call is already in progress");
     assert.equal(

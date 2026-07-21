@@ -1895,6 +1895,12 @@
     "properties": { "campaignId": { "type": "string" } },
     "additionalProperties": false
   },
+  "StartLeadCallRequest": {
+    "$id": "StartLeadCallRequest",
+    "type": "object",
+    "properties": { "confirmCompletedLead": { "type": "boolean" } },
+    "additionalProperties": false
+  },
   "EndCallRequest": {
     "$id": "EndCallRequest",
     "type": "object",
