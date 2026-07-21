@@ -147,10 +147,10 @@ bridged
 1. The API checks that the call/customer UUID/recording/action are eligible.
 2. A transaction conditionally moves the call to `voicemail_drop_requested`; a repeated/concurrent request cannot claim it twice.
 3. ESL transfers the customer channel into the application-owned voicemail dialplan.
-4. FreeSWITCH emits a custom playback-start event before playing canonical audio.
-5. The API records `voicemail_playback_started`, asks FreeSWITCH to kill only the agent leg, and records `agent_released` only after confirmation or an already-absent-channel response.
-6. The agent becomes available for a new interactive call while the original customer leg remains visible as a background job.
-7. FreeSWITCH emits custom completion/failure evidence, while customer-channel terminal events classify interruption/hangup. Completion closes the call/contact as `voicemail_dropped`; incomplete playback records its technical event and terminal outcome.
+4. After the transfer succeeds, the API asks FreeSWITCH to kill only the agent leg and records `agent_released` only after confirmation or an already-absent-channel response. Originate watchdogs treat the missing agent leg as intentional in voicemail background states.
+5. The agent becomes available for a new interactive call while the original customer leg remains visible as a background job.
+6. FreeSWITCH emits comma-delimited custom event headers for playback start and completion/failure evidence; the API persists those events by call/customer-leg ID.
+7. Customer-channel terminal events classify interruption/hangup. Completion closes the call/contact as `voicemail_dropped`; incomplete playback records its technical event and terminal outcome.
 8. After ESL reconnect, the API checks customer/agent UUIDs. A live playback continues; an unconfirmed missing customer channel is finalized as incomplete rather than falsely successful.
 
 The event record is the source of lifecycle evidence. A local completion event still does not prove the remote mailbox recorded the entire message; production acceptance requires far-end verification.

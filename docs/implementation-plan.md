@@ -58,7 +58,7 @@ Firewall and host-published-port changes were excluded by instruction. They are 
 - Transactional/idempotent voicemail-drop claim.
 - Distinct lifecycle timestamps and events for request, playback start, agent release, completion, failure, and interruption.
 - FreeSWITCH custom events emitted from the voicemail dialplan; completion is no longer inferred immediately from transfer.
-- Agent release occurs after playback-start evidence and only advances database state after confirmed release/already-missing channel.
+- Agent release occurs immediately after a successful voicemail transfer and only advances database state after confirmed release/already-missing channel; originate watchdogs ignore that intentional absence during voicemail background states.
 - Customer leg stays tracked as a background job until a terminal event; the agent may start another interactive call after release.
 - Reconciliation handles lost/restarted listeners without claiming a missing customer channel completed successfully.
 - WAV/MP3 upload is decoded and converted by ffmpeg/ffprobe to mono 8 kHz PCM WAV with loudness normalization and a five-minute limit.

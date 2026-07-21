@@ -52,6 +52,19 @@ test("production proxy accepts the configured voicemail upload envelope", async 
   assert.match(proxyEntrypoint, /grep -Eq '\^\[1-9\]\[0-9\]\*\[kKmMgG\]\?\$'/);
 });
 
+test("voicemail playback events use FreeSWITCH comma-separated event headers", async () => {
+  const dialplan = await read("infra/freeswitch/templates/dialplan/default/voicemail-drop.xml.tpl");
+
+  for (const kind of ["started", "completed", "failed"]) {
+    assert.ok(
+      dialplan.includes(
+        `Event-Subclass=outbound_dialer::voicemail_playback_${kind},Outbound-Dialer-Call-ID=\${voicemail_drop_call_id},Outbound-Dialer-Customer-Leg-UUID=\${uuid}`
+      ),
+      kind
+    );
+  }
+});
+
 test("monitoring cannot mutate the Docker daemon through a raw socket", async () => {
   const [compose, alloy] = await Promise.all([
     read("infra/docker/docker-compose.yml"),

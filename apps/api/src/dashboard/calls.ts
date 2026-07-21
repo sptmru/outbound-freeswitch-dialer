@@ -22,6 +22,12 @@ interface LockedCallableContact {
 }
 
 const AGENT_RELEASED_CALL_STATE: CallState = "agent_released";
+const VOICEMAIL_DROP_AGENT_RELEASE_STATES = new Set<CallState>([
+  "voicemail_drop_requested",
+  "voicemail_playback_started",
+  "agent_released",
+  "voicemail_playback_completed"
+]);
 
 async function getNextCallableContactForUpdate(
   client: pg.PoolClient,
@@ -570,7 +576,8 @@ async function closeMissingOriginateLeg(
   config: AppConfig,
   input: { agentId: string; agentLegUuid: string; callId: string; customerLegUuid: string; jobUuid: string },
   phase: "agent" | "customer",
-  retryAttempt: number
+  retryAttempt: number,
+  sendApiCommand: typeof sendFreeSwitchApiCommand = sendFreeSwitchApiCommand
 ): Promise<void> {
   try {
     const call = await pool.query<{ state: CallState; ended_at: Date | null }>(
@@ -583,7 +590,14 @@ async function closeMissingOriginateLeg(
     }
 
     if (phase === "agent") {
-      const response = await sendFreeSwitchApiCommand(config, `uuid_exists ${input.agentLegUuid}`);
+      // A voicemail drop deliberately releases the interactive agent leg while
+      // the customer leg continues playback as a background job. The originate
+      // watchdog must not reinterpret that expected absence as originate failure.
+      if (VOICEMAIL_DROP_AGENT_RELEASE_STATES.has(row.state)) {
+        scheduleOriginateWatchdog(pool, config, input, "customer");
+        return;
+      }
+      const response = await sendApiCommand(config, `uuid_exists ${input.agentLegUuid}`);
       if (response.body.trim().toLowerCase().startsWith("true")) {
         scheduleOriginateWatchdog(pool, config, input, "customer");
         return;
@@ -601,7 +615,7 @@ async function closeMissingOriginateLeg(
       return;
     }
 
-    const response = await sendFreeSwitchApiCommand(config, `uuid_exists ${input.customerLegUuid}`);
+    const response = await sendApiCommand(config, `uuid_exists ${input.customerLegUuid}`);
     if (response.body.trim().toLowerCase().startsWith("true")) {
       return;
     }
@@ -1254,6 +1268,7 @@ export function inferAgentEndOutcome(state: CallState): CallOutcome {
 }
 
 export const __testing = {
+  closeMissingOriginateLeg,
   getCallableContactForUpdate,
   getNextCallableContactForUpdate,
   originateWatchdogDelayMilliseconds

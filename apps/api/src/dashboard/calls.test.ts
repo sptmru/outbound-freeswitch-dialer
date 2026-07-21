@@ -21,6 +21,45 @@ describe("call lifecycle", () => {
     assert.equal(__testing.originateWatchdogDelayMilliseconds(config, "agent", true), 5_000);
   });
 
+  it("does not fail voicemail background playback when the agent leg was intentionally released", async () => {
+    for (const state of [
+      "voicemail_drop_requested",
+      "voicemail_playback_started",
+      "agent_released",
+      "voicemail_playback_completed"
+    ] as const) {
+      const queries: Query[] = [];
+      const commands: string[] = [];
+      const pool = {
+        query: (sql: string, params: readonly unknown[] = []) => {
+          queries.push({ sql, params });
+          return Promise.resolve(rows([{ ended_at: null, state }]));
+        }
+      } as unknown as pg.Pool;
+
+      await __testing.closeMissingOriginateLeg(
+        pool,
+        {} as AppConfig,
+        {
+          agentId: userId,
+          agentLegUuid,
+          callId,
+          customerLegUuid,
+          jobUuid: "55555555-5555-4555-8555-555555555555"
+        },
+        "agent",
+        0,
+        async (_config, command) => {
+          commands.push(command);
+          return { body: "false", headers: {}, raw: "" };
+        }
+      );
+
+      assert.equal(queries.length, 1, state);
+      assert.deepEqual(commands, [], state);
+    }
+  });
+
   it("selects never-attempted contacts before retryable contacts and enforces retry limits", async () => {
     const queries: Query[] = [];
     const client = {

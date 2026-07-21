@@ -63,7 +63,7 @@ This document is the current product and operational contract. Items described a
 - The request is claimed transactionally and must be idempotent under repeated/concurrent clicks.
 - FreeSWITCH emits application-owned custom events for playback start, completion, and playback failure; customer-channel terminal events classify interruption/hangup.
 - The database lifecycle distinguishes `voicemail_drop_requested`, `voicemail_playback_started`, `agent_released`, and terminal completion/failure/interruption.
-- The agent leg is marked released only after playback has started and the release is confirmed (or the channel is already absent). The customer leg remains tracked until a terminal event.
+- After a successful voicemail transfer, the agent leg is marked released only after the release is confirmed (or the channel is already absent). Originate liveness checks must treat that absence as intentional while the customer leg remains tracked until playback or a terminal event finishes the background job.
 - Successful playback produces `voicemail_dropped`; failure/interruption records a distinct technical event and appropriate automatic outcome.
 - Reconnect reconciliation must not infer success merely from a local file or a previous transfer request.
 - VM/beep detection is advisory and visible when available; it does not automatically trigger a drop.
