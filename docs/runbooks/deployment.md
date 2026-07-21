@@ -50,10 +50,11 @@ The script performs these steps:
 5. reads the local API active-call metric and refuses a live deployment by default;
 6. creates and self-verifies an authenticated database/recordings backup unless explicitly skipped;
 7. pulls external images, builds API/FreeSWITCH/packet-capture/web/proxy with the SHA tag, renders monitoring configuration, and validates Prometheus, Alertmanager, Blackbox Exporter, Loki, and Alloy configuration with their pinned runtime binaries;
-8. atomically records `PENDING_VERSION` before changing runtime services or running migrations;
-9. starts PostgreSQL/FreeSWITCH, runs migrations once with the new API image, creates/rotates the least-privilege PostgreSQL exporter role, then starts the stack with health waits;
-10. ensures/renews certificates, installs deterministic certificate/backup cron jobs, verifies every in-scope non-firewall mandatory Compose service is running and every configured health check is healthy, and runs the public web plus `/api/health/ready` smoke test;
-11. promotes the pending SHA to `CURRENT_VERSION` with `DEPLOYMENT_STATUS=stable`. A failure retains `failed_deploy` plus the unconfirmed target instead of claiming the old state matches runtime.
+8. reloads the validated Alertmanager configuration and sends a `DeploymentStarting` warning with an expected downtime of up to five minutes; this happens inside `scripts/deploy.sh` and does not depend on GitHub Actions. An upgrade fails before downtime if the running Alertmanager cannot accept the alert; an initial install without an existing Alertmanager skips it;
+9. atomically records `PENDING_VERSION` before changing runtime services or running migrations;
+10. starts PostgreSQL/FreeSWITCH, runs migrations once with the new API image, creates/rotates the least-privilege PostgreSQL exporter role, then starts the stack with health waits;
+11. ensures/renews certificates, installs deterministic certificate/backup cron jobs, verifies every in-scope non-firewall mandatory Compose service is running and every configured health check is healthy, and runs the public web plus `/api/health/ready` smoke test;
+12. promotes the pending SHA to `CURRENT_VERSION` with `DEPLOYMENT_STATUS=stable`. A failure retains `failed_deploy` plus the unconfirmed target instead of claiming the old state matches runtime.
 
 `SKIP_DEPLOY_CHECKS`, `SKIP_PRE_DEPLOY_BACKUP`, `ALLOW_ACTIVE_CALL_DEPLOY`, `ALLOW_UNVERIFIED_ACTIVE_CALL_STATE`, `ALLOW_UNCONFIGURED_SIP_TRUNK`, `ALLOW_NO_ALERT_RECEIVER`, and `ALLOW_LOCAL_ONLY_BACKUPS` are break-glass/risk-acceptance controls. `SKIP_DEPLOY_CHECKS=true` skips `npm run quality`, but dependency installation still runs. Do not use these controls in an ordinary release; record owner, reason, time, and follow-up whenever one is used.
 

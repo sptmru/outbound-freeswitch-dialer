@@ -70,6 +70,7 @@ compose pull --ignore-buildable
 compose build api freeswitch pcap-capture web proxy
 compose run --rm monitoring-config
 ENV_FILE="${ENV_FILE}" "${ROOT_DIR}/scripts/validate-monitoring-config.sh"
+ENV_FILE="${ENV_FILE}" APP_VERSION="${new_version}" "${ROOT_DIR}/scripts/notify-deploy-start.sh" "${new_version}"
 
 deployment_state_write \
   "${STATE_FILE}" \

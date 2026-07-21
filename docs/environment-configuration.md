@@ -106,6 +106,8 @@ Use [AWS NAT, firewall, STUN, and TURN](runbooks/aws-networking.md) for address 
 
 Monitoring is part of the main Compose deployment. `scripts/deploy.sh` renders `monitoring/generated/prometheus.yml` and `monitoring/generated/alertmanager/alertmanager.yml`, validates all monitoring configs with the pinned runtime images, then starts the stack. Do not edit generated files directly.
 
+For upgrades, `scripts/deploy.sh` also submits a `DeploymentStarting` warning to the already-running Alertmanager immediately before it records the pending release and changes runtime services. The message announces up to five minutes of expected downtime and uses the configured webhook, Slack, or Telegram receiver independently of GitHub Actions. A first install has no existing Alertmanager and skips this notification.
+
 Set `COMPOSE_PROJECT_NAME` when deploying under a non-default project name. Alloy maps it to `MONITORING_COMPOSE_PROJECT` and uses it to avoid collecting logs from unrelated Compose projects on the host.
 
 ### Fail2ban trusted proxy path

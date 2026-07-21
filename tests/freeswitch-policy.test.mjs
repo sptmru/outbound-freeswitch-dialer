@@ -104,9 +104,25 @@ test("deployment secures the environment and always installs locked dependencies
   const preflightIndex = deploy.indexOf('ENV_FILE="${ENV_FILE}" "${ROOT_DIR}/scripts/preflight.sh"');
   const installIndex = deploy.indexOf('npm --prefix "${ROOT_DIR}" ci');
   const skipChecksIndex = deploy.indexOf('if [[ "${SKIP_DEPLOY_CHECKS:-false}" != "true" ]]');
+  const alertIndex = deploy.indexOf('"${ROOT_DIR}/scripts/notify-deploy-start.sh" "${new_version}"');
+  const pendingIndex = deploy.indexOf('"pending_deploy"');
+  const runtimeChangeIndex = deploy.indexOf("compose up -d --wait postgres freeswitch");
 
   assert.ok(chmodIndex >= 0 && chmodIndex < preflightIndex);
   assert.ok(installIndex > preflightIndex && installIndex < skipChecksIndex);
+  assert.ok(alertIndex > skipChecksIndex && alertIndex < pendingIndex);
+  assert.ok(pendingIndex < runtimeChangeIndex);
+});
+
+test("deployment warns through the running Alertmanager before runtime changes", async () => {
+  const notifier = await read("scripts/notify-deploy-start.sh");
+  const reloadIndex = notifier.indexOf("http://127.0.0.1:9093/-/reload");
+  const alertIndex = notifier.indexOf("http://127.0.0.1:9093/api/v2/alerts");
+
+  assert.match(notifier, /alertname.*DeploymentStarting/);
+  assert.match(notifier, /Expected service downtime: up to 5 minutes/);
+  assert.match(notifier, /compose ps --status running -q alertmanager/);
+  assert.ok(reloadIndex >= 0 && reloadIndex < alertIndex);
 });
 
 function read(relativePath) {

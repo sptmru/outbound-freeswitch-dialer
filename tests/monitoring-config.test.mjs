@@ -47,6 +47,16 @@ test("monitoring config renders a native Slack receiver", () => {
   assert.match(rendered, /RESOLVED/);
 });
 
+test("deployment alerts bypass the ordinary Alertmanager group wait", () => {
+  const rendered = renderAlertmanager({});
+
+  assert.ok(
+    rendered.includes(
+      'routes:\n    - receiver: default\n      matchers:\n        - alertname="DeploymentStarting"\n      group_wait: 0s'
+    )
+  );
+});
+
 test("monitoring config rejects incomplete or insecure Slack settings", () => {
   assert.throws(
     () => renderAlertmanager({ ALERTMANAGER_SLACK_CHANNEL: "#dialer-alerts" }),

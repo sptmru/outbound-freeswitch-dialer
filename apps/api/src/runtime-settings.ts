@@ -388,7 +388,7 @@ function renderAlertmanager(config: AppConfig): string {
       `    telegram_configs:\n      - bot_token: ${JSON.stringify(config.ALERTMANAGER_TELEGRAM_BOT_TOKEN)}\n        chat_id: ${config.ALERTMANAGER_TELEGRAM_CHAT_ID}\n        send_resolved: true\n        parse_mode: HTML`
     );
   }
-  return `global:\n  resolve_timeout: 5m\n\nroute:\n  receiver: default\n  group_by: [alertname, severity]\n  group_wait: 30s\n  group_interval: 5m\n  repeat_interval: ${config.ALERTMANAGER_REPEAT_INTERVAL}\n\nreceivers:\n  - name: default\n${integrations.length ? `${integrations.join("\n")}\n` : ""}\ninhibit_rules:\n  - source_matchers:\n      - severity="critical"\n    target_matchers:\n      - severity="warning"\n    equal: [alertname]\n`;
+  return `global:\n  resolve_timeout: 5m\n\nroute:\n  receiver: default\n  group_by: [alertname, severity]\n  group_wait: 30s\n  group_interval: 5m\n  repeat_interval: ${config.ALERTMANAGER_REPEAT_INTERVAL}\n  routes:\n    - receiver: default\n      matchers:\n        - alertname="DeploymentStarting"\n      group_wait: 0s\n      group_interval: 5m\n      repeat_interval: 1h\n\nreceivers:\n  - name: default\n${integrations.length ? `${integrations.join("\n")}\n` : ""}\ninhibit_rules:\n  - source_matchers:\n      - severity="critical"\n    target_matchers:\n      - severity="warning"\n    equal: [alertname]\n`;
 }
 
 function renderSlackConfig(webhookUrl: string, channel: string): string {
