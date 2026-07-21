@@ -1295,6 +1295,31 @@ describe("App Agent Desk empty states", () => {
     });
   });
 
+  it("does not automatically start the next lead after a manual call ends", async () => {
+    apiMocks.useSoftphoneRegistration.mockReturnValue({
+      ...softphoneRuntime,
+      registered: true,
+      state: "registered"
+    });
+    const campaign = {
+      ...deskResponse().campaign!,
+      callableLeads: 1,
+      autoAdvanceToNextLeadEnabled: true
+    };
+    apiMocks.fetchAgentDesk.mockResolvedValue(
+      deskResponse({ campaign, activeCall: activeCallRow({ manualDial: true }) })
+    );
+    apiMocks.endCall.mockResolvedValue(deskResponse({ campaign, activeCall: null }));
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Hang up" }));
+
+    await waitFor(() => {
+      expect(apiMocks.endCall).toHaveBeenCalledTimes(1);
+    });
+    expect(apiMocks.startNextCall).not.toHaveBeenCalled();
+  });
+
   it("stops softphone registration and hides phone status outside Agent Desk", async () => {
     const admin = userRow({ role: "admin" });
     apiMocks.fetchMe.mockResolvedValue({ user: admin });
@@ -1704,6 +1729,7 @@ function activeCallRow(
 ): NonNullable<AgentDeskResponse["activeCall"]> {
   return {
     id: "33333333-3333-4333-8333-333333333333",
+    manualDial: false,
     state: "bridged",
     leadName: "Avery Johnson",
     phoneNumber: "+15551234567",

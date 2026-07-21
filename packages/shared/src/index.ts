@@ -163,6 +163,7 @@ export interface AgentDeskResponse {
   }>;
   activeCall: {
     id: string;
+    manualDial?: boolean;
     state: CallState;
     outcome?: CallOutcome;
     leadName: string;

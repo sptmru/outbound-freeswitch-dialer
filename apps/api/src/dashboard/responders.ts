@@ -184,6 +184,7 @@ async function getLeadQueue(
 async function getActiveCall(pool: pg.Pool, userId: string): Promise<AgentDeskResponse["activeCall"]> {
   const result = await pool.query<{
     id: string;
+    manual_dial: boolean;
     state: CallState;
     destination_number: string;
     contact_name: string | null;
@@ -198,6 +199,7 @@ async function getActiveCall(pool: pg.Pool, userId: string): Promise<AgentDeskRe
     `
       select
         calls.id,
+        calls.manual_dial,
         calls.state,
         calls.destination_number,
         contacts.display_name as contact_name,
@@ -231,6 +233,7 @@ async function getActiveCall(pool: pg.Pool, userId: string): Promise<AgentDeskRe
 
   return {
     id: row.id,
+    manualDial: row.manual_dial,
     state: row.state,
     leadName: row.contact_name ?? "Manual dial",
     phoneNumber: row.destination_number,

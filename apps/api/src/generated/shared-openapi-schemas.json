@@ -296,6 +296,7 @@
             "type": "object",
             "properties": {
               "id": { "type": "string" },
+              "manualDial": { "type": "boolean" },
               "state": { "$ref": "CallState#" },
               "outcome": { "$ref": "CallOutcome#" },
               "leadName": { "type": "string" },

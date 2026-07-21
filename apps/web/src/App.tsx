@@ -809,7 +809,14 @@ function AgentDesk({
   const [callControlPending, setCallControlPending] = useState<"hangup" | "voicemail" | "dtmf" | null>(null);
   const callControlPendingRef = useRef<typeof callControlPending>(null);
   const [endCallError, setEndCallError] = useState<string | null>(null);
-  const previousActiveCallIdRef = useRef<string | null>(desk.activeCall?.id ?? null);
+  const previousActiveCallRef = useRef(
+    desk.activeCall
+      ? {
+          id: desk.activeCall.id,
+          manualDial: desk.activeCall.manualDial ?? desk.activeCall.leadName === "Manual dial"
+        }
+      : null
+  );
   const campaign = desk.campaign;
   const availabilityStatus = useEffectiveAvailability(desk.availability);
   const canStartCalls = softphone.registered && availabilityStatus === "available";
@@ -873,10 +880,16 @@ function AgentDesk({
   }
 
   useEffect(() => {
-    const previousActiveCallId = previousActiveCallIdRef.current;
-    previousActiveCallIdRef.current = desk.activeCall?.id ?? null;
+    const previousActiveCall = previousActiveCallRef.current;
+    previousActiveCallRef.current = desk.activeCall
+      ? {
+          id: desk.activeCall.id,
+          manualDial: desk.activeCall.manualDial ?? desk.activeCall.leadName === "Manual dial"
+        }
+      : null;
     if (
-      !previousActiveCallId ||
+      !previousActiveCall ||
+      previousActiveCall.manualDial ||
       desk.activeCall ||
       !campaign?.autoAdvanceToNextLeadEnabled ||
       campaign.callableLeads <= 0 ||
