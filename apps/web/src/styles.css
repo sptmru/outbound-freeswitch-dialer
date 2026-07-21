@@ -1237,8 +1237,8 @@ button.table-row {
   display: grid;
   gap: 12px;
   grid-template-columns:
-    minmax(150px, 1.2fr) minmax(120px, 1fr) minmax(110px, 0.85fr) minmax(130px, 0.9fr)
-    minmax(100px, auto);
+    minmax(150px, 1.2fr) minmax(120px, 1fr) minmax(110px, 0.85fr) minmax(190px, 1fr)
+    minmax(260px, 1.15fr);
 }
 
 .history-head {
@@ -1262,6 +1262,10 @@ button.table-row {
 .history-row small {
   color: #738196;
   font-size: 11px;
+}
+
+.history-row > span:nth-child(4) {
+  white-space: nowrap;
 }
 
 .outcome-badge {
@@ -3192,6 +3196,26 @@ input[type="checkbox"] {
   display: grid;
   gap: 5px;
   justify-items: start;
+  min-width: 0;
+}
+
+.history-outcome-stack .outcome-badge {
+  max-width: 100%;
+  white-space: nowrap;
+}
+
+@media (min-width: 821px) and (max-width: 1180px) {
+  .history-head,
+  .history-row {
+    gap: 10px;
+    grid-template-columns:
+      minmax(120px, 1.1fr) minmax(100px, 0.9fr) minmax(90px, 0.75fr) minmax(165px, 0.9fr)
+      minmax(220px, 1.1fr);
+  }
+
+  .outcome-voicemail_dropped {
+    font-size: 10px !important;
+  }
 }
 
 .avmd-review-badge {
