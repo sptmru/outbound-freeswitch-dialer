@@ -70,6 +70,7 @@ Do not reuse these values. `DATABASE_URL` must contain the same application data
 | `FREESWITCH_INTERNAL_SIP_PORT`                                                 | Browser/internal SIP profile, default `5060`.                                                         |
 | `FREESWITCH_EXTERNAL_PROFILE_SIP_PORT`, `FREESWITCH_EXTERNAL_PROFILE_TLS_PORT` | Provider-facing external profile, defaults `5080`/`5081`.                                             |
 | `FREESWITCH_WEBRTC_WSS_PORT`                                                   | Host WSS listener, default `7443`; public browsers reach it through nginx.                            |
+| `FREESWITCH_AGENT_OPUS_ENABLED`                                                | `true` prefers Opus on the browser agent leg; `false` keeps `PCMU,PCMA,G729`. Default `false`.        |
 | `FREESWITCH_RINGBACK_TONE`                                                     | Valid TGML cadence used as the silent-early-media fallback; defaults to Australian ringback.          |
 | `FREESWITCH_EARLY_MEDIA_FALLBACK_DELAY_MS`                                     | Wait before checking for inbound callee RTP and starting fallback; default `700`, range `100`-`5000`. |
 | `FREESWITCH_ESL_*`                                                             | API-to-FreeSWITCH control channel plus queue/retry/reconciliation bounds. ESL is not a public API.    |
@@ -78,6 +79,8 @@ Do not reuse these values. `DATABASE_URL` must contain the same application data
 nginx connects to the host-network FreeSWITCH listener using `FREESWITCH_WS_UPSTREAM_SCHEME` and `FREESWITCH_WS_UPSTREAM`. Prefer certificate verification with `FREESWITCH_WS_UPSTREAM_TLS_VERIFY=on` and the matching `FREESWITCH_WS_UPSTREAM_TLS_SERVER_NAME`. `ALLOW_UNVERIFIED_FREESWITCH_WS_UPSTREAM=true` is a recorded break-glass exception for an approved same-host/self-signed endpoint, not a general production default.
 
 Keep `ALLOW_UNCONFIGURED_SIP_TRUNK=false` for a production dialer. Setting it to `true` acknowledges that customer calls cannot be accepted as working.
+
+`FREESWITCH_AGENT_OPUS_ENABLED=true` changes only the `internal-webrtc` profile to `OPUS,PCMU,PCMA,G729`. The provider-facing external profile remains `PCMU,PCMA,G729`; when the browser selects Opus and the trunk selects another codec, FreeSWITCH transcodes between the two call legs. Apply a change by recreating the FreeSWITCH service, then verify both profile codec lists and a real call's negotiated read/write codecs before comparing media quality and CPU usage.
 
 The outbound bridge passes provider early media to the agent. After `FREESWITCH_EARLY_MEDIA_FALLBACK_DELAY_MS`, the API refreshes live RTP statistics. If `rtp_audio_in_media_packet_count` is still zero, it installs a customer-leg `api_on_answer` safety hook, injects `FREESWITCH_RINGBACK_TONE` only toward the agent, and polls every 200 ms. The first inbound callee media packet permanently wins for that pre-answer phase and stops the local tone; natural gaps in an announcement do not restart it. The fallback is also stopped on answer, bridge, or hangup. If the safety hook or RTP inspection fails, the controller fails closed and does not start a tone that could mask callee media.
 

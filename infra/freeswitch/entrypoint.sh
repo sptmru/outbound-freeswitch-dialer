@@ -51,6 +51,7 @@ render() {
   external_sip_port="$(escape_xml_for_sed "$FREESWITCH_EXTERNAL_PROFILE_SIP_PORT")"
   external_tls_port="$(escape_xml_for_sed "$FREESWITCH_EXTERNAL_PROFILE_TLS_PORT")"
   webrtc_wss_port="$(escape_xml_for_sed "$FREESWITCH_WEBRTC_WSS_PORT")"
+  agent_codec_prefs="$(escape_xml_for_sed "$FREESWITCH_AGENT_CODEC_PREFS")"
   trunk_mode="$(escape_xml_for_sed "$SIP_TRUNK_MODE")"
   trunk_proxy="$(escape_xml_for_sed "$SIP_TRUNK_PROXY")"
   trunk_realm="$(escape_xml_for_sed "$SIP_TRUNK_REALM")"
@@ -70,6 +71,7 @@ render() {
     -e "s|__FREESWITCH_EXTERNAL_PROFILE_SIP_PORT__|${external_sip_port}|g" \
     -e "s|__FREESWITCH_EXTERNAL_PROFILE_TLS_PORT__|${external_tls_port}|g" \
     -e "s|__FREESWITCH_WEBRTC_WSS_PORT__|${webrtc_wss_port}|g" \
+    -e "s|__FREESWITCH_AGENT_CODEC_PREFS__|${agent_codec_prefs}|g" \
     -e "s|__SIP_TRUNK_MODE__|${trunk_mode}|g" \
     -e "s|__SIP_TRUNK_PROXY__|${trunk_proxy}|g" \
     -e "s|__SIP_TRUNK_REALM__|${trunk_realm}|g" \
@@ -153,6 +155,19 @@ SIP_TRUNK_USERNAME="${SIP_TRUNK_USERNAME:-$(legacy_env USERNAME)}"
 SIP_TRUNK_PASSWORD="${SIP_TRUNK_PASSWORD:-$(legacy_env PASSWORD)}"
 SIP_TRUNK_CALLER_ID="${SIP_TRUNK_CALLER_ID:-$(legacy_env CALLER_ID)}"
 
+case "${FREESWITCH_AGENT_OPUS_ENABLED:-false}" in
+  true)
+    FREESWITCH_AGENT_CODEC_PREFS="OPUS,PCMU,PCMA,G729"
+    ;;
+  false)
+    FREESWITCH_AGENT_CODEC_PREFS="PCMU,PCMA,G729"
+    ;;
+  *)
+    echo "FREESWITCH_AGENT_OPUS_ENABLED must be true or false" >&2
+    exit 1
+    ;;
+esac
+
 mkdir -p "$GENERATED_DIR/directory/default"
 mkdir -p "$LOG_DIR"
 touch "$LOG_DIR/freeswitch.log"
@@ -186,6 +201,9 @@ render "$TEMPLATE_DIR/dialplan/public/reject.xml.tpl" "$CONFIG_DIR/dialplan/publ
 configure_rtp_port_range
 ensure_module_load "mod_avmd"
 ensure_module_load "mod_amd"
+if [ "${FREESWITCH_AGENT_OPUS_ENABLED:-false}" = "true" ]; then
+  ensure_module_load "mod_opus"
+fi
 disable_module_load "mod_signalwire"
 
 legacy_name="ma${EMPTY:-}xo"

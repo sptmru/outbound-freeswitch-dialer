@@ -31,6 +31,27 @@ test("agent SIP ingress cannot route PSTN calls outside backend-owned ESL contro
   assert.doesNotMatch(`${agentPolicy}\n${publicPolicy}`, /sofia\/(?:gateway|external)/);
 });
 
+test("agent Opus toggle does not add Opus to the SIP trunk codec list", async () => {
+  const [profile, variables, entrypoint, compose, exampleEnvironment] = await Promise.all([
+    read("infra/freeswitch/templates/sip_profiles/internal-webrtc.xml.tpl"),
+    read("infra/freeswitch/templates/vars.xml.tpl"),
+    read("infra/freeswitch/entrypoint.sh"),
+    read("infra/docker/docker-compose.yml"),
+    read(".env.example")
+  ]);
+
+  assert.match(profile, /inbound-codec-prefs" value="__FREESWITCH_AGENT_CODEC_PREFS__"/);
+  assert.match(profile, /outbound-codec-prefs" value="__FREESWITCH_AGENT_CODEC_PREFS__"/);
+  assert.match(entrypoint, /FREESWITCH_AGENT_CODEC_PREFS="OPUS,PCMU,PCMA,G729"/);
+  assert.match(entrypoint, /FREESWITCH_AGENT_CODEC_PREFS="PCMU,PCMA,G729"/);
+  assert.match(entrypoint, /FREESWITCH_AGENT_OPUS_ENABLED must be true or false/);
+  assert.match(variables, /global_codec_prefs=PCMU,PCMA,G729/);
+  assert.match(variables, /outbound_codec_prefs=PCMU,PCMA,G729/);
+  assert.doesNotMatch(variables, /codec_prefs=[^"\n]*OPUS/);
+  assert.match(compose, /FREESWITCH_AGENT_OPUS_ENABLED: \$\{FREESWITCH_AGENT_OPUS_ENABLED:-false\}/);
+  assert.match(exampleEnvironment, /^FREESWITCH_AGENT_OPUS_ENABLED=false$/m);
+});
+
 test("Docker build context excludes runtime media and generated secrets", async () => {
   const dockerignore = await read(".dockerignore");
   for (const pattern of [".env*", "backups", "infra/freeswitch/recordings", "logs", "monitoring/generated"]) {

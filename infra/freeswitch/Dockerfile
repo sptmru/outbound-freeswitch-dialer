@@ -31,6 +31,7 @@ COPY --from=avmd-builder /usr/src/freeswitch/src/mod/applications/mod_avmd/.libs
 COPY infra/freeswitch/entrypoint.sh /opt/outbound-dialer/entrypoint.sh
 COPY infra/freeswitch/templates /opt/outbound-dialer/templates
 
-RUN chmod +x /opt/outbound-dialer/entrypoint.sh
+RUN test -f /usr/lib/freeswitch/mod/mod_opus.so \
+    && chmod +x /opt/outbound-dialer/entrypoint.sh
 
 ENTRYPOINT ["/opt/outbound-dialer/entrypoint.sh"]
