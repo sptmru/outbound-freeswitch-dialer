@@ -144,8 +144,9 @@ function buildSupervisorEavesdropOriginateCommand(
     "eavesdrop_enable_dtmf=false",
     "eavesdrop_bridge_aleg=true",
     "eavesdrop_bridge_bleg=true",
-    input.mode === "whisper" || input.mode === "join" ? "eavesdrop_whisper_aleg=true" : null,
-    input.mode === "join" ? "eavesdrop_whisper_bleg=true" : null
+    // The eavesdrop target is the agent leg: WRITE feeds the agent speaker, READ feeds the customer.
+    input.mode === "join" ? "eavesdrop_whisper_aleg=true" : null,
+    input.mode === "whisper" || input.mode === "join" ? "eavesdrop_whisper_bleg=true" : null
   ]);
   return `originate {${variables}}user/${input.sipUsername}@${config.FREESWITCH_DOMAIN} &eavesdrop(${input.targetAgentLegUuid})`;
 }

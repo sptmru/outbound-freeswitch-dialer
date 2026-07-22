@@ -103,8 +103,8 @@ describe("ESL helpers", () => {
       mode: "join"
     });
 
-    assert.match(whisper, /eavesdrop_whisper_aleg=true/);
-    assert.doesNotMatch(whisper, /eavesdrop_whisper_bleg=true/);
+    assert.doesNotMatch(whisper, /eavesdrop_whisper_aleg=true/);
+    assert.match(whisper, /eavesdrop_whisper_bleg=true/);
     assert.match(join, /eavesdrop_whisper_aleg=true/);
     assert.match(join, /eavesdrop_whisper_bleg=true/);
   });
