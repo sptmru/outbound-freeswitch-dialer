@@ -50,6 +50,12 @@
     "type": "string",
     "enum": ["available", "paused", "wrap_up"]
   },
+  "SupervisorMode": { "$id": "SupervisorMode", "type": "string", "enum": ["listen", "whisper", "join"] },
+  "SupervisorSessionState": {
+    "$id": "SupervisorSessionState",
+    "type": "string",
+    "enum": ["connecting", "active", "ended", "failed"]
+  },
   "CampaignStatus": {
     "$id": "CampaignStatus",
     "type": "string",
@@ -322,6 +328,15 @@
                 "required": ["dropVoicemail", "sendDtmf"],
                 "additionalProperties": false
               },
+              "supervisor": {
+                "type": "object",
+                "properties": {
+                  "active": { "type": "boolean" },
+                  "mode": { "anyOf": [{ "$ref": "SupervisorMode#" }, { "type": "null" }] }
+                },
+                "required": ["active", "mode"],
+                "additionalProperties": false
+              },
               "timeline": {
                 "type": "array",
                 "items": {
@@ -345,6 +360,7 @@
               "callRecordingEnabled",
               "callRecordingStatus",
               "actions",
+              "supervisor",
               "timeline"
             ],
             "additionalProperties": false
@@ -418,6 +434,70 @@
       "domain",
       "iceServers"
     ],
+    "additionalProperties": false
+  },
+  "AdminLiveCallItem": {
+    "$id": "AdminLiveCallItem",
+    "type": "object",
+    "properties": {
+      "id": { "type": "string" },
+      "agentName": { "type": "string" },
+      "leadName": { "type": "string" },
+      "phoneNumber": { "type": "string" },
+      "campaignName": { "type": "string" },
+      "state": { "$ref": "CallState#" },
+      "startedAt": { "type": "string" },
+      "answeredAt": { "type": ["string", "null"] },
+      "durationSeconds": { "type": "number" },
+      "activeSupervisorCount": { "type": "number" },
+      "monitoredByCurrentAdmin": { "type": "boolean" }
+    },
+    "required": [
+      "id",
+      "agentName",
+      "leadName",
+      "phoneNumber",
+      "campaignName",
+      "state",
+      "startedAt",
+      "answeredAt",
+      "durationSeconds",
+      "activeSupervisorCount",
+      "monitoredByCurrentAdmin"
+    ],
+    "additionalProperties": false
+  },
+  "SupervisorSession": {
+    "$id": "SupervisorSession",
+    "type": "object",
+    "properties": {
+      "id": { "type": "string" },
+      "callId": { "type": "string" },
+      "mode": { "$ref": "SupervisorMode#" },
+      "state": { "$ref": "SupervisorSessionState#" },
+      "startedAt": { "type": "string" },
+      "connectedAt": { "type": ["string", "null"] },
+      "endedAt": { "type": ["string", "null"] },
+      "failureReason": { "type": ["string", "null"] }
+    },
+    "required": ["id", "callId", "mode", "state", "startedAt", "connectedAt", "endedAt", "failureReason"],
+    "additionalProperties": false
+  },
+  "AdminLiveCallsResponse": {
+    "$id": "AdminLiveCallsResponse",
+    "type": "object",
+    "properties": {
+      "calls": { "type": "array", "items": { "$ref": "AdminLiveCallItem#" } },
+      "activeSession": { "anyOf": [{ "$ref": "SupervisorSession#" }, { "type": "null" }] }
+    },
+    "required": ["calls", "activeSession"],
+    "additionalProperties": false
+  },
+  "UpdateSupervisorSessionRequest": {
+    "$id": "UpdateSupervisorSessionRequest",
+    "type": "object",
+    "properties": { "mode": { "$ref": "SupervisorMode#" } },
+    "required": ["mode"],
     "additionalProperties": false
   },
   "BrowserMediaTelemetryRequest": {

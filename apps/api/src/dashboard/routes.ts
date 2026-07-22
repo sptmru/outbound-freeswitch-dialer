@@ -11,6 +11,7 @@ import type {
   AdminAnalyticsResponse,
   AdminOverviewResponse,
   AdminAuditResponse,
+  AdminLiveCallsResponse,
   AdminRecordingListResponse,
   AdminUserListResponse,
   AgentDeskResponse,
@@ -43,6 +44,7 @@ import type {
   ResetCampaignLeadsResponse,
   SendDtmfRequest,
   SoftphoneProvisioningResponse,
+  SupervisorSession,
   SuppressionImportResponse,
   SuppressionListResponse,
   StartLeadCallRequest,
@@ -50,6 +52,7 @@ import type {
   StartManualCallRequest,
   SuppressContactRequest,
   UpdateAgentAvailabilityRequest,
+  UpdateSupervisorSessionRequest,
   UpdateCampaignRequest,
   UpsertCallAvmdReviewRequest,
   AdminSystemSettings
@@ -133,6 +136,14 @@ import { runRetention } from "./retention.js";
 import { runRetentionWithAdvisoryLock } from "./retention-scheduler.js";
 import { recordRetentionFailure, recordRetentionSuccess } from "../metrics.js";
 import { callPcapPath } from "../pcap-capture.js";
+import {
+  getAdminLiveCalls,
+  getSupervisorProvisioning,
+  startSupervisorSession,
+  stopSupervisorSession,
+  SupervisorActionError,
+  updateSupervisorSessionMode
+} from "./supervisor.js";
 
 const manualDialValidationSchema = z.object({
   phoneNumber: z.string().min(3),
@@ -293,6 +304,14 @@ const adminAuditQuerySchema = z.object({
   dateTo: z.string().datetime().optional()
 });
 
+const supervisorSessionParamsSchema = z.object({
+  sessionId: z.string().uuid()
+});
+
+const updateSupervisorSessionSchema = z.object({
+  mode: z.enum(["listen", "whisper", "join"])
+}) satisfies z.ZodType<UpdateSupervisorSessionRequest>;
+
 const agentDeskQuerySchema = z.object({
   campaignId: z.string().uuid().optional()
 });
@@ -422,6 +441,99 @@ export function registerDashboardRoutes(
     }
     const filters = parseAnalyticsFilters(request.query);
     return getAdminAnalytics(pool, filters, contactRetryPolicy);
+  });
+
+  app.get("/admin/live-calls", async (request, reply): Promise<AdminLiveCallsResponse | void> => {
+    const user = await requireAdmin(request, reply, config, pool);
+    if (!user) return;
+    return getAdminLiveCalls(pool, user.id);
+  });
+
+  app.get(
+    "/admin/supervisor/provisioning",
+    async (request, reply): Promise<SoftphoneProvisioningResponse | void> => {
+      const user = await requireAdmin(request, reply, config, pool);
+      if (!user) return;
+      return getSupervisorProvisioning(pool, config, user);
+    }
+  );
+
+  app.post(
+    "/admin/live-calls/:callId/supervisor",
+    async (request, reply): Promise<SupervisorSession | void> => {
+      const user = await requireAdmin(request, reply, config, pool);
+      if (!user) return;
+      const params = z.object({ callId: z.string().uuid() }).parse(request.params);
+      try {
+        const session = await startSupervisorSession(pool, config, {
+          actorUserId: user.id,
+          callId: params.callId
+        });
+        await appendAdminAuditMetadata(pool, request.id, {
+          action: "supervisor_started",
+          callId: params.callId,
+          mode: session.mode,
+          supervisorSessionId: session.id
+        });
+        return reply.code(201).send(session);
+      } catch (error) {
+        if (error instanceof SupervisorActionError) {
+          return reply.code(error.statusCode).send({ message: error.message });
+        }
+        throw error;
+      }
+    }
+  );
+
+  app.patch(
+    "/admin/supervisor-sessions/:sessionId",
+    async (request, reply): Promise<SupervisorSession | void> => {
+      const user = await requireAdmin(request, reply, config, pool);
+      if (!user) return;
+      const params = supervisorSessionParamsSchema.parse(request.params);
+      const input = updateSupervisorSessionSchema.parse(request.body);
+      try {
+        const session = await updateSupervisorSessionMode(pool, config, {
+          actorUserId: user.id,
+          mode: input.mode,
+          sessionId: params.sessionId
+        });
+        await appendAdminAuditMetadata(pool, request.id, {
+          action: "supervisor_mode_changed",
+          callId: session.callId,
+          mode: session.mode,
+          supervisorSessionId: session.id
+        });
+        return session;
+      } catch (error) {
+        if (error instanceof SupervisorActionError) {
+          return reply.code(error.statusCode).send({ message: error.message });
+        }
+        throw error;
+      }
+    }
+  );
+
+  app.delete("/admin/supervisor-sessions/:sessionId", async (request, reply): Promise<void> => {
+    const user = await requireAdmin(request, reply, config, pool);
+    if (!user) return;
+    const params = supervisorSessionParamsSchema.parse(request.params);
+    try {
+      await stopSupervisorSession(pool, config, {
+        actorUserId: user.id,
+        sessionId: params.sessionId
+      });
+      await appendAdminAuditMetadata(pool, request.id, {
+        action: "supervisor_stopped",
+        supervisorSessionId: params.sessionId
+      });
+      return reply.code(204).send();
+    } catch (error) {
+      if (error instanceof SupervisorActionError) {
+        return reply.code(error.statusCode).send({ message: error.message });
+      }
+      throw error;
+    }
   });
 
   app.get("/admin/campaigns", async (request, reply): Promise<AdminCampaignListResponse | void> => {
@@ -805,6 +917,7 @@ export function registerDashboardRoutes(
 
     const agent = await ensureAgentForUser(pool, config, publicUser);
     const created = await createDialerCall(pool, config, {
+      actorUserId: publicUser.id,
       agentId: agent.id,
       campaignId: campaign.id,
       contactId: null,
@@ -838,6 +951,7 @@ export function registerDashboardRoutes(
 
     const agent = await ensureAgentForUser(pool, config, publicUser);
     const created = await createDialerCall(pool, config, {
+      actorUserId: publicUser.id,
       agentId: agent.id,
       campaignId: campaign.id,
       contactId: "next",
@@ -865,6 +979,7 @@ export function registerDashboardRoutes(
     const input = startLeadCallSchema.parse(request.body ?? {});
     const agent = await ensureAgentForUser(pool, config, publicUser);
     const created = await createDialerCall(pool, config, {
+      actorUserId: publicUser.id,
       agentId: agent.id,
       campaignId: null,
       contactId: params.contactId,
@@ -1717,6 +1832,19 @@ async function requireAdmin(
     return null;
   }
   return toPublicUser(user);
+}
+
+async function appendAdminAuditMetadata(
+  pool: pg.Pool,
+  requestId: string,
+  metadata: Record<string, unknown>
+): Promise<void> {
+  await pool.query(
+    `update admin_audit_events
+     set metadata_json = metadata_json || $2::jsonb
+     where request_id = $1`,
+    [requestId, JSON.stringify(metadata)]
+  );
 }
 
 async function requireAdminOrMediaTicket(

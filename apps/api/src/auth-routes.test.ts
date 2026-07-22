@@ -154,6 +154,26 @@ describe("auth route helpers", () => {
       await rm(tempDir, { recursive: true, force: true });
     }
   });
+
+  it("refuses deactivation while a live-call monitoring session is active", async () => {
+    const config = createConfig("/tmp/outbound-dialer-auth-test");
+    const userId = "11111111-1111-4111-8111-111111111111";
+    const queries: string[] = [];
+    const pool = createClientPool((sql) => {
+      queries.push(sql);
+      if (sql === "begin" || sql === "commit" || sql === "rollback") return rows([]);
+      if (sql.includes("select id from users")) return rows([{ id: userId }]);
+      if (sql.includes("from calls")) return rows([]);
+      if (sql.includes("from call_supervisor_sessions")) return rows([{ id: "active-session" }]);
+      return rows([]);
+    });
+
+    const result = await __testing.deleteUser(pool, config, userId);
+
+    assert.equal(result, "active_supervisor");
+    assert.ok(queries.includes("rollback"));
+    assert.ok(!queries.some((query) => query.includes("update users set is_active = false")));
+  });
 });
 
 function createConfig(generatedConfigDir: string): AppConfig {

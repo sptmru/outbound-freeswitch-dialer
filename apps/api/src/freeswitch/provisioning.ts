@@ -102,10 +102,23 @@ export async function provisionAllAgentDirectories(pool: pg.Pool, config: AppCon
   const result = await pool.query<AgentDirectoryRecord>(
     `
       select sip_username, sip_password_encrypted, display_name
-      from agents
-      join users on users.id = agents.user_id
-      where users.is_active = true
-      order by agents.created_at asc
+      from (
+        select agents.sip_username, agents.sip_password_encrypted, agents.display_name, agents.created_at
+        from agents
+        join users on users.id = agents.user_id
+        where users.is_active = true
+        union all
+        select
+          admin_supervisor_endpoints.sip_username,
+          admin_supervisor_endpoints.sip_password_encrypted,
+          admin_supervisor_endpoints.display_name,
+          admin_supervisor_endpoints.created_at
+        from admin_supervisor_endpoints
+        join users on users.id = admin_supervisor_endpoints.user_id
+        where users.is_active = true
+          and users.role = 'admin'
+      ) directory_entries
+      order by created_at asc
     `
   );
 
@@ -131,7 +144,12 @@ export async function reconcileAgentDirectories(
       from agents
       join users on users.id = agents.user_id
       where users.is_active = false
-      order by agents.created_at asc
+      union all
+      select admin_supervisor_endpoints.sip_username
+      from admin_supervisor_endpoints
+      join users on users.id = admin_supervisor_endpoints.user_id
+      where users.is_active = false or users.role <> 'admin'
+      order by sip_username asc
     `
   );
   const removedUsernames: string[] = [];

@@ -57,11 +57,18 @@ export async function reconcileAgentRegistrations(
   try {
     const response = await sendApiCommand(config, `sofia status profile ${AGENT_SIP_PROFILE} reg`);
     const registeredUsernames = parseRegisteredSipUsernames(response.body || response.raw);
+    const supervisorEndpoints = await pool.query<{ sip_username: string }>(
+      "select sip_username from admin_supervisor_endpoints order by sip_username"
+    );
+    const supervisorUsernames = new Set(supervisorEndpoints.rows.map((row) => row.sip_username));
+    const registeredAgentUsernames = registeredUsernames.filter(
+      (sipUsername) => !supervisorUsernames.has(sipUsername)
+    );
     const databaseRegistrations = await pool.query<{ sip_username: string }>(
       "select sip_username from agents where registered = true order by sip_username"
     );
     const databaseUsernames = databaseRegistrations.rows.map((row) => row.sip_username);
-    const driftCount = symmetricDifferenceSize(databaseUsernames, registeredUsernames);
+    const driftCount = symmetricDifferenceSize(databaseUsernames, registeredAgentUsernames);
     const result = await pool.query(
       `
         update agents
@@ -103,9 +110,26 @@ export async function reconcileAgentRegistrations(
              )
            )
       `,
-      [registeredUsernames]
+      [registeredAgentUsernames]
     );
     const changedAgents = result.rowCount ?? 0;
+    await pool.query(
+      `
+        update admin_supervisor_endpoints
+        set registered = sip_username = any($1::text[]),
+            last_registered_at = case
+              when not registered and sip_username = any($1::text[]) then now()
+              else last_registered_at
+            end,
+            last_unregistered_at = case
+              when registered and not (sip_username = any($1::text[])) then now()
+              else last_unregistered_at
+            end,
+            updated_at = now()
+        where registered is distinct from (sip_username = any($1::text[]))
+      `,
+      [registeredUsernames]
+    );
     await pool.query(
       `
         insert into telephony_observability_state (
@@ -128,7 +152,7 @@ export async function reconcileAgentRegistrations(
             registration_reconciled_at = excluded.registration_reconciled_at,
             updated_at = now()
       `,
-      [databaseUsernames.length, registeredUsernames.length, driftCount, changedAgents]
+      [databaseUsernames.length, registeredAgentUsernames.length, driftCount, changedAgents]
     );
     return changedAgents;
   } catch (error) {

@@ -163,6 +163,36 @@ describe("dashboard route helpers", () => {
     );
   });
 
+  it("serializes Agent Desk call starts against an active supervisor session", async () => {
+    const actorUserId = "11111111-1111-4111-8111-111111111111";
+    const queries: Array<{ params: readonly unknown[]; sql: string }> = [];
+    const pool = createTransactionalPool({
+      clientHandler: (sql, params) => {
+        queries.push({ sql, params });
+        if (sql.includes("select is_active from users")) return rows([{ is_active: true }]);
+        if (sql.includes("from call_supervisor_sessions")) return rows([{ id: "active-supervisor" }]);
+        return rows([]);
+      }
+    });
+
+    const result = await createDialerCall(pool, config, {
+      actorUserId,
+      agentId: "22222222-2222-4222-8222-222222222222",
+      campaignId: selectedCampaignId,
+      contactId: "next",
+      sipUsername: "agent-test",
+      manualDial: false,
+      callRecordingEnabled: false,
+      earlyMediaAvmdEnabled: false,
+      eventType: "agent_next_call_started"
+    });
+
+    assert.deepEqual(result, { ok: false, reason: "supervisor_session" });
+    assert.ok(queries.some((query) => query.sql.includes("pg_advisory_xact_lock")));
+    assert.ok(queries.some((query) => query.sql === "rollback"));
+    assert.ok(!queries.some((query) => query.sql.includes("insert into calls")));
+  });
+
   it("streams the requested audio byte range before completing the async route", async () => {
     const directory = await mkdtemp(join(tmpdir(), "outbound-dialer-audio-"));
     const filePath = join(directory, "recording.wav");
@@ -771,6 +801,14 @@ describe("dashboard route helpers", () => {
       "The browser phone must be connected before starting a call"
     );
     assert.equal(createDialerCallFailureMessage("agent_paused"), "Resume calling before starting a call");
+    assert.equal(
+      createDialerCallFailureMessage("supervisor_session"),
+      "Stop live-call monitoring before starting an Agent Desk call"
+    );
+    assert.equal(
+      createDialerCallFailureMessage("session_revoked"),
+      "Your session is no longer authorized to start calls; sign in again"
+    );
     assert.equal(createDialerCallFailureMessage("lead_not_callable"), "Lead is not callable");
   });
 

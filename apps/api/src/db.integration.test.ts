@@ -33,6 +33,14 @@ describe("PostgreSQL migration integration", { skip: !databaseUrl }, () => {
       const auditTable = await pool.query("select auth_version from users limit 0");
       assert.equal(auditTable.fields[0]?.name, "auth_version");
       assert.equal((await pool.query("select 1 from admin_audit_events limit 0")).command, "SELECT");
+      assert.equal(
+        (await pool.query("select registered from admin_supervisor_endpoints limit 0")).command,
+        "SELECT"
+      );
+      assert.equal(
+        (await pool.query("select mode, state from call_supervisor_sessions limit 0")).command,
+        "SELECT"
+      );
 
       const notificationClient = await pool.connect();
       try {

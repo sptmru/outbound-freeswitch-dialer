@@ -2,6 +2,7 @@ import type {
   AdminAnalyticsResponse,
   AdminOverviewResponse,
   AdminAuditResponse,
+  AdminLiveCallsResponse,
   AdminCampaignListResponse,
   AdminRecordingListResponse,
   AdminUserListResponse,
@@ -38,6 +39,8 @@ import type {
   SuppressionListResponse,
   SendDtmfRequest,
   SoftphoneProvisioningResponse,
+  SupervisorMode,
+  SupervisorSession,
   StartLeadCallRequest,
   StartNextCallRequest,
   StartManualCallRequest,
@@ -189,6 +192,36 @@ export async function submitBrowserMediaTelemetry(
 
 export async function fetchAdminOverview(): Promise<AdminOverviewResponse> {
   return apiFetch<AdminOverviewResponse>("/admin/overview");
+}
+
+export async function fetchAdminLiveCalls(): Promise<AdminLiveCallsResponse> {
+  return apiFetch<AdminLiveCallsResponse>("/admin/live-calls");
+}
+
+export async function fetchSupervisorProvisioning(): Promise<SoftphoneProvisioningResponse> {
+  return apiFetch<SoftphoneProvisioningResponse>("/admin/supervisor/provisioning");
+}
+
+export async function startSupervisorSession(callId: string): Promise<SupervisorSession> {
+  return apiFetch<SupervisorSession>(`/admin/live-calls/${encodeURIComponent(callId)}/supervisor`, {
+    method: "POST"
+  });
+}
+
+export async function updateSupervisorMode(
+  sessionId: string,
+  mode: SupervisorMode
+): Promise<SupervisorSession> {
+  return apiFetch<SupervisorSession>(`/admin/supervisor-sessions/${encodeURIComponent(sessionId)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ mode })
+  });
+}
+
+export async function stopSupervisorSession(sessionId: string): Promise<void> {
+  return apiFetch<void>(`/admin/supervisor-sessions/${encodeURIComponent(sessionId)}`, {
+    method: "DELETE"
+  });
 }
 
 export type AdminAnalyticsFilters = {

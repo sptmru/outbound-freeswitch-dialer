@@ -12,6 +12,7 @@ Record evidence URL/path, UTC date, environment, operator, and deployed SHA for 
 - [x] Media access uses scoped short-lived hashed tickets and byte-range streaming instead of JWT query parameters.
 - [x] Campaign archive/history, user deactivate/reactivate/password/role lifecycle, suppression import/history, call-history filters/export/detail, and admin mutation audit exist.
 - [x] Active interactive calls keep the authenticated user on Agent Desk; campaign contacts and CSV failure details are paginated; bounded call timelines report omitted older events.
+- [x] Admin live-call supervision uses a dedicated SIP identity and separate FreeSWITCH leg, starts listen-only without microphone capture, prevents DTMF escalation, serializes against Agent Desk calls, persists session failures, audits mutations, and visibly notifies the agent.
 - [x] Scheduled retention uses advisory locking and preserves call/recording metadata after non-`ENOENT` unlink failures.
 - [x] Backup uses an authenticated `ODBACKUP2` AES-256-GCM envelope; restore requires confirmation and uses transactional PostgreSQL restore.
 - [x] Deployment uses preflight, quality gates, active-call guard, pre-deploy backup, SHA images, health waits, smoke test, state record, and explicit rollback.
@@ -31,6 +32,7 @@ Record evidence URL/path, UTC date, environment, operator, and deployed SHA for 
 - [ ] Provider mode, routing values, caller ID, codecs/DTMF, allowlisting, limits, and support contact are recorded.
 - [ ] Final DNS/NAT/public-IP/WSS/SIP/RTP topology is recorded.
 - [ ] Calling windows/timezone, outcome retry rules/attempts, recording consent, DNCR evidence, retention/legal hold, export access, and audit duration are approved.
+- [ ] Supervisor-monitoring roles, employee/customer notice and consent, coach/join authority, recording treatment, retention, training, and periodic audit-review ownership are approved.
 - [ ] Production, alert, backup, incident, and escalation owners are named.
 - [ ] Firewall and host-port exposure are reviewed separately by the deployment owner; this repository pass did not change them.
 
@@ -42,6 +44,16 @@ Record evidence URL/path, UTC date, environment, operator, and deployed SHA for 
 - [ ] Ringback, early media, two-way audio, and DTMF work on representative carrier/IVR destinations.
 - [ ] Call recording starts only when enabled, stops cleanly, has valid audio, streams/seeks securely, and follows consent policy.
 - [ ] Call history filters, pagination, detail timeline, media playback, and bounded export match live records.
+
+## Supervisor Live Acceptance
+
+- [ ] Listen starts with no browser microphone permission/capture and neither agent nor customer can hear supervisor audio.
+- [ ] Coach requests the selected microphone only when activated; the agent hears it and the customer does not.
+- [ ] Join requires confirmation and both agent and customer hear the supervisor; returning to listen removes microphone capture/injection.
+- [ ] Agent Desk displays the correct listen/coach/join notice and admin audit records identify start, mode changes, stop, actor, call, and session without credentials/media.
+- [ ] Stop, navigation, permission denial, agent/customer hangup, ESL/browser reconnect, and replacement-originate failure leave no hidden supervisor channel or stuck active session.
+- [ ] Concurrent tabs cannot combine an admin's Agent Desk call with supervision, and multiple authorized supervisors do not corrupt the target call or each other's sessions.
+- [ ] Controlled recordings establish whether supervisor speech is included as required by the approved policy; required notices/consent are independently evidenced.
 
 ## Voicemail Live Acceptance
 

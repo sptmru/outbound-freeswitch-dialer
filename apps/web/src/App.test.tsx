@@ -14,6 +14,7 @@ const apiMocks = vi.hoisted(() => ({
   dropVoicemail: vi.fn(),
   endCall: vi.fn(),
   fetchAdminAnalytics: vi.fn(),
+  fetchAdminLiveCalls: vi.fn(),
   fetchAdminCampaigns: vi.fn(),
   fetchAdminOverview: vi.fn(),
   fetchAgentDesk: vi.fn(),
@@ -31,11 +32,15 @@ const apiMocks = vi.hoisted(() => ({
   startLeadCall: vi.fn(),
   startManualCall: vi.fn(),
   startNextCall: vi.fn(),
+  startSupervisorSession: vi.fn(),
+  stopSupervisorSession: vi.fn(),
   subscribeAgentEvents: vi.fn(),
   updateAgentAvailability: vi.fn(),
   upsertCallAvmdReview: vi.fn(),
   updateSystemSettings: vi.fn(),
-  useSoftphoneRegistration: vi.fn()
+  updateSupervisorMode: vi.fn(),
+  useSoftphoneRegistration: vi.fn(),
+  useSupervisorSoftphone: vi.fn()
 }));
 
 describe("call lifecycle status labels", () => {
@@ -61,6 +66,7 @@ vi.mock("./api", async () => {
     dropVoicemail: apiMocks.dropVoicemail,
     endCall: apiMocks.endCall,
     fetchAdminAnalytics: apiMocks.fetchAdminAnalytics,
+    fetchAdminLiveCalls: apiMocks.fetchAdminLiveCalls,
     fetchAdminCampaigns: apiMocks.fetchAdminCampaigns,
     fetchAdminOverview: apiMocks.fetchAdminOverview,
     fetchAgentDesk: apiMocks.fetchAgentDesk,
@@ -78,15 +84,22 @@ vi.mock("./api", async () => {
     startLeadCall: apiMocks.startLeadCall,
     startManualCall: apiMocks.startManualCall,
     startNextCall: apiMocks.startNextCall,
+    startSupervisorSession: apiMocks.startSupervisorSession,
+    stopSupervisorSession: apiMocks.stopSupervisorSession,
     subscribeAgentEvents: apiMocks.subscribeAgentEvents,
     updateAgentAvailability: apiMocks.updateAgentAvailability,
     upsertCallAvmdReview: apiMocks.upsertCallAvmdReview,
-    updateSystemSettings: apiMocks.updateSystemSettings
+    updateSystemSettings: apiMocks.updateSystemSettings,
+    updateSupervisorMode: apiMocks.updateSupervisorMode
   };
 });
 
 vi.mock("./softphone", () => ({
   useSoftphoneRegistration: apiMocks.useSoftphoneRegistration
+}));
+
+vi.mock("./supervisor-softphone", () => ({
+  useSupervisorSoftphone: apiMocks.useSupervisorSoftphone
 }));
 
 const softphoneRuntime = {
@@ -131,6 +144,18 @@ const softphoneRuntime = {
   retryRemoteAudio: async () => undefined
 };
 
+const supervisorSoftphoneRuntime = {
+  registered: true,
+  state: "registered",
+  callState: "none",
+  mode: null,
+  sessionId: null,
+  microphoneActive: false,
+  audioPlaybackState: "idle",
+  error: null,
+  retryRemoteAudio: async () => undefined
+};
+
 describe("App Agent Desk empty states", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -149,6 +174,7 @@ describe("App Agent Desk empty states", () => {
       totalPages: 0
     });
     apiMocks.fetchAdminAnalytics.mockResolvedValue(adminAnalyticsResponse());
+    apiMocks.fetchAdminLiveCalls.mockResolvedValue({ calls: [], activeSession: null });
     apiMocks.fetchAdminOverview.mockResolvedValue(adminResponse());
     apiMocks.fetchAdminCampaigns.mockResolvedValue({
       items: adminResponse().campaigns,
@@ -180,6 +206,17 @@ describe("App Agent Desk empty states", () => {
     apiMocks.startLeadCall.mockResolvedValue(deskResponse());
     apiMocks.startManualCall.mockResolvedValue(deskResponse());
     apiMocks.startNextCall.mockResolvedValue(deskResponse());
+    apiMocks.startSupervisorSession.mockResolvedValue({
+      id: "99999999-9999-4999-8999-999999999999",
+      callId: "33333333-3333-4333-8333-333333333333",
+      mode: "listen",
+      state: "connecting",
+      startedAt: "2026-07-22T08:00:00.000Z",
+      connectedAt: null,
+      endedAt: null,
+      failureReason: null
+    });
+    apiMocks.stopSupervisorSession.mockResolvedValue(undefined);
     apiMocks.subscribeAgentEvents.mockReturnValue(() => undefined);
     apiMocks.updateAgentAvailability.mockResolvedValue(
       deskResponse({ availability: { status: "paused", wrapUpUntil: null } })
@@ -191,7 +228,18 @@ describe("App Agent Desk empty states", () => {
       reviewedAt: "2026-07-15T12:00:00.000Z",
       updatedAt: "2026-07-15T12:00:00.000Z"
     });
+    apiMocks.updateSupervisorMode.mockImplementation(async (sessionId, mode) => ({
+      id: sessionId,
+      callId: "33333333-3333-4333-8333-333333333333",
+      mode,
+      state: "connecting",
+      startedAt: "2026-07-22T08:00:00.000Z",
+      connectedAt: null,
+      endedAt: null,
+      failureReason: null
+    }));
     apiMocks.useSoftphoneRegistration.mockReturnValue(softphoneRuntime);
+    apiMocks.useSupervisorSoftphone.mockReturnValue(supervisorSoftphoneRuntime);
   });
 
   it("restores the shared page and selected campaign from the URL", async () => {
@@ -272,6 +320,40 @@ describe("App Agent Desk empty states", () => {
     window.history.pushState({}, "", "/settings?campaignId=11111111-1111-4111-8111-111111111111");
     window.dispatchEvent(new PopStateEvent("popstate"));
     expect(await screen.findByRole("heading", { level: 1, name: "Settings" })).toBeInTheDocument();
+  });
+
+  it("starts administrator monitoring in listen-only mode from Live calls", async () => {
+    const admin = userRow({ role: "admin" });
+    apiMocks.fetchMe.mockResolvedValue({ user: admin });
+    apiMocks.fetchAgentDesk.mockResolvedValue(deskResponse({ user: admin }));
+    apiMocks.fetchAdminLiveCalls.mockResolvedValue({
+      calls: [
+        {
+          id: "33333333-3333-4333-8333-333333333333",
+          agentName: "Agent One",
+          leadName: "Customer One",
+          phoneNumber: "+15550100",
+          campaignName: "Campaign One",
+          state: "bridged",
+          startedAt: "2026-07-22T08:00:00.000Z",
+          answeredAt: "2026-07-22T08:00:05.000Z",
+          durationSeconds: 30,
+          activeSupervisorCount: 0,
+          monitoredByCurrentAdmin: false
+        }
+      ],
+      activeSession: null
+    });
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Live calls" }));
+    expect(await screen.findByRole("heading", { level: 1, name: "Live calls" })).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: "Listen" }));
+
+    await waitFor(() =>
+      expect(apiMocks.startSupervisorSession).toHaveBeenCalledWith("33333333-3333-4333-8333-333333333333")
+    );
+    expect(await screen.findByRole("button", { name: /Microphone off/ })).toBeInTheDocument();
   });
 
   it("supports keyboard navigation and moves focus to the new page heading", async () => {
@@ -1577,7 +1659,7 @@ describe("App Agent Desk empty states", () => {
     render(<App />);
 
     expect(await screen.findByRole("button", { name: "Campaigns" })).toBeDisabled();
-    expect(screen.getAllByTitle("Finish the active call first")).toHaveLength(6);
+    expect(screen.getAllByTitle("Finish the active call first")).toHaveLength(7);
   });
 
   it("uses Dialer campaign branding and hides the unmapped company placeholder", async () => {
@@ -2002,6 +2084,7 @@ function activeCallRow(
       dropVoicemail: { allowed: true, reason: null },
       sendDtmf: { allowed: true, reason: null }
     },
+    supervisor: { active: false, mode: null },
     timeline: [],
     ...overrides
   };

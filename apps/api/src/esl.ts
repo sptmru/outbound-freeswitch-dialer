@@ -1,5 +1,6 @@
 import net from "node:net";
 import { randomUUID } from "node:crypto";
+import type { SupervisorMode } from "@outbound-dialer/shared";
 import type { AppConfig } from "./config.js";
 
 const TRUNK_ABSOLUTE_CODEC_STRING = "^^:PCMU:PCMA:G729";
@@ -22,6 +23,15 @@ export interface OriginateAgentBridgeCallInput {
   customerLegUuid: string;
   destinationNumber: string;
   sipUsername: string;
+}
+
+export interface OriginateSupervisorEavesdropInput {
+  callId: string;
+  mode: SupervisorMode;
+  sessionId: string;
+  sipUsername: string;
+  supervisorLegUuid: string;
+  targetAgentLegUuid: string;
 }
 
 export async function checkFreeSwitchEsl(config: AppConfig): Promise<string> {
@@ -77,6 +87,19 @@ export async function originateAgentBridgeCall(
   };
 }
 
+export async function originateSupervisorEavesdrop(
+  config: AppConfig,
+  input: OriginateSupervisorEavesdropInput
+): Promise<{ command: string; jobUuid: string; supervisorLegUuid: string }> {
+  const command = buildSupervisorEavesdropOriginateCommand(config, input);
+  const response = await sendFreeSwitchBgapiCommand(config, command);
+  return {
+    command,
+    jobUuid: parseJobUuid(response),
+    supervisorLegUuid: input.supervisorLegUuid
+  };
+}
+
 function buildAgentBridgeOriginateCommand(config: AppConfig, input: OriginateAgentBridgeCallInput): string {
   const customerDialString = buildCustomerDialString(config, input.destinationNumber);
   const agentVariables = buildOriginateVariables([
@@ -102,6 +125,29 @@ function buildAgentBridgeOriginateCommand(config: AppConfig, input: OriginateAge
       : null
   ]);
   return `originate {${agentVariables}}user/${input.sipUsername}@${config.FREESWITCH_DOMAIN} &bridge({${customerVariables}}${customerDialString})`;
+}
+
+function buildSupervisorEavesdropOriginateCommand(
+  config: AppConfig,
+  input: OriginateSupervisorEavesdropInput
+): string {
+  const variables = buildOriginateVariables([
+    `origination_uuid=${input.supervisorLegUuid}`,
+    `outbound_dialer_supervisor_session_id=${input.sessionId}`,
+    `outbound_dialer_supervisor_call_id=${input.callId}`,
+    `outbound_dialer_supervisor_mode=${input.mode}`,
+    `sip_h_X-Outbound-Dialer-Supervisor-Session-ID=${input.sessionId}`,
+    `sip_h_X-Outbound-Dialer-Supervisor-Mode=${input.mode}`,
+    "outbound_dialer_leg_type=supervisor",
+    "originate_timeout=15",
+    "hangup_after_bridge=true",
+    "eavesdrop_enable_dtmf=false",
+    "eavesdrop_bridge_aleg=true",
+    "eavesdrop_bridge_bleg=true",
+    input.mode === "whisper" || input.mode === "join" ? "eavesdrop_whisper_aleg=true" : null,
+    input.mode === "join" ? "eavesdrop_whisper_bleg=true" : null
+  ]);
+  return `originate {${variables}}user/${input.sipUsername}@${config.FREESWITCH_DOMAIN} &eavesdrop(${input.targetAgentLegUuid})`;
 }
 
 export function canOriginateCustomerLeg(config: AppConfig): boolean {
@@ -259,6 +305,7 @@ function parseHeaders(value: string): Record<string, string> {
 
 export const __testing = {
   buildAgentBridgeOriginateCommand,
+  buildSupervisorEavesdropOriginateCommand,
   buildCustomerDialString,
   buildOriginateVariables,
   escapeOriginateVariable,

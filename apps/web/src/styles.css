@@ -1769,6 +1769,139 @@ button.table-row {
   }
 }
 
+.live-calls-view {
+  display: grid;
+  gap: 18px;
+}
+
+.supervisor-safety-panel,
+.active-supervisor-session {
+  display: grid;
+  gap: 16px;
+}
+
+.supervisor-safety-panel > p {
+  color: var(--muted);
+  margin: 0;
+  max-width: 760px;
+}
+
+.supervisor-safety-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.active-supervisor-session {
+  border-color: rgba(37, 99, 235, 0.35);
+}
+
+.supervisor-mode-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.mode-button {
+  align-items: flex-start;
+  background: #f7f9fc;
+  border: 1px solid #d9e0e9;
+  border-radius: 12px;
+  color: #172033;
+  display: grid;
+  gap: 4px;
+  min-height: 108px;
+  padding: 14px;
+  text-align: left;
+}
+
+.mode-button span,
+.live-call-row span,
+.live-call-row small,
+.supervisor-notice span {
+  color: #637083;
+  font-size: 13px;
+}
+
+.mode-button.active {
+  background: rgba(37, 99, 235, 0.08);
+  border-color: #2563eb;
+  box-shadow: 0 0 0 1px #2563eb;
+}
+
+.mode-button.danger.active {
+  background: rgba(220, 38, 38, 0.08);
+  border-color: #dc2626;
+  box-shadow: 0 0 0 1px #dc2626;
+}
+
+.supervisor-stop {
+  justify-self: start;
+}
+
+.live-call-list {
+  display: grid;
+  gap: 10px;
+}
+
+.live-call-row {
+  align-items: center;
+  border: 1px solid #d9e0e9;
+  border-radius: 12px;
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+  padding: 14px;
+}
+
+.live-call-row.selected {
+  border-color: #2563eb;
+}
+
+.live-call-row > div:first-child,
+.supervisor-notice div {
+  display: grid;
+  gap: 4px;
+}
+
+.live-call-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.supervisor-notice {
+  align-items: flex-start;
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  border-radius: 12px;
+  display: flex;
+  gap: 10px;
+  padding: 12px;
+}
+
+.supervisor-notice.danger {
+  background: rgba(220, 38, 38, 0.08);
+  border-color: rgba(220, 38, 38, 0.3);
+}
+
+@media (max-width: 760px) {
+  .supervisor-mode-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .live-call-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .live-call-actions {
+    justify-content: space-between;
+  }
+}
+
 /* Dialer visual system — aligned with the Agent Workflow Concept in Figma. */
 :root {
   color: #0f131f;

@@ -7,7 +7,7 @@ This document is the current product and operational contract. Items described a
 - Single tenant.
 - One interactive call per agent. A released voicemail customer leg may continue as a background job while the agent starts the next interactive call.
 - Browser softphone for agent media; all PSTN origination and call control remain backend-owned through FreeSWITCH ESL.
-- Local accounts with `agent` and `admin` roles. Admins may use Agent Desk, but SIP registration and microphone access start only while that view is open.
+- Local accounts with `agent` and `admin` roles. Admins may use Agent Desk; its SIP registration and microphone access start only while that view is open. A separate supervisor SIP identity registers only on **Live calls** and does not request microphone access in listen-only mode.
 - Agent Desk audio setup lets an idle user select microphone and speaker devices, choose a browser microphone-processing profile, inspect the settings actually applied by the browser, and run a bounded microphone-level and ICE-readiness check. Device identifiers and the selected profile remain local to that browser.
 - While an interactive call is active, the application keeps the user on Agent Desk. Sidebar navigation, browser history, deep links, and reload hydration must not leave the desk and stop the browser softphone.
 - Manual voicemail drop and automatically determined outcomes are the current product behavior. Progressive dialing, mandatory agent dispositions, and automatic voicemail drop are not part of this version.
@@ -48,6 +48,16 @@ This document is the current product and operational contract. Items described a
 - Allow DTMF only when the backend reports the action eligible.
 - Persist subscribed ESL events in arrival order through a bounded queue. Retry transient database failures with backoff; if the queue fills, disconnect/reconnect the listener and raise an observable overflow rather than silently discarding backlog.
 - Reconcile unfinished database calls with FreeSWITCH `uuid_exists` after ESL subscription/reconnect and periodically. Missing calls are closed, orphaned agent legs are released when possible, and active voicemail playback is recovered or finalized.
+
+## Live Call Supervision
+
+- Active admins can list currently bridged agent/customer calls and start one supervisor session at a time. Monitoring always starts in server-enforced `listen` mode with browser microphone capture disabled.
+- `whisper` requests microphone access and injects supervisor audio only toward the agent. `join` injects it toward both agent and customer and requires an explicit browser confirmation before the API request.
+- Every supervisor connection uses a dedicated admin SIP identity and a separate FreeSWITCH leg/session record. It does not become an agent/customer `call_leg`, cannot originate through the browser-owned dialplan, and does not change the target call lifecycle.
+- The API verifies the admin role, supervisor registration, durable call state, both current FreeSWITCH leg UUIDs, call ownership, and one-session exclusivity before originate. A shared transaction lock prevents an admin from starting an Agent Desk call concurrently with monitoring.
+- Mode changes replace the supervisor leg. The API never enables `eavesdrop` DTMF mode switching, and it does not update the durable mode until FreeSWITCH confirms the previous leg was stopped.
+- Agent Desk visibly identifies listen, whisper, and join states. Successful start/change/stop requests are attributed in `admin_audit_events`; session state and terminal failures remain in `call_supervisor_sessions`.
+- Production enablement requires approved employee/customer notice, consent, recording, retention, access-control, and training policy for every applicable jurisdiction. The product does not play an automatic customer disclosure prompt.
 
 ## Contact Retry Policy
 
@@ -98,7 +108,7 @@ This document is the current product and operational contract. Items described a
 ## Users And Administrative Audit
 
 - Admins can create, edit, deactivate/reactivate, change role, and reset passwords.
-- Deactivation is rejected while the user has an active interactive call, revokes sessions, removes agent registration material, and preserves historical attribution.
+- Deactivation is rejected while the user has an active interactive call or supervisor session, revokes sessions, removes agent/supervisor registration material, and preserves historical attribution. Removing the admin role is likewise rejected until that user's supervisor session ends.
 - Successful mutating `/admin/*` requests create `admin_audit_events` with actor, request ID, method, route, response status, source IP, user agent, bounded string route parameters, and timestamp.
 - Audit history is paginated and filterable by actor, method, and date.
 - Admins can update runtime product policies from Settings: default phone country, contact retry policy, export limit, retention windows/control, per-call PCAP capture, the global trunk caller ID, Alertmanager repeat interval, and enablement of deployment-configured notification channels. The UI distinguishes settings persistence from the asynchronous Alertmanager runtime-apply state.

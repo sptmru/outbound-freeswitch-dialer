@@ -55,6 +55,14 @@ export const agentAvailabilityStatuses = ["available", "paused", "wrap_up"] as c
 
 export type AgentAvailabilityStatus = (typeof agentAvailabilityStatuses)[number];
 
+export const supervisorModes = ["listen", "whisper", "join"] as const;
+
+export type SupervisorMode = (typeof supervisorModes)[number];
+
+export const supervisorSessionStates = ["connecting", "active", "ended", "failed"] as const;
+
+export type SupervisorSessionState = (typeof supervisorSessionStates)[number];
+
 export type CampaignStatus = "active" | "paused" | "draft" | "archived";
 
 export interface HealthResponse {
@@ -181,6 +189,10 @@ export interface AgentDeskResponse {
       dropVoicemail: CallActionAvailability;
       sendDtmf: CallActionAvailability;
     };
+    supervisor: {
+      active: boolean;
+      mode: SupervisorMode | null;
+    };
     timeline: Array<{ at: string; label: string }>;
   } | null;
 }
@@ -207,6 +219,40 @@ export interface SoftphoneProvisioningResponse {
     username?: string;
     credential?: string;
   }>;
+}
+
+export interface AdminLiveCallItem {
+  id: string;
+  agentName: string;
+  leadName: string;
+  phoneNumber: string;
+  campaignName: string;
+  state: CallState;
+  startedAt: string;
+  answeredAt: string | null;
+  durationSeconds: number;
+  activeSupervisorCount: number;
+  monitoredByCurrentAdmin: boolean;
+}
+
+export interface SupervisorSession {
+  id: string;
+  callId: string;
+  mode: SupervisorMode;
+  state: SupervisorSessionState;
+  startedAt: string;
+  connectedAt: string | null;
+  endedAt: string | null;
+  failureReason: string | null;
+}
+
+export interface AdminLiveCallsResponse {
+  calls: AdminLiveCallItem[];
+  activeSession: SupervisorSession | null;
+}
+
+export interface UpdateSupervisorSessionRequest {
+  mode: SupervisorMode;
 }
 
 export interface BrowserMediaTelemetryRequest {

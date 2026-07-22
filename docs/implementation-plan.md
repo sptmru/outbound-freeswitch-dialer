@@ -47,6 +47,7 @@ Firewall and host-published-port changes were excluded by instruction. They are 
 - Repo-owned FreeSWITCH templates and runtime rendering for ESL, internal WebRTC, provider-neutral registration/IP-auth trunking, codecs, WSS, dialplan, and recordings.
 - SIP.js browser provisioning and registration only on Agent Desk, with remote audio cleanup and registration reconciliation.
 - Backend-owned agent-first originate/bridge, suppression and campaign authorization before originate, DTMF, hangup, and active-call eligibility.
+- Dedicated admin supervisor SIP identities and separate `eavesdrop` legs for listen-only, agent whisper, and two-party join, with server-enforced mode variables, no DTMF escalation, current-leg event correlation, and fail-closed mode replacement.
 - Transactional next-contact claim using `FOR UPDATE SKIP LOCKED` and uniqueness guards against duplicate interactive calls.
 - Explicit call/leg/event persistence, originate watchdog, automatic outcome mapping, and contact lifecycle updates.
 - ESL frame unwrapping, custom-event subscription, agent registration updates, recording/AVMD startup, and reconnect retry.
@@ -71,6 +72,7 @@ Firewall and host-published-port changes were excluded by instruction. They are 
 - Manual voicemail selection/drop with background job tray and failure/interruption visibility.
 - VM/beep/AVMD signals shown as advisory evidence, never as an automatic drop trigger.
 - Admin access to Agent Desk without starting SIP/microphone outside the desk view, with active-call navigation/history/deep links forced back to the desk so the browser phone remains registered.
+- Admin **Live calls** view with receive-only default, microphone-on-demand coach/join controls, explicit join confirmation, one-session/Agent-Desk mutual exclusion, and an agent-visible monitoring banner.
 - Credentialed SSE refresh hints from PostgreSQL changes, EventSource reconnect, heartbeat, debounced refresh, and periodic HTTP fallback.
 - CSV workflow with required mapped `name` + `phone`, preserved additional source fields, explicit byte/row ceilings, and product-facing copy that hides telephony plumbing.
 
@@ -85,6 +87,7 @@ Firewall and host-published-port changes were excluded by instruction. They are 
 - Paginated/filterable call history, detailed event timeline with explicit latest-100 truncation status, bounded streaming CSV export, and media playback with browser decode/error feedback.
 - Stable per-section application URLs with browser back/forward support plus URL- and browser-persisted Agent Desk campaign selection.
 - Successful mutating admin requests recorded with actor/request/route/status/source metadata and bounded route parameters; paginated audit endpoint with actor/method/date filters.
+- Supervisor endpoint/session persistence, active-session metric, agent-visible state, and action/call/session/mode-enriched audit records.
 - Database-backed admin runtime policies with `.env` fallback for dialing, phone normalization, exports, retention, PCAP, caller ID, and safe Alertmanager channel/repeat controls with visible asynchronous apply status.
 
 ### 7. Retention, Monitoring, And Operations
@@ -109,8 +112,10 @@ Firewall and host-published-port changes were excluded by instruction. They are 
 - Obtain and record provider mode, proxy/realm/outbound proxy, credentials, caller ID rules, allowlisted IPs, codecs, response/hangup behavior, and throughput constraints.
 - Confirm target DNS, certificate names, public/NAT topology, advertised SIP/RTP addresses, and provider reachability.
 - Run a production-like call matrix: WSS registration, ringback/early media, human answer, busy, reject, no-answer, agent/customer hangup, DTMF, provider error, and recording.
+- Validate supervisor listen/whisper/join audibility and isolation, browser microphone denial/defaults, reconnect/hangup races, multi-supervisor behavior, and resulting recording contents on the target FreeSWITCH/browser/provider path.
 - Verify several representative far-end mailboxes record the complete voicemail after the agent is released. Local playback events are diagnostic evidence only.
 - Approve calling windows/timezone, retry/outcome policy, recording consent, DNCR evidence, retention/legal hold, and audit duration.
+- Approve supervisor-monitoring access, employee/customer notice and consent, coaching/join policy, recording treatment, retention, training, and audit-review ownership.
 
 ### P0 — Recovery And Operational Proof
 

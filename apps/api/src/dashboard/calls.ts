@@ -10,6 +10,7 @@ import {
   originateAgentBridgeCall,
   sendFreeSwitchApiCommand
 } from "../esl.js";
+import { lockUserMediaAction } from "../user-media-lock.js";
 import { lockDefaultRecordingSelection } from "./recordings.js";
 
 interface LockedCallableContact {
@@ -175,7 +176,9 @@ type CreateDialerCallFailureReason =
   | "agent_not_registered"
   | "lead_not_callable"
   | "maintenance"
-  | "no_callable_contacts";
+  | "no_callable_contacts"
+  | "session_revoked"
+  | "supervisor_session";
 
 type CreateDialerCallResult =
   { ok: true; callId: string; campaignId: string } | { ok: false; reason: CreateDialerCallFailureReason };
@@ -193,6 +196,7 @@ export async function createDialerCall(
   pool: pg.Pool,
   config: AppConfig,
   input: {
+    actorUserId?: string;
     agentId: string;
     campaignId: string | null;
     contactId: string | null | "next";
@@ -232,6 +236,29 @@ export async function createDialerCall(
     if (callStartGate.rows[0]?.paused) {
       await client.query("rollback");
       return { ok: false, reason: "maintenance" };
+    }
+
+    if (input.actorUserId) {
+      await lockUserMediaAction(client, input.actorUserId);
+      const actor = await client.query<{ is_active: boolean }>("select is_active from users where id = $1", [
+        input.actorUserId
+      ]);
+      if (!actor.rows[0]?.is_active) {
+        await client.query("rollback");
+        return { ok: false, reason: "session_revoked" };
+      }
+      const activeSupervisorSession = await client.query(
+        `select 1
+         from call_supervisor_sessions
+         where actor_user_id = $1
+           and state in ('connecting', 'active')
+         limit 1`,
+        [input.actorUserId]
+      );
+      if (activeSupervisorSession.rowCount) {
+        await client.query("rollback");
+        return { ok: false, reason: "supervisor_session" };
+      }
     }
 
     await client.query(
@@ -456,6 +483,12 @@ export function createDialerCallFailureMessage(reason: CreateDialerCallFailureRe
   }
   if (reason === "maintenance") {
     return "Calling is temporarily paused for certificate maintenance";
+  }
+  if (reason === "supervisor_session") {
+    return "Stop live-call monitoring before starting an Agent Desk call";
+  }
+  if (reason === "session_revoked") {
+    return "Your session is no longer authorized to start calls; sign in again";
   }
   return "Lead is not callable";
 }

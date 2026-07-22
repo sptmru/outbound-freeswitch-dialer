@@ -69,6 +69,46 @@ describe("ESL helpers", () => {
     );
   });
 
+  it("builds supervisor monitoring as server-enforced listen-only by default", () => {
+    const command = __testing.buildSupervisorEavesdropOriginateCommand(config, {
+      callId: "11111111-1111-4111-8111-111111111111",
+      mode: "listen",
+      sessionId: "22222222-2222-4222-8222-222222222222",
+      sipUsername: "supervisor_123",
+      supervisorLegUuid: "33333333-3333-4333-8333-333333333333",
+      targetAgentLegUuid: "44444444-4444-4444-8444-444444444444"
+    });
+
+    assert.match(command, /eavesdrop_enable_dtmf=false/);
+    assert.match(command, /eavesdrop_bridge_aleg=true,eavesdrop_bridge_bleg=true/);
+    assert.doesNotMatch(command, /eavesdrop_whisper_/);
+    assert.doesNotMatch(command, /outbound_dialer_call_id=/);
+    assert.match(command, /&eavesdrop\(44444444-4444-4444-8444-444444444444\)$/);
+  });
+
+  it("limits whisper to the agent and requires both mux directions for join", () => {
+    const input = {
+      callId: "11111111-1111-4111-8111-111111111111",
+      sessionId: "22222222-2222-4222-8222-222222222222",
+      sipUsername: "supervisor_123",
+      supervisorLegUuid: "33333333-3333-4333-8333-333333333333",
+      targetAgentLegUuid: "44444444-4444-4444-8444-444444444444"
+    };
+    const whisper = __testing.buildSupervisorEavesdropOriginateCommand(config, {
+      ...input,
+      mode: "whisper"
+    });
+    const join = __testing.buildSupervisorEavesdropOriginateCommand(config, {
+      ...input,
+      mode: "join"
+    });
+
+    assert.match(whisper, /eavesdrop_whisper_aleg=true/);
+    assert.doesNotMatch(whisper, /eavesdrop_whisper_bleg=true/);
+    assert.match(join, /eavesdrop_whisper_aleg=true/);
+    assert.match(join, /eavesdrop_whisper_bleg=true/);
+  });
+
   it("waits for full content-length before parsing ESL responses", () => {
     assert.equal(__testing.parseEslResponse("Content-Type: api/response\nContent-Length: 5\n\n+O"), null);
     assert.deepEqual(__testing.parseEslResponse("Content-Type: api/response\nContent-Length: 5\n\n+OK\n!"), {

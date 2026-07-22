@@ -29,6 +29,9 @@ Total items returned: 2
     const pool = {
       query: (sql: string, params: readonly unknown[] = []) => {
         queries.push({ sql, params });
+        if (sql.includes("from admin_supervisor_endpoints")) {
+          return Promise.resolve({ rowCount: 0, rows: [] });
+        }
         if (sql.includes("select sip_username")) {
           return Promise.resolve({ rowCount: 1, rows: [{ sip_username: "agent_stale" }] });
         }
@@ -49,7 +52,7 @@ Total items returned: 2
     });
 
     assert.equal(changed, 2);
-    assert.equal(queries.length, 3);
+    assert.equal(queries.length, 5);
     const update = queries.find((query) => query.sql.includes("update agents"));
     assert.deepEqual(update?.params, [["agent_qmj4ws"]]);
     assert.match(update?.sql ?? "", /set registered = sip_username = any\(\$1::text\[\]\)/);
@@ -67,6 +70,9 @@ Total items returned: 2
   it("clears stale registrations when FreeSWITCH returns an empty table", async () => {
     const pool = {
       query: (sql: string, params: readonly unknown[] = []) => {
+        if (sql.includes("from admin_supervisor_endpoints")) {
+          return Promise.resolve({ rowCount: 0, rows: [] });
+        }
         if (sql.includes("select sip_username")) {
           return Promise.resolve({ rowCount: 1, rows: [{ sip_username: "agent_qmj4ws" }] });
         }

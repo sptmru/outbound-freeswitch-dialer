@@ -25,6 +25,10 @@ import {
 } from "./metrics.js";
 import { OrderedRetryQueue } from "./ordered-retry-queue.js";
 import { createEarlyMediaFallbackController } from "./early-media-fallback.js";
+import {
+  persistSupervisorBackgroundJobFailure,
+  persistSupervisorFreeSwitchEvent
+} from "./dashboard/supervisor.js";
 
 interface Logger {
   error: (value: unknown, message?: string) => void;
@@ -324,6 +328,10 @@ function isTransientPersistenceError(error: unknown): boolean {
 async function persistFreeSwitchEvent(config: AppConfig, pool: pg.Pool, frame: EslFrame): Promise<void> {
   const eventName = frame.headers["event-name"];
   if (eventName === "BACKGROUND_JOB") {
+    const jobUuid = frame.headers["job-uuid"]?.trim();
+    if (jobUuid && isUuid(jobUuid) && isFailedBackgroundJob(frame)) {
+      await persistSupervisorBackgroundJobFailure(pool, jobUuid, frame.body.trim().slice(0, 1000));
+    }
     await persistBackgroundJobEvent(config, pool, frame);
     return;
   }
@@ -337,6 +345,21 @@ async function persistFreeSwitchEvent(config: AppConfig, pool: pg.Pool, frame: E
   }
   if (eventName === "CUSTOM" && isVoicemailDetectionEvent(frame)) {
     await persistVoicemailDetectionEvent(pool, frame);
+    return;
+  }
+
+  const supervisorSessionId = frame.headers["variable_outbound_dialer_supervisor_session_id"];
+  if (eventName && supervisorSessionId && isUuid(supervisorSessionId)) {
+    await persistSupervisorFreeSwitchEvent(pool, {
+      eventName,
+      sessionId: supervisorSessionId,
+      supervisorLegUuid:
+        frame.headers["unique-id"] ??
+        frame.headers["variable_uuid"] ??
+        frame.headers["variable_origination_uuid"] ??
+        null,
+      hangupCause: frame.headers["hangup-cause"]
+    });
     return;
   }
 

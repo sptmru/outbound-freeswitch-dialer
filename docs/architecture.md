@@ -40,7 +40,7 @@ Only nginx is intended as the public HTTP entrypoint. Grafana is routed by hostn
 ### Web application
 
 - React/Vite agent and administrator UI.
-- SIP.js softphone registration over WSS, started only on Agent Desk.
+- SIP.js agent softphone registration over WSS, started only on Agent Desk. A separate admin supervisor softphone exists only on **Live calls**; listen-only answers use receive-only audio constraints and microphone capture begins only for whisper/join.
 - Agent Desk keeps audio-device and microphone-processing preferences in browser storage. The selected input is passed into SIP.js capture constraints, the selected output is applied with the browser `setSinkId` capability when available, and the readiness check analyzes a short local microphone sample plus ICE candidate gathering without persisting raw audio.
 - Credentialed REST calls and `EventSource` subscription to `/agent/events`.
 - Periodic HTTP refresh remains as fallback because SSE carries invalidation hints, not full state.
@@ -60,7 +60,7 @@ The API publishes an admin-only Swagger UI at `/api/docs/` through the applicati
 
 ### PostgreSQL
 
-- Durable users, agents, campaigns, contacts/imports, calls, legs, events, recordings, suppression, settings, media tickets, and audit events.
+- Durable users, agents, campaigns, contacts/imports, calls, legs, events, recordings, suppression, settings, media tickets, supervisor endpoints/sessions, and audit events.
 - Transactional row locks and unique indexes protect active-call/contact ownership.
 - Constraints bound core statuses/outcomes and credential/session versions.
 - Statement-level triggers call `pg_notify('outbound_dialer_changes', ...)`; the API publishes a refresh SSE event to connected authenticated clients.
@@ -71,6 +71,7 @@ The API publishes an admin-only Swagger UI at `/api/docs/` through the applicati
 - Internal WebRTC SIP profile and WSS media endpoint for browser agents.
 - Provider-neutral external trunk in registration or IP-auth mode.
 - Agent-first originate/bridge controlled by ESL.
+- A separate backend-originated `eavesdrop` leg for admin listen/agent-whisper/two-party-join modes. Browser DTMF cannot change mode; the API replaces the leg with explicit FreeSWITCH variables.
 - Application-owned dialplan for voicemail playback and custom lifecycle events.
 - Call recording, early-media AVMD, DTMF, channel state, and UUID existence checks.
 - Active calls are reconciled after each subscription and periodically. Requests are coalesced and wait for the event persistence backlog to drain; readiness requires the long-lived event subscription, not only a successful one-off ESL command.
@@ -134,6 +135,18 @@ This design avoids maintaining per-user product snapshots in the SSE layer. Auth
 
 Contact selection uses `FOR UPDATE SKIP LOCKED`; database uniqueness also prevents two active claims for one agent/contact. Defaults allow three attempts with a 15-minute delay between retryable attempts.
 
+## Supervisor Call Flow
+
+1. The **Live calls** view provisions and registers a dedicated per-admin SIP identity. The identity uses the same deny-all authenticated browser ingress context as agents, so browsers cannot originate calls outside backend-owned ESL control.
+2. `POST /admin/live-calls/:callId/supervisor` verifies admin authorization, registration, call ownership, bridged database state, and both live FreeSWITCH UUIDs. A transaction-scoped user lock serializes this against Agent Desk call creation.
+3. The API inserts a `listen` session and originates a separate supervisor leg to `eavesdrop(<agent-leg-uuid>)`. The supervisor leg carries only supervisor correlation variables and is excluded from the normal call/leg finalizer.
+4. FreeSWITCH enforces listen/whisper/join with `eavesdrop_bridge_*` and `eavesdrop_whisper_*`; `eavesdrop_enable_dtmf=false` prevents the browser from escalating itself.
+5. Changing mode first stops the prior leg. Only after FreeSWITCH confirms that command does the API store a new UUID/mode and originate the replacement. A failure before that point leaves the prior mode authoritative; a replacement originate failure marks the new session failed.
+6. ESL answer/bridge/hangup and background-job failure events update only the session whose current supervisor UUID/job UUID matches. Ending the supervisor leg never ends the agent/customer bridge.
+7. Agent Desk refetches on `call_supervisor_sessions` notifications and shows the strongest active mode. Admin mutations receive normal request audit records enriched with the target call/session/mode.
+
+The separate leg minimizes blast radius but does not prove what either party heard. Listen/whisper direction, join mixing, recording contents, reconnect behavior, and device permissions require a controlled target-environment call matrix before production acceptance.
+
 ## Voicemail Drop Flow
 
 ```text
@@ -180,6 +193,7 @@ The event record is the source of lifecycle evidence. A local completion event s
 - Users are deactivated, not physically deleted, so historical call/audit attribution remains available. Deactivation revokes sessions and agent registration material.
 - Suppression entries store the current block; `suppression_events` preserve create/update/import/remove/blocked-manual-dial evidence.
 - A Fastify hook records every successful mutating `/admin/*` request in `admin_audit_events`. It stores identifiers and bounded string route parameters, not request bodies/secrets.
+- Supervisor start/mode/stop audit entries are enriched with a bounded action, call/session identifier, and selected mode. SIP credentials and media are not placed in audit metadata.
 
 ## Runtime Administration Settings
 

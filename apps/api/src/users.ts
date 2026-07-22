@@ -305,6 +305,21 @@ export async function migrateAgentSipSecretEncryption(pool: pg.Pool, config: App
       ]);
       migrated += 1;
     }
+    const supervisorEndpoints = await client.query<{
+      user_id: string;
+      sip_password_encrypted: string;
+    }>(
+      "select user_id, sip_password_encrypted from admin_supervisor_endpoints where sip_password_encrypted like 'v1.%' for update"
+    );
+    for (const endpoint of supervisorEndpoints.rows) {
+      if (!secretNeedsReencryption(config, endpoint.sip_password_encrypted)) continue;
+      const plaintext = decryptSecret(config, endpoint.sip_password_encrypted);
+      await client.query(
+        "update admin_supervisor_endpoints set sip_password_encrypted = $2, updated_at = now() where user_id = $1",
+        [endpoint.user_id, encryptSecret(config, plaintext)]
+      );
+      migrated += 1;
+    }
     await client.query("commit");
     return migrated;
   } catch (error) {
@@ -322,7 +337,13 @@ async function nextSipUsername(client: pg.PoolClient, prefix: string): Promise<s
       .replace(/[^a-z0-9]/g, "")
       .slice(0, 8);
     const username = `${prefix}_${suffix}`;
-    const existing = await client.query("select 1 from agents where sip_username = $1", [username]);
+    const existing = await client.query(
+      `select 1 from agents where sip_username = $1
+       union all
+       select 1 from admin_supervisor_endpoints where sip_username = $1
+       limit 1`,
+      [username]
+    );
     if (!existing.rowCount) {
       return username;
     }

@@ -208,6 +208,7 @@ async function getActiveCall(pool: pg.Pool, userId: string): Promise<AgentDeskRe
     customer_leg_uuid: string | null;
     call_recording_enabled: boolean;
     call_recording_status: CallRecordingStatus;
+    supervisor_mode: "listen" | "whisper" | "join" | null;
   }>(
     `
       select
@@ -222,12 +223,29 @@ async function getActiveCall(pool: pg.Pool, userId: string): Promise<AgentDeskRe
         calls.call_recording_enabled,
         calls.call_recording_status,
         recordings.name as recording_name,
-        customer_leg.freeswitch_uuid as customer_leg_uuid
+        customer_leg.freeswitch_uuid as customer_leg_uuid,
+        supervisor.mode as supervisor_mode
       from calls
       join agents on agents.id = calls.agent_id
       left join contacts on contacts.id = calls.contact_id
       left join recordings on recordings.id = calls.recording_id
       left join call_legs customer_leg on customer_leg.call_id = calls.id and customer_leg.type = 'customer'
+      left join lateral (
+        select case max(
+          case call_supervisor_sessions.mode
+            when 'join' then 3
+            when 'whisper' then 2
+            else 1
+          end
+        )
+          when 3 then 'join'
+          when 2 then 'whisper'
+          when 1 then 'listen'
+        end as mode
+        from call_supervisor_sessions
+        where call_supervisor_sessions.call_id = calls.id
+          and call_supervisor_sessions.state in ('connecting', 'active')
+      ) supervisor on true
       where agents.user_id = $1
         and calls.ended_at is null
         and calls.state not in ('completed', 'failed', 'canceled', 'agent_released')
@@ -258,6 +276,10 @@ async function getActiveCall(pool: pg.Pool, userId: string): Promise<AgentDeskRe
     callRecordingEnabled: row.call_recording_enabled,
     callRecordingStatus: row.call_recording_enabled ? (row.call_recording_status ?? "pending") : "disabled",
     actions: getActiveCallActions(row.state, row.customer_leg_uuid),
+    supervisor: {
+      active: row.supervisor_mode !== null,
+      mode: row.supervisor_mode
+    },
     timeline: await getCallTimeline(pool, row.id)
   };
 }

@@ -1,5 +1,15 @@
 # Administrator Guide
 
+## Live Calls
+
+- Open **Live calls** and wait for **Supervisor phone ready**. This uses a dedicated supervisor identity; it does not activate the Agent Desk phone.
+- Select **Listen** on a connected conversation. Every session starts listen-only, and the browser does not request microphone access in this mode.
+- Use **Coach agent** only when the operating policy allows it. The browser requests the saved microphone device/profile, and only the agent should hear you.
+- Use **Join call** only after reviewing the confirmation that both parties will hear you. The agent sees a visible state banner for all three modes; the customer receives no automatic disclosure prompt from this product.
+- Click **Stop monitoring** before leaving the workflow or starting an Agent Desk call. The API also blocks concurrent monitoring/Agent Desk starts across tabs and limits each admin to one active supervisor session.
+- Treat FreeSWITCH/API confirmation as technical evidence, not proof of audibility. Before production use, run a controlled call matrix for listen, coach, join, mute/default microphone, permission denial, reconnect, agent/customer hangup, multiple supervisors, and recording playback.
+- Access is limited to active admins and start/change/stop actions are audited. Obtain approval for who may monitor, required notices/consent, recording treatment, retention, and periodic audit review before enabling the workflow operationally.
+
 ## Analytics
 
 - Open **Analytics** for the operational scorecard. Select Today, 7 days, or 30 days and optionally narrow the view to one campaign. Date boundaries and daily buckets use the IANA timezone reported by the browser and show that timezone next to the source context.
@@ -28,7 +38,7 @@
 
 - Create named accounts; never share agent/admin credentials.
 - Edit name/email/role, reset passwords, and deactivate/reactivate through the supported UI/API.
-- Password reset and deactivation revoke outstanding sessions. Deactivation is refused while the user has an active interactive call and removes the agent's FreeSWITCH registration material while preserving history.
+- Password reset and deactivation revoke outstanding sessions. Deactivation is refused while the user has an active interactive call or live-call monitoring session and removes agent/supervisor FreeSWITCH registration material while preserving history. Stop monitoring before removing an admin role.
 - Do not use physical deletion or direct SQL to offboard users.
 
 ## Suppression

@@ -77,6 +77,10 @@ const activeCalls = gauge(
   "outbound_dialer_active_calls",
   "Current non-terminal calls excluding voicemail playback continuing after agent release."
 );
+const activeSupervisorSessions = gauge(
+  "outbound_dialer_active_supervisor_sessions",
+  "Current administrator live-call monitoring sessions, kept separate from product calls."
+);
 const stuckCalls = gauge(
   "outbound_dialer_stuck_calls",
   "Current non-terminal calls older than the configured threshold."
@@ -486,6 +490,7 @@ async function refreshDatabaseMetrics(pool: pg.Pool, stuckCallSeconds: number): 
     ] = await Promise.all([
       query<{
         active_calls: string;
+        active_supervisor_sessions: string;
         active_voicemail_jobs: string;
         recording_finalization_backlog: string;
         registered_agents: string;
@@ -496,6 +501,7 @@ async function refreshDatabaseMetrics(pool: pg.Pool, stuckCallSeconds: number): 
         `
           select
             (select count(*) from calls where ended_at is null and state not in ('completed', 'failed', 'canceled', 'agent_released')) as active_calls,
+            (select count(*) from call_supervisor_sessions where state in ('connecting', 'active')) as active_supervisor_sessions,
             (select count(*) from calls where ended_at is null and state not in ('completed', 'failed', 'canceled', 'agent_released') and created_at < now() - ($1 * interval '1 second')) as stuck_calls,
             (select count(*) from calls where ended_at is null and state in ('voicemail_drop_requested', 'voicemail_playback_started', 'agent_released')) as active_voicemail_jobs,
             (select count(*) from calls where ended_at is null and state in ('voicemail_drop_requested', 'voicemail_playback_started', 'agent_released') and coalesce(voicemail_drop_requested_at, created_at) < now() - ($1 * interval '1 second')) as stuck_voicemail_jobs,
@@ -708,6 +714,7 @@ async function refreshDatabaseMetrics(pool: pg.Pool, stuckCallSeconds: number): 
     const current = snapshot.rows[0];
     const recent = window.rows[0];
     activeCalls.set(toNumber(current?.active_calls));
+    activeSupervisorSessions.set(toNumber(current?.active_supervisor_sessions));
     stuckCalls.set(toNumber(current?.stuck_calls));
     activeVoicemailJobs.set(toNumber(current?.active_voicemail_jobs));
     stuckVoicemailJobs.set(toNumber(current?.stuck_voicemail_jobs));

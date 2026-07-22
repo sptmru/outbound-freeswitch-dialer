@@ -103,6 +103,7 @@ const callParams = params("callId", "Call identifier");
 const campaignParams = params("campaignId", "Campaign identifier");
 const contactParams = params("contactId", "Contact identifier");
 const recordingParams = params("recordingId", "Voicemail recording identifier");
+const supervisorSessionParams = params("sessionId", "Supervisor session identifier");
 
 add("GET", "/", "Get API service status", "Returns the API service name and basic status.", {
   success: ref("RootServiceResponse")
@@ -356,6 +357,61 @@ add("GET", "/admin/calls", "List call history", "Returns filtered and paginated 
   success: ref("CallHistoryResponse"),
   errors: adminErrors
 });
+add(
+  "GET",
+  "/admin/live-calls",
+  "List live calls",
+  "Returns bridged calls that are currently eligible for administrator monitoring and the current administrator's active supervisor session.",
+  {
+    success: ref("AdminLiveCallsResponse"),
+    errors: adminErrors
+  }
+);
+add(
+  "GET",
+  "/admin/supervisor/provisioning",
+  "Get supervisor phone provisioning",
+  "Returns the dedicated administrator SIP identity used only for live-call monitoring. The browser can register it without microphone access.",
+  {
+    success: ref("SoftphoneProvisioningResponse"),
+    errors: adminErrors
+  }
+);
+add(
+  "POST",
+  "/admin/live-calls/:callId/supervisor",
+  "Start live-call monitoring",
+  "Starts a separate FreeSWITCH eavesdrop leg in server-enforced listen-only mode.",
+  {
+    params: callParams,
+    success: ref("SupervisorSession"),
+    successStatus: 201,
+    errors: [...adminErrors, 404, 409, 502, 503]
+  }
+);
+add(
+  "PATCH",
+  "/admin/supervisor-sessions/:sessionId",
+  "Change supervisor mode",
+  "Replaces the supervisor leg with a server-enforced listen, agent-only whisper, or two-party join mode.",
+  {
+    params: supervisorSessionParams,
+    body: ref("UpdateSupervisorSessionRequest"),
+    success: ref("SupervisorSession"),
+    errors: [...adminErrors, 404, 409, 502, 503]
+  }
+);
+add(
+  "DELETE",
+  "/admin/supervisor-sessions/:sessionId",
+  "Stop live-call monitoring",
+  "Disconnects the current administrator's supervisor leg without changing the agent-customer call.",
+  {
+    params: supervisorSessionParams,
+    successStatus: 204,
+    errors: [...adminErrors, 404, 409, 502]
+  }
+);
 add(
   "GET",
   "/admin/calls/export.csv",

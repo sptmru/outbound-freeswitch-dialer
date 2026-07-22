@@ -23,6 +23,7 @@ import {
   refreshDeletedAgentRegistrations as refreshFreeSwitchDeletedAgentRegistrations,
   type AgentRegistrationRefreshResult
 } from "../freeswitch/provisioning.js";
+import { lockUserMediaAction } from "../user-media-lock.js";
 
 const loginSchema = z.object({
   email: z.string().email(),
@@ -135,6 +136,9 @@ export function registerAuthRoutes(app: FastifyInstance, config: AppConfig, pool
     if (updated === "active_call") {
       return reply.code(409).send({ message: "User has an active call" });
     }
+    if (updated === "active_supervisor") {
+      return reply.code(409).send({ message: "User has an active live-call monitoring session" });
+    }
     return { user: updated };
   });
 
@@ -169,6 +173,9 @@ export function registerAuthRoutes(app: FastifyInstance, config: AppConfig, pool
     if (deleted === "active_call") {
       return reply.code(409).send({ message: "User has an active call" });
     }
+    if (deleted === "active_supervisor") {
+      return reply.code(409).send({ message: "User has an active live-call monitoring session" });
+    }
     return { ok: true };
   });
 }
@@ -179,14 +186,15 @@ async function updateUser(
   userId: string,
   input: UpdateUserRequest,
   options: DeleteUserOptions = {}
-): Promise<ReturnType<typeof toPublicUser> | "not_found" | "active_call"> {
+): Promise<ReturnType<typeof toPublicUser> | "not_found" | "active_call" | "active_supervisor"> {
   const passwordHash = input.password ? await hashSecret(input.password) : null;
   const client = await pool.connect();
-  let sipUsernames: string[] = [];
+  const removedSipUsernames: string[] = [];
   let publicUser: ReturnType<typeof toPublicUser> | null = null;
   let deactivated = false;
   try {
     await client.query("begin");
+    await lockUserMediaAction(client, userId);
     const current = await client.query<{
       id: string;
       email: string;
@@ -205,6 +213,7 @@ async function updateUser(
     }
 
     deactivated = existing.is_active && input.isActive === false;
+    const supervisorAccessRemoved = deactivated || (existing.role === "admin" && input.role === "agent");
     const revokeSessions = Boolean(input.password) || deactivated;
     if (deactivated) {
       const activeCalls = await client.query(
@@ -222,6 +231,20 @@ async function updateUser(
       if (activeCalls.rowCount) {
         await client.query("rollback");
         return "active_call";
+      }
+    }
+    if (supervisorAccessRemoved) {
+      const activeSupervisor = await client.query(
+        `select 1
+         from call_supervisor_sessions
+         where actor_user_id = $1
+           and state in ('connecting', 'active')
+         limit 1`,
+        [userId]
+      );
+      if (activeSupervisor.rowCount) {
+        await client.query("rollback");
+        return "active_supervisor";
       }
     }
 
@@ -252,17 +275,33 @@ async function updateUser(
       userId,
       input.name ?? existing.name
     ]);
+    await client.query(
+      "update admin_supervisor_endpoints set display_name = $2, updated_at = now() where user_id = $1",
+      [userId, `${input.name ?? existing.name} (supervisor)`]
+    );
     if (deactivated) {
       await client.query(
         "update agents set status = 'offline', registered = false, updated_at = now() where user_id = $1",
         [userId]
       );
     }
-    const agents = await client.query<{ sip_username: string }>(
-      "select sip_username from agents where user_id = $1",
-      [userId]
-    );
-    sipUsernames = agents.rows.map((agent) => agent.sip_username);
+    if (deactivated) {
+      const agents = await client.query<{ sip_username: string }>(
+        "select sip_username from agents where user_id = $1",
+        [userId]
+      );
+      removedSipUsernames.push(...agents.rows.map((agent) => agent.sip_username));
+    }
+    if (supervisorAccessRemoved) {
+      const supervisorEndpoints = await client.query<{ sip_username: string }>(
+        `update admin_supervisor_endpoints
+         set registered = false, updated_at = now()
+         where user_id = $1
+         returning sip_username`,
+        [userId]
+      );
+      removedSipUsernames.push(...supervisorEndpoints.rows.map((endpoint) => endpoint.sip_username));
+    }
     publicUser = toPublicUser(updated.rows[0]);
     await client.query("commit");
   } catch (error) {
@@ -273,13 +312,17 @@ async function updateUser(
   }
 
   try {
-    if (deactivated) {
-      await Promise.all(sipUsernames.map((sipUsername) => deleteAgentDirectory(config, sipUsername)));
+    if (removedSipUsernames.length) {
+      await Promise.all(removedSipUsernames.map((sipUsername) => deleteAgentDirectory(config, sipUsername)));
       const refresh = await (
         options.refreshDeletedAgentRegistrations ?? refreshFreeSwitchDeletedAgentRegistrations
-      )(config, sipUsernames);
+      )(config, removedSipUsernames);
       if (refresh.errors.length) {
-        options.onRegistrationRefreshError?.({ errors: refresh.errors, sipUsernames, userId });
+        options.onRegistrationRefreshError?.({
+          errors: refresh.errors,
+          sipUsernames: removedSipUsernames,
+          userId
+        });
       }
     } else if (publicUser?.isActive) {
       await ensureAgentForUser(pool, config, publicUser);
@@ -296,11 +339,12 @@ async function deleteUser(
   config: AppConfig,
   userId: string,
   options: DeleteUserOptions = {}
-): Promise<"deleted" | "not_found" | "active_call"> {
+): Promise<"deleted" | "not_found" | "active_call" | "active_supervisor"> {
   const client = await pool.connect();
   let deletedAgentSipUsernames: string[] = [];
   try {
     await client.query("begin");
+    await lockUserMediaAction(client, userId);
     const user = await client.query("select id from users where id = $1 for update", [userId]);
     if (!user.rowCount) {
       await client.query("rollback");
@@ -324,11 +368,26 @@ async function deleteUser(
       return "active_call";
     }
 
-    const agents = await client.query<{ sip_username: string }>(
-      "select sip_username from agents where user_id = $1",
+    const activeSupervisor = await client.query(
+      `select 1
+       from call_supervisor_sessions
+       where actor_user_id = $1
+         and state in ('connecting', 'active')
+       limit 1`,
       [userId]
     );
-    deletedAgentSipUsernames = agents.rows.map((agent) => agent.sip_username);
+    if (activeSupervisor.rowCount) {
+      await client.query("rollback");
+      return "active_supervisor";
+    }
+
+    const endpoints = await client.query<{ sip_username: string }>(
+      `select sip_username from agents where user_id = $1
+       union all
+       select sip_username from admin_supervisor_endpoints where user_id = $1`,
+      [userId]
+    );
+    deletedAgentSipUsernames = endpoints.rows.map((endpoint) => endpoint.sip_username);
 
     await client.query(
       "update users set is_active = false, auth_version = auth_version + 1, updated_at = now() where id = $1",
@@ -336,6 +395,10 @@ async function deleteUser(
     );
     await client.query(
       "update agents set status = 'offline', registered = false, updated_at = now() where user_id = $1",
+      [userId]
+    );
+    await client.query(
+      "update admin_supervisor_endpoints set registered = false, updated_at = now() where user_id = $1",
       [userId]
     );
     await client.query("commit");

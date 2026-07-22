@@ -2,6 +2,8 @@
 
 - The product is single-tenant and the deployment is a single-host Docker topology; it is not a high-availability control plane.
 - Each agent has one interactive call at a time. A released voicemail customer leg can remain as a tracked background job while the same agent starts another interactive call.
+- Live-call supervision is implemented as a separate FreeSWITCH `eavesdrop` leg with listen-only default, agent whisper, and two-party join. Repository tests do not prove target-environment audibility, whisper isolation, join mixing, reconnect behavior, or whether injected speech appears in the configured call recording.
+- Agent Desk shows a monitoring banner, but the product does not play an automatic customer disclosure prompt. Monitoring/coaching/join must not be enabled operationally until applicable notice, consent, recording, access, retention, training, and audit-review policy is approved.
 - Agent pause/resume is implemented and terminal calls return the agent directly to available. Configurable post-call wrap-up, scheduled callbacks, supervisor-controlled requeue, reason-coded pauses, and workforce-management reporting are not implemented.
 - VM/beep/AVMD detection is advisory. It neither decides human versus machine nor triggers an automatic voicemail drop. Admin review now supplies human/machine/uncertain ground truth, but precision and recall describe only the reviewed sample; coverage and confusion counts must be considered with the rate.
 - Admin **Contact rate** remains an operational proxy that excludes detected/dropped voicemail from technically answered calls. It is not a substitute for reviewed human-contact ground truth.
