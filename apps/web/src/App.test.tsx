@@ -1467,11 +1467,48 @@ describe("App Agent Desk empty states", () => {
       });
     });
     expect(apiMocks.endCall).not.toHaveBeenCalled();
-    expect(await screen.findByRole("button", { name: "Resume calling" })).toBeDisabled();
+    expect(await screen.findByRole("button", { name: "Resume calling" })).toBeEnabled();
 
     fireEvent.click(screen.getByRole("button", { name: "Hang up" }));
     await waitFor(() => expect(apiMocks.endCall).toHaveBeenCalledTimes(1));
     expect(apiMocks.startNextCall).not.toHaveBeenCalled();
+  });
+
+  it("resumes during an active call and allows automatic next-lead calling after it ends", async () => {
+    apiMocks.useSoftphoneRegistration.mockReturnValue({
+      ...softphoneRuntime,
+      registered: true,
+      state: "registered"
+    });
+    const campaign = {
+      ...deskResponse().campaign!,
+      callableLeads: 1,
+      autoAdvanceToNextLeadEnabled: true
+    };
+    const activeCall = activeCallRow();
+    const pausedAvailability = { status: "paused" as const, wrapUpUntil: null };
+    apiMocks.fetchAgentDesk.mockResolvedValue(
+      deskResponse({ campaign, activeCall, availability: pausedAvailability })
+    );
+    apiMocks.updateAgentAvailability.mockResolvedValue(deskResponse({ campaign, activeCall }));
+    apiMocks.endCall.mockResolvedValue(deskResponse({ campaign, activeCall: null }));
+    apiMocks.startNextCall.mockResolvedValue(deskResponse({ campaign, activeCall }));
+
+    render(<App />);
+    const resume = await screen.findByRole("button", { name: "Resume calling" });
+    expect(resume).toBeEnabled();
+    fireEvent.click(resume);
+
+    await waitFor(() => {
+      expect(apiMocks.updateAgentAvailability).toHaveBeenCalledWith({
+        status: "available",
+        campaignId: campaign.id
+      });
+    });
+    expect(apiMocks.endCall).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Hang up" }));
+    await waitFor(() => expect(apiMocks.startNextCall).toHaveBeenCalledTimes(1));
   });
 
   it("does not automatically start the next lead after a manual call ends", async () => {

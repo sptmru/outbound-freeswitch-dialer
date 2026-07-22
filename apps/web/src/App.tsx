@@ -1832,7 +1832,6 @@ function ActiveCall({
         <span>Next call</span>
         <AvailabilityControl
           desk={desk}
-          disabled={useEffectiveAvailability(desk.availability) === "paused"}
           onAvailabilityChangeFailed={onAvailabilityChangeFailed}
           onAvailabilityChangeStarted={onAvailabilityChangeStarted}
           onDeskChanged={onDeskChanged}

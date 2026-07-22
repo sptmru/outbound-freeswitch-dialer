@@ -33,7 +33,7 @@ This document is the current product and operational contract. Items described a
 ## Agent Availability
 
 - Agent availability is independent from browser-phone registration. Agents use `available` and `paused`; legacy `wrap_up` rows are normalized to `available`.
-- Agents and admins using Agent Desk can pause or resume themselves through `PATCH /agent/availability`. They may pause during an active interactive call without affecting that call, but cannot resume until it ends.
+- Agents and admins using Agent Desk can pause or resume themselves through `PATCH /agent/availability`, including during an active interactive call, without affecting that call.
 - Paused agents cannot start campaign, lead, manual, or automatically advanced calls. Ending a call or launching a voicemail drop preserves a pause selected during that call; otherwise the agent returns to `available` immediately.
 - Confirmed voicemail agent release is immediately available for the next interactive call. A pause selected while background voicemail continues must remain paused when that background job later completes.
 
