@@ -2165,6 +2165,23 @@ input[type="checkbox"] {
   text-transform: uppercase;
 }
 
+.active-call-availability {
+  align-items: center;
+  background: var(--relay-purple-soft);
+  border: 1px solid #d8cff8;
+  border-radius: 10px;
+  display: flex;
+  justify-content: space-between;
+  padding: 10px 12px;
+}
+
+.active-call-availability > span {
+  color: var(--relay-muted);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
 .call-hero {
   background: transparent;
   border: 0;

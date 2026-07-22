@@ -822,8 +822,21 @@ function AgentDesk({
   );
   const campaign = desk.campaign;
   const availabilityStatus = useEffectiveAvailability(desk.availability);
+  const autoAdvancePausedRef = useRef(availabilityStatus === "paused");
   const canStartCalls =
     softphone.registered && availabilityStatus === "available" && !softphone.audioSetup.checking;
+
+  useEffect(() => {
+    autoAdvancePausedRef.current = availabilityStatus === "paused";
+  }, [availabilityStatus]);
+
+  function handleAvailabilityChangeStarted(status: "available" | "paused") {
+    autoAdvancePausedRef.current = status === "paused";
+  }
+
+  function handleAvailabilityChangeFailed() {
+    autoAdvancePausedRef.current = availabilityStatus === "paused";
+  }
 
   async function callNext() {
     if (!campaign) {
@@ -904,6 +917,7 @@ function AgentDesk({
       desk.activeCall ||
       !campaign?.autoAdvanceToNextLeadEnabled ||
       campaign.callableLeads <= 0 ||
+      autoAdvancePausedRef.current ||
       !canStartCalls
     ) {
       return;
@@ -964,6 +978,9 @@ function AgentDesk({
             onDropVoicemail={handleDropVoicemail}
             onHangUp={hangUp}
             onSendDtmf={handleSendDtmf}
+            onAvailabilityChangeFailed={handleAvailabilityChangeFailed}
+            onAvailabilityChangeStarted={handleAvailabilityChangeStarted}
+            onDeskChanged={onDeskChanged}
             softphone={softphone}
           />
         )}
@@ -998,6 +1015,9 @@ function AgentDesk({
           onDropVoicemail={handleDropVoicemail}
           onHangUp={hangUp}
           onSendDtmf={handleSendDtmf}
+          onAvailabilityChangeFailed={handleAvailabilityChangeFailed}
+          onAvailabilityChangeStarted={handleAvailabilityChangeStarted}
+          onDeskChanged={onDeskChanged}
           softphone={softphone}
         />
         <LeadContextPanel lead={activeLead} />
@@ -1023,6 +1043,8 @@ function AgentDesk({
         manualDialNumber={manualDialNumber}
         mode="ready"
         onCampaignChange={onCampaignChange}
+        onAvailabilityChangeFailed={handleAvailabilityChangeFailed}
+        onAvailabilityChangeStarted={handleAvailabilityChangeStarted}
         onDeskChanged={onDeskChanged}
         onManualDialNumberChange={onManualDialNumberChange}
         onStartManualCall={callManual}
@@ -1317,10 +1339,14 @@ function callStartBlockedMessage(desk: AgentDeskResponse, softphone: SoftphoneRu
 function AvailabilityControl({
   desk,
   disabled = false,
+  onAvailabilityChangeFailed,
+  onAvailabilityChangeStarted,
   onDeskChanged
 }: {
   desk: AgentDeskResponse;
   disabled?: boolean;
+  onAvailabilityChangeFailed?: () => void;
+  onAvailabilityChangeStarted?: (status: "available" | "paused") => void;
   onDeskChanged: (desk: AgentDeskResponse) => void;
 }) {
   const status = useEffectiveAvailability(desk.availability);
@@ -1331,16 +1357,19 @@ function AvailabilityControl({
   const actionLabel = paused ? "Resume calling" : "Pause";
 
   async function toggleAvailability() {
+    const nextStatus = status === "available" ? "paused" : "available";
     setPending(true);
     setError(null);
+    onAvailabilityChangeStarted?.(nextStatus);
     try {
       onDeskChanged(
         await updateAgentAvailability({
-          status: status === "available" ? "paused" : "available",
+          status: nextStatus,
           campaignId: desk.campaign?.id
         })
       );
     } catch (updateError) {
+      onAvailabilityChangeFailed?.();
       setError(updateError instanceof Error ? updateError.message : "Could not change availability");
     } finally {
       setPending(false);
@@ -1374,6 +1403,8 @@ function AgentStatusPanel({
   manualDialNumber,
   mode,
   onCampaignChange,
+  onAvailabilityChangeFailed,
+  onAvailabilityChangeStarted,
   onDeskChanged,
   onManualDialNumberChange,
   onStartManualCall,
@@ -1385,6 +1416,8 @@ function AgentStatusPanel({
   manualDialNumber: string;
   mode: "ready" | "active";
   onCampaignChange: (campaignId: string) => Promise<void>;
+  onAvailabilityChangeFailed?: () => void;
+  onAvailabilityChangeStarted?: (status: "available" | "paused") => void;
   onDeskChanged: (desk: AgentDeskResponse) => void;
   onManualDialNumberChange: (phoneNumber: string) => void;
   onStartManualCall: (phoneNumber: string) => Promise<void>;
@@ -1453,6 +1486,8 @@ function AgentStatusPanel({
         <AvailabilityControl
           desk={desk}
           disabled={callStartPending || mode === "active"}
+          onAvailabilityChangeFailed={onAvailabilityChangeFailed}
+          onAvailabilityChangeStarted={onAvailabilityChangeStarted}
           onDeskChanged={onDeskChanged}
         />
       </div>
@@ -1727,6 +1762,9 @@ function ActiveCall({
   controlPending,
   desk,
   error,
+  onAvailabilityChangeFailed,
+  onAvailabilityChangeStarted,
+  onDeskChanged,
   onDropVoicemail,
   onHangUp,
   onSendDtmf,
@@ -1735,6 +1773,9 @@ function ActiveCall({
   controlPending: "hangup" | "voicemail" | "dtmf" | null;
   desk: AgentDeskResponse;
   error: string | null;
+  onAvailabilityChangeFailed: () => void;
+  onAvailabilityChangeStarted: (status: "available" | "paused") => void;
+  onDeskChanged: (desk: AgentDeskResponse) => void;
   onDropVoicemail: (callId: string, recordingId?: string) => Promise<void>;
   onHangUp: (callId: string) => Promise<void>;
   onSendDtmf: (callId: string, digit: string) => Promise<void>;
@@ -1786,6 +1827,16 @@ function ActiveCall({
       <div className="call-status-line">
         <StatusBadge label={`● ${durationLabel}`} tone="good" />
         <span>Call {activeCall.id.slice(0, 8).toUpperCase()}</span>
+      </div>
+      <div className="active-call-availability">
+        <span>Next call</span>
+        <AvailabilityControl
+          desk={desk}
+          disabled={useEffectiveAvailability(desk.availability) === "paused"}
+          onAvailabilityChangeFailed={onAvailabilityChangeFailed}
+          onAvailabilityChangeStarted={onAvailabilityChangeStarted}
+          onDeskChanged={onDeskChanged}
+        />
       </div>
       <div className="call-hero">
         <div>

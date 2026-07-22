@@ -367,7 +367,7 @@ export function registerDashboardRoutes(
     const agent = await ensureAgentForUser(pool, config, publicUser);
     const availability = await setAgentAvailability(pool, agent.id, input.status);
     if (!availability) {
-      return reply.code(409).send({ message: "Finish the active call before changing availability" });
+      return reply.code(409).send({ message: "Finish the active call before resuming calling" });
     }
     return buildAgentDeskResponse(pool, publicUser, input.campaignId, contactRetryPolicy);
   });

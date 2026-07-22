@@ -49,12 +49,15 @@ export async function setAgentAvailability(
           wrap_up_until = null,
           updated_at = now()
       where id = $1
-        and not exists (
-          select 1
-          from calls
-          where calls.agent_id = agents.id
-            and calls.ended_at is null
-            and calls.state not in ('completed', 'failed', 'canceled', 'agent_released')
+        and (
+          $2 = 'paused'
+          or not exists (
+            select 1
+            from calls
+            where calls.agent_id = agents.id
+              and calls.ended_at is null
+              and calls.state not in ('completed', 'failed', 'canceled', 'agent_released')
+          )
         )
       returning availability_status, wrap_up_until
     `,

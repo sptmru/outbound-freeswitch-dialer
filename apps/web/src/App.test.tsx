@@ -1436,6 +1436,44 @@ describe("App Agent Desk empty states", () => {
     });
   });
 
+  it("pauses during an active call without ending it and blocks automatic next-lead calling", async () => {
+    apiMocks.useSoftphoneRegistration.mockReturnValue({
+      ...softphoneRuntime,
+      registered: true,
+      state: "registered"
+    });
+    const campaign = {
+      ...deskResponse().campaign!,
+      callableLeads: 1,
+      autoAdvanceToNextLeadEnabled: true
+    };
+    const activeCall = activeCallRow();
+    const pausedAvailability = { status: "paused" as const, wrapUpUntil: null };
+    apiMocks.fetchAgentDesk.mockResolvedValue(deskResponse({ campaign, activeCall }));
+    apiMocks.updateAgentAvailability.mockResolvedValue(
+      deskResponse({ campaign, activeCall, availability: pausedAvailability })
+    );
+    apiMocks.endCall.mockResolvedValue(
+      deskResponse({ campaign, activeCall: null, availability: pausedAvailability })
+    );
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Pause" }));
+
+    await waitFor(() => {
+      expect(apiMocks.updateAgentAvailability).toHaveBeenCalledWith({
+        status: "paused",
+        campaignId: campaign.id
+      });
+    });
+    expect(apiMocks.endCall).not.toHaveBeenCalled();
+    expect(await screen.findByRole("button", { name: "Resume calling" })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Hang up" }));
+    await waitFor(() => expect(apiMocks.endCall).toHaveBeenCalledTimes(1));
+    expect(apiMocks.startNextCall).not.toHaveBeenCalled();
+  });
+
   it("does not automatically start the next lead after a manual call ends", async () => {
     apiMocks.useSoftphoneRegistration.mockReturnValue({
       ...softphoneRuntime,

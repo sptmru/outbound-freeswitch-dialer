@@ -21,14 +21,28 @@ describe("agent availability", () => {
     assert.doesNotMatch(queries[0]?.sql ?? "", /wrap_up_until <= now\(\)/);
   });
 
-  it("does not change availability while an interactive call is active", async () => {
+  it("allows pausing while an interactive call is active", async () => {
     const pool = queryPool((sql) => {
+      assert.match(sql, /\$2 = 'paused'/);
       assert.match(sql, /not exists/);
       assert.match(sql, /'agent_released'/);
+      return rows([{ availability_status: "paused", wrap_up_until: null }]);
+    });
+
+    assert.deepEqual(await setAgentAvailability(pool, "agent-1", "paused"), {
+      status: "paused",
+      wrapUpUntil: null
+    });
+  });
+
+  it("does not resume availability while an interactive call is active", async () => {
+    const pool = queryPool((sql, params) => {
+      assert.match(sql, /\$2 = 'paused'/);
+      assert.deepEqual(params, ["agent-1", "available"]);
       return rows([]);
     });
 
-    assert.equal(await setAgentAvailability(pool, "agent-1", "paused"), null);
+    assert.equal(await setAgentAvailability(pool, "agent-1", "available"), null);
   });
 
   it("returns the agent to available after an ordinary terminal call", async () => {

@@ -7,7 +7,7 @@
 3. Wait for the phone status to show connected and your availability to show **Ready**.
 4. Select the correct active campaign and review the offered lead.
 
-Use **Pause** whenever you should not start another call. Select **Resume calling** when you are ready again. After ending a call or starting a voicemail drop, the desk is immediately ready for the next manually started call. Voicemail playback remains tracked in the background.
+Use **Pause** whenever you should not start another call, including during an active call. Pausing does not affect the current call, but prevents an automatically advanced call from starting after it ends. Select **Resume calling** when you are ready again; while a call is active, resume remains disabled. Voicemail playback remains tracked in the background.
 
 The page refreshes state from the server through live update signals and periodic fallback checks. If the display appears stale, do not repeat a call-control action; record the visible state and ask an administrator to verify the call.
 
