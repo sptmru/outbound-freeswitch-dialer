@@ -26,6 +26,7 @@ const apiMocks = vi.hoisted(() => ({
   fetchSystemSettings: vi.fn(),
   getCallRecordingAudioUrl: vi.fn(),
   logout: vi.fn(),
+  resetCampaignLeads: vi.fn(),
   sendDtmf: vi.fn(),
   startLeadCall: vi.fn(),
   startManualCall: vi.fn(),
@@ -72,6 +73,7 @@ vi.mock("./api", async () => {
     fetchSystemSettings: apiMocks.fetchSystemSettings,
     getCallRecordingAudioUrl: apiMocks.getCallRecordingAudioUrl,
     logout: apiMocks.logout,
+    resetCampaignLeads: apiMocks.resetCampaignLeads,
     sendDtmf: apiMocks.sendDtmf,
     startLeadCall: apiMocks.startLeadCall,
     startManualCall: apiMocks.startManualCall,
@@ -173,6 +175,7 @@ describe("App Agent Desk empty states", () => {
     });
     apiMocks.getCallRecordingAudioUrl.mockResolvedValue("/api/media/ticketed-recording");
     apiMocks.logout.mockResolvedValue(undefined);
+    apiMocks.resetCampaignLeads.mockResolvedValue({ item: null, resetCount: 0 });
     apiMocks.sendDtmf.mockResolvedValue(deskResponse({ activeCall: activeCallRow() }));
     apiMocks.startLeadCall.mockResolvedValue(deskResponse());
     apiMocks.startManualCall.mockResolvedValue(deskResponse());
@@ -1574,6 +1577,48 @@ describe("App Agent Desk empty states", () => {
 
     fireEvent.click(editAvmdToggle);
     expect(screen.queryByText(/slightly increases the chance of false positives/i)).not.toBeInTheDocument();
+  });
+
+  it("confirms and resets every lead from campaign settings", async () => {
+    const admin = userRow({ role: "admin" });
+    const campaign: AdminOverviewResponse["campaigns"][number] = {
+      id: "11111111-1111-4111-8111-111111111111",
+      name: "Selected campaign",
+      status: "active",
+      loaded: 10,
+      callable: 3,
+      attempted: 7,
+      outcomeDistribution: [],
+      manualDialingEnabled: true,
+      callRecordingEnabled: false,
+      earlyMediaAvmdEnabled: false,
+      autoAdvanceToNextLeadEnabled: false
+    };
+    apiMocks.fetchMe.mockResolvedValue({ user: admin });
+    apiMocks.fetchAgentDesk.mockResolvedValue(deskResponse({ user: admin }));
+    apiMocks.fetchAdminOverview.mockResolvedValue(adminResponse({ campaigns: [campaign] }));
+    apiMocks.fetchAdminCampaigns.mockResolvedValue({
+      items: [campaign],
+      page: 1,
+      pageSize: 25,
+      total: 1,
+      totalPages: 1
+    });
+    apiMocks.resetCampaignLeads.mockResolvedValue({ item: campaign, resetCount: 7 });
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Campaigns" }));
+    fireEvent.click(await screen.findByTitle("Edit campaign"));
+    fireEvent.click(screen.getByRole("button", { name: "Reset Leads" }));
+
+    expect(confirm).toHaveBeenCalledWith(
+      expect.stringContaining('Reset all 10 leads in "Selected campaign"?')
+    );
+    await waitFor(() =>
+      expect(apiMocks.resetCampaignLeads).toHaveBeenCalledWith("11111111-1111-4111-8111-111111111111")
+    );
+    expect(await screen.findByText("7 leads reset.")).toBeInTheDocument();
   });
 
   it("does not offer AVMD classification without a playable recording", async () => {

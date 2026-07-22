@@ -10,6 +10,7 @@ import {
   fetchCsvImports,
   fetchMe,
   logout,
+  resetCampaignLeads,
   subscribeAgentEvents,
   upsertCallAvmdReview
 } from "./api";
@@ -58,6 +59,22 @@ describe("cookie-authenticated API client", () => {
       2,
       "/api/admin/calls/export.csv",
       expect.objectContaining({ credentials: "include" })
+    );
+  });
+
+  it("resets all leads through the campaign-scoped admin endpoint", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      json: async () => ({ resetCount: 4, item: {} }),
+      ok: true,
+      status: 200
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await resetCampaignLeads("campaign-1");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/admin/campaigns/campaign-1/reset-leads",
+      expect.objectContaining({ credentials: "include", method: "POST" })
     );
   });
 

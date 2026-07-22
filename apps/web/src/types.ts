@@ -36,6 +36,7 @@ export type {
   MutationResponse,
   MediaTicketResponse,
   PublicUser,
+  ResetCampaignLeadsResponse,
   SuppressionImportResponse,
   SuppressionListResponse,
   SendDtmfRequest,

@@ -40,6 +40,7 @@ import type {
   MediaTicketResponse,
   PublicUser,
   RetentionRunResponse,
+  ResetCampaignLeadsResponse,
   SendDtmfRequest,
   SoftphoneProvisioningResponse,
   SuppressionImportResponse,
@@ -76,7 +77,8 @@ import {
   getAgentCampaign,
   getAgentCampaignForDialerAction,
   getCampaignOverviewItem,
-  getCampaignsPage
+  getCampaignsPage,
+  resetCampaignLeads
 } from "./campaigns.js";
 import {
   createDialerCall,
@@ -1037,6 +1039,31 @@ export function registerDashboardRoutes(
         return reply.code(404).send({ message: "Campaign not found" });
       }
       return { item };
+    }
+  );
+
+  app.post(
+    "/admin/campaigns/:campaignId/reset-leads",
+    async (request, reply): Promise<ResetCampaignLeadsResponse | void> => {
+      const user = await requireAdmin(request, reply, config, pool);
+      if (!user) {
+        return;
+      }
+
+      const params = campaignParamsSchema.parse(request.params);
+      const result = await resetCampaignLeads(pool, params.campaignId);
+      if (result === "not_found") {
+        return reply.code(404).send({ message: "Campaign not found" });
+      }
+      if (result === "active_call") {
+        return reply.code(409).send({ message: "Campaign has an active call" });
+      }
+
+      const item = await getCampaignOverviewItem(pool, params.campaignId, contactRetryPolicy);
+      if (!item) {
+        return reply.code(404).send({ message: "Campaign not found" });
+      }
+      return { item, resetCount: result.resetCount };
     }
   );
 

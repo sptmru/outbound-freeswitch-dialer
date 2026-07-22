@@ -78,7 +78,7 @@ Firewall and host-published-port changes were excluded by instruction. They are 
 
 - Dedicated period- and campaign-filtered admin Analytics view with summary KPIs, daily movement, call funnel, campaign/agent performance, data-quality snapshot, and voicemail lifecycle reporting.
 - Explicit metric definitions separate technical answers from connected contacts and separate period-filtered facts from current queue snapshots.
-- Campaign create/edit/status/archive plus manual-dial, recording, early-media AVMD, and automatic next-lead flags.
+- Campaign create/edit/status/archive, confirmed lead reset with active-call protection, plus manual-dial, recording, early-media AVMD, and automatic next-lead flags.
 - Paginated campaign contacts and CSV import failures, selected-campaign continuity from Agent Desk, row feedback, search, filters, and manual contact actions.
 - User create/edit/deactivate/reactivate/role/password lifecycle with preserved attribution and FreeSWITCH cleanup.
 - Suppression add/update/search/pagination/import/removal and durable change/blocked-dial events.

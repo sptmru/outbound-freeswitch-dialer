@@ -667,6 +667,17 @@ add(
   }
 );
 add(
+  "POST",
+  "/admin/campaigns/:campaignId/reset-leads",
+  "Reset campaign leads",
+  "Returns every lead in a campaign to new eligibility while preserving call history and global suppression entries.",
+  {
+    params: campaignParams,
+    success: ref("ResetCampaignLeadsResponse"),
+    errors: [...adminErrors, 404, 409]
+  }
+);
+add(
   "DELETE",
   "/admin/campaigns/:campaignId",
   "Delete campaign",

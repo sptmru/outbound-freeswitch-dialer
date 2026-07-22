@@ -600,6 +600,11 @@ export interface UpdateCampaignRequest {
   autoAdvanceToNextLeadEnabled?: boolean;
 }
 
+export interface ResetCampaignLeadsResponse {
+  item: AdminOverviewResponse["campaigns"][number];
+  resetCount: number;
+}
+
 export interface CreateContactRequest {
   campaignId: string;
   name: string;

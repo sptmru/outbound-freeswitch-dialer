@@ -33,6 +33,7 @@ import type {
   MediaTicketResponse,
   MutationResponse,
   PublicUser,
+  ResetCampaignLeadsResponse,
   SuppressionImportResponse,
   SuppressionListResponse,
   SendDtmfRequest,
@@ -465,6 +466,12 @@ export async function updateCampaign(
       body: JSON.stringify(input)
     }
   );
+}
+
+export async function resetCampaignLeads(campaignId: string): Promise<ResetCampaignLeadsResponse> {
+  return apiFetch<ResetCampaignLeadsResponse>(`/admin/campaigns/${campaignId}/reset-leads`, {
+    method: "POST"
+  });
 }
 
 export async function uploadRecording(input: {

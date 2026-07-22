@@ -89,6 +89,61 @@ export async function deleteCampaign(
   }
 }
 
+export async function resetCampaignLeads(
+  pool: pg.Pool,
+  campaignId: string
+): Promise<{ resetCount: number } | "not_found" | "active_call"> {
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const campaign = await client.query("select id from campaigns where id = $1 for update", [campaignId]);
+    if (!campaign.rowCount) {
+      await client.query("rollback");
+      return "not_found";
+    }
+
+    const activeCalls = await client.query(
+      `
+        select 1
+        from calls
+        where campaign_id = $1
+          and ended_at is null
+          and state not in ('completed', 'failed', 'canceled')
+        limit 1
+      `,
+      [campaignId]
+    );
+    if (activeCalls.rowCount) {
+      await client.query("rollback");
+      return "active_call";
+    }
+
+    const reset = await client.query(
+      `
+        update contacts
+        set status = 'new',
+            attempt_count = 0,
+            last_attempted_at = null,
+            updated_at = now()
+        where campaign_id = $1
+          and (
+            status <> 'new'
+            or attempt_count <> 0
+            or last_attempted_at is not null
+          )
+      `,
+      [campaignId]
+    );
+    await client.query("commit");
+    return { resetCount: reset.rowCount ?? 0 };
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 export async function campaignExists(pool: pg.Pool, campaignId: string): Promise<boolean> {
   const result = await pool.query("select 1 from campaigns where id = $1", [campaignId]);
   return Boolean(result.rowCount);

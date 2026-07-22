@@ -71,6 +71,7 @@ import {
   login,
   logout,
   runFreeSwitchSafeTest,
+  resetCampaignLeads,
   sendDtmf,
   setDefaultRecording,
   startLeadCall,
@@ -3026,6 +3027,7 @@ function CampaignCard({
   );
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [resetMessage, setResetMessage] = useState<string | null>(null);
 
   useEffect(() => {
     setName(campaign.name);
@@ -3083,6 +3085,28 @@ function CampaignCard({
       await onChanged();
     } catch (deleteError) {
       setError(deleteError instanceof Error ? deleteError.message : "Could not archive campaign");
+    } finally {
+      setPending(false);
+    }
+  }
+
+  async function resetLeads() {
+    if (
+      !window.confirm(
+        `Reset all ${campaign.loaded.toLocaleString()} leads in "${campaign.name}"? They will become callable as new leads. Call history and the global suppression list will be preserved.`
+      )
+    ) {
+      return;
+    }
+    setPending(true);
+    setError(null);
+    setResetMessage(null);
+    try {
+      const result = await resetCampaignLeads(campaign.id);
+      setResetMessage(`${result.resetCount.toLocaleString()} leads reset.`);
+      await onChanged();
+    } catch (resetError) {
+      setError(resetError instanceof Error ? resetError.message : "Could not reset campaign leads");
     } finally {
       setPending(false);
     }
@@ -3173,6 +3197,15 @@ function CampaignCard({
             <CheckCircle2 size={16} />
             {pending ? "Saving" : "Save"}
           </button>
+          <button
+            className="danger-action compact-action"
+            disabled={pending}
+            onClick={resetLeads}
+            type="button"
+          >
+            <RefreshCw size={16} />
+            Reset Leads
+          </button>
         </form>
       ) : (
         <div className="campaign-badges">
@@ -3198,6 +3231,7 @@ function CampaignCard({
         </div>
       )}
       {error && <p className="form-error">{error}</p>}
+      {resetMessage && <p className="form-success">{resetMessage}</p>}
     </article>
   );
 }

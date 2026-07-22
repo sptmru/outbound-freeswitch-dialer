@@ -1604,6 +1604,53 @@
     "required": ["name", "status", "manualDialingEnabled", "callRecordingEnabled", "earlyMediaAvmdEnabled"],
     "additionalProperties": false
   },
+  "ResetCampaignLeadsResponse": {
+    "$id": "ResetCampaignLeadsResponse",
+    "type": "object",
+    "properties": {
+      "item": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "status": { "$ref": "CampaignStatus#" },
+          "loaded": { "type": "number" },
+          "callable": { "type": "number" },
+          "attempted": { "type": "number" },
+          "outcomeDistribution": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": { "outcome": { "type": "string" }, "count": { "type": "number" } },
+              "required": ["outcome", "count"],
+              "additionalProperties": false
+            }
+          },
+          "manualDialingEnabled": { "type": "boolean" },
+          "callRecordingEnabled": { "type": "boolean" },
+          "earlyMediaAvmdEnabled": { "type": "boolean" },
+          "autoAdvanceToNextLeadEnabled": { "type": "boolean" }
+        },
+        "required": [
+          "id",
+          "name",
+          "status",
+          "loaded",
+          "callable",
+          "attempted",
+          "outcomeDistribution",
+          "manualDialingEnabled",
+          "callRecordingEnabled",
+          "earlyMediaAvmdEnabled",
+          "autoAdvanceToNextLeadEnabled"
+        ],
+        "additionalProperties": false
+      },
+      "resetCount": { "type": "number" }
+    },
+    "required": ["item", "resetCount"],
+    "additionalProperties": false
+  },
   "CreateContactRequest": {
     "$id": "CreateContactRequest",
     "type": "object",
