@@ -62,23 +62,25 @@ The script performs these steps:
 
 ## GitHub Main-Branch Deployment
 
-Pushes to `main` deploy to the client production host only after both GitHub Actions quality and browser jobs pass and the repository variable `CLIENT_DEPLOY_ENABLED` is exactly `true`. The `deploy-client` job connects over SSH and asks the persistent `/opt/outbound-dialer` checkout to deploy the exact `${{ github.sha }}` through `scripts/deploy-commit.sh`.
+Pushes to `main` deploy to the client production host only after both GitHub Actions quality and browser jobs pass and the repository variable `DEPLOY_ENABLED` is exactly `true`. The `deploy-client` job connects over SSH and asks the persistent `/opt/outbound-dialer` checkout to deploy the exact `${{ github.sha }}` through `scripts/deploy-commit.sh`.
 
 The target host keeps its production `.env` at `/opt/outbound-dialer/.env` with mode `0600`; no application or provider secrets are copied into GitHub. The wrapper takes a non-blocking deployment lock, refuses a dirty checkout, fetches `origin/main`, verifies the requested full SHA belongs to that branch, checks it out detached, loads Node.js 22 through `$HOME/.nvm/nvm.sh` when a suitable system runtime is not already in `PATH`, and delegates all release gates to `scripts/deploy.sh`. Set `DEPLOY_NODE_VERSION` only when the target intentionally uses a different installed NVM version compatible with the repository's Node.js requirement.
 
 Create a GitHub Environment named `client-production` with these secrets:
 
-- `CLIENT_DEPLOY_HOST`: client server hostname or IP;
-- `CLIENT_DEPLOY_PORT`: SSH port, normally `22`;
-- `CLIENT_DEPLOY_USER`: dedicated deployment account;
-- `CLIENT_DEPLOY_SSH_PRIVATE_KEY`: private key used only by GitHub Actions to reach the deployment account;
-- `CLIENT_DEPLOY_SSH_KNOWN_HOSTS`: pinned `known_hosts` line for the exact hostname/IP and port used above.
+- `DEPLOY_HOST`: production server hostname or IP;
+- `DEPLOY_PORT`: SSH port, normally `22`;
+- `DEPLOY_USER`: dedicated deployment account;
+- `DEPLOY_SSH_PRIVATE_KEY`: private key used only by GitHub Actions to reach the deployment account;
+- `DEPLOY_SSH_KNOWN_HOSTS`: pinned `known_hosts` line for the exact hostname/IP and port used above.
 
-The host field in `CLIENT_DEPLOY_SSH_KNOWN_HOSTS` must exactly match `CLIENT_DEPLOY_HOST`. For port `22`, use `<host> ssh-ed25519 <public-key>`; for a non-standard port, use `[<host>]:<port> ssh-ed25519 <public-key>`. Obtain the public key or fingerprint through a trusted client-server console and verify it before saving the secret. Do not disable `StrictHostKeyChecking` or replace the pinned entry with an unverified runtime scan.
+The host field in `DEPLOY_SSH_KNOWN_HOSTS` must exactly match `DEPLOY_HOST`. For port `22`, use `<host> ssh-ed25519 <public-key>`; for a non-standard port, use `[<host>]:<port> ssh-ed25519 <public-key>`. Obtain the public key or fingerprint through a trusted production-server console and verify it before saving the secret. Do not disable `StrictHostKeyChecking` or replace the pinned entry with an unverified runtime scan.
 
 The client checkout separately needs read-only GitHub access, preferably through a repository deploy key, because the server runs `git fetch`. The deployment account needs permission to run Docker and the host commands required by preflight. Keep `main` protected against force pushes so an approved deployment commit remains an ancestor of `origin/main`.
 
-Leave `CLIENT_DEPLOY_ENABLED` absent or set to `false` during bootstrap. After this workflow commit has landed on `main`, manually update `/opt/outbound-dialer` once so `scripts/deploy-commit.sh` exists, complete the target `.env` and deployment acceptance checks, add the environment secrets, and only then set the repository variable to `true`. The next push to `main` will be the first automatic deployment.
+For backward compatibility, the workflow falls back to the legacy repository variable `CLIENT_DEPLOY_ENABLED` and legacy environment secrets `CLIENT_DEPLOY_HOST`, `CLIENT_DEPLOY_PORT`, `CLIENT_DEPLOY_USER`, `CLIENT_DEPLOY_SSH_PRIVATE_KEY`, and `CLIENT_DEPLOY_SSH_KNOWN_HOSTS` when the corresponding unprefixed name is absent. An explicitly configured unprefixed value takes precedence. Existing automatic deployment therefore continues to work while the GitHub settings are migrated one value at a time; after a successful deployment with the unprefixed names, the legacy names can be removed.
+
+Leave both `DEPLOY_ENABLED` and the legacy `CLIENT_DEPLOY_ENABLED` absent or set to `false` during bootstrap. After this workflow commit has landed on `main`, manually update `/opt/outbound-dialer` once so `scripts/deploy-commit.sh` exists, complete the target `.env` and deployment acceptance checks, add the environment secrets, and only then set `DEPLOY_ENABLED` to `true`. The next push to `main` will be the first automatic deployment.
 
 GitHub job concurrency and the shared host `flock` prevent a release from overlapping another deploy, backup, restore, rollback, or certificate operation. A deploy rejected because calls are active or because another operation is running remains failed and must be rerun later; the workflow does not enable any break-glass override or perform a blind automatic rollback.
 

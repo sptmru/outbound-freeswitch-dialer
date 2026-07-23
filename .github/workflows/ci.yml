@@ -61,7 +61,7 @@ jobs:
     if: >-
       github.event_name == 'push' &&
       github.ref == 'refs/heads/main' &&
-      vars.CLIENT_DEPLOY_ENABLED == 'true'
+      (vars.DEPLOY_ENABLED || vars.CLIENT_DEPLOY_ENABLED) == 'true'
     needs: [quality, browser]
     runs-on: ubuntu-latest
     timeout-minutes: 90
@@ -71,11 +71,11 @@ jobs:
       group: client-production
       cancel-in-progress: false
     env:
-      DEPLOY_HOST: ${{ secrets.CLIENT_DEPLOY_HOST }}
-      DEPLOY_PORT: ${{ secrets.CLIENT_DEPLOY_PORT }}
-      DEPLOY_USER: ${{ secrets.CLIENT_DEPLOY_USER }}
-      DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.CLIENT_DEPLOY_SSH_PRIVATE_KEY }}
-      DEPLOY_SSH_KNOWN_HOSTS: ${{ secrets.CLIENT_DEPLOY_SSH_KNOWN_HOSTS }}
+      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST || secrets.CLIENT_DEPLOY_HOST }}
+      DEPLOY_PORT: ${{ secrets.DEPLOY_PORT || secrets.CLIENT_DEPLOY_PORT }}
+      DEPLOY_USER: ${{ secrets.DEPLOY_USER || secrets.CLIENT_DEPLOY_USER }}
+      DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY || secrets.CLIENT_DEPLOY_SSH_PRIVATE_KEY }}
+      DEPLOY_SSH_KNOWN_HOSTS: ${{ secrets.DEPLOY_SSH_KNOWN_HOSTS || secrets.CLIENT_DEPLOY_SSH_KNOWN_HOSTS }}
     steps:
       - name: Configure deployment SSH key
         shell: bash
@@ -88,7 +88,7 @@ jobs:
             fi
           done
           [[ "${DEPLOY_PORT}" =~ ^[0-9]+$ ]] || {
-            echo "CLIENT_DEPLOY_PORT must be numeric" >&2
+            echo "DEPLOY_PORT must be numeric" >&2
             exit 1
           }
 
@@ -104,8 +104,8 @@ jobs:
           fi
           if ! ssh-keygen -F "${known_hosts_target}" -f "${HOME}/.ssh/known_hosts" |
             grep -qE '[[:space:]]ssh-ed25519[[:space:]]'; then
-            echo "CLIENT_DEPLOY_SSH_KNOWN_HOSTS has no ED25519 key for ${known_hosts_target}" >&2
-            echo "Store a complete known_hosts line using the exact CLIENT_DEPLOY_HOST and CLIENT_DEPLOY_PORT." >&2
+            echo "DEPLOY_SSH_KNOWN_HOSTS has no ED25519 key for ${known_hosts_target}" >&2
+            echo "Store a complete known_hosts line using the exact DEPLOY_HOST and DEPLOY_PORT." >&2
             exit 1
           fi
 

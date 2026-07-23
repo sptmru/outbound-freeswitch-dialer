@@ -164,6 +164,24 @@ test("CI hardened proxy test uses containment without publishing host ports", as
   assert.match(workflow, /bash scripts\/test-proxy-runtime\.sh/);
 });
 
+test("CI deploy settings prefer unprefixed names with legacy CLIENT_ fallbacks", async () => {
+  const workflow = await readFile(join(rootDirectory, ".github", "workflows", "ci.yml"), "utf8");
+
+  assert.ok(workflow.includes("(vars.DEPLOY_ENABLED || vars.CLIENT_DEPLOY_ENABLED) == 'true'"));
+  for (const name of [
+    "DEPLOY_HOST",
+    "DEPLOY_PORT",
+    "DEPLOY_USER",
+    "DEPLOY_SSH_PRIVATE_KEY",
+    "DEPLOY_SSH_KNOWN_HOSTS"
+  ]) {
+    assert.ok(
+      workflow.includes(`${name}: \${{ secrets.${name} || secrets.CLIENT_${name} }}`),
+      `${name} must prefer the unprefixed secret and keep the CLIENT_ fallback`
+    );
+  }
+});
+
 test("backup fails before success publication when a quiesced service cannot resume", async () => {
   const backup = await readFile(join(rootDirectory, "scripts", "backup.sh"), "utf8");
 
