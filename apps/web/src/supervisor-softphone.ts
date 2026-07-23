@@ -78,6 +78,7 @@ export function useSupervisorSoftphone(user: PublicUser | null): SupervisorSoftp
     };
 
     const attachRemoteAudio = async (invitation: Invitation) => {
+      if (invitationRef.current !== invitation) return;
       const handler = invitation.sessionDescriptionHandler as
         { peerConnection?: RTCPeerConnection } | undefined;
       const peerConnection = handler?.peerConnection;
@@ -89,6 +90,7 @@ export function useSupervisorSoftphone(user: PublicUser | null): SupervisorSoftp
         }));
         return;
       }
+      clearAudio();
       const stream = new MediaStream();
       peerConnection.getReceivers().forEach((receiver) => {
         if (receiver.track) stream.addTrack(receiver.track);
@@ -105,11 +107,11 @@ export function useSupervisorSoftphone(user: PublicUser | null): SupervisorSoftp
       setRuntime((current) => ({ ...current, audioPlaybackState: "starting" }));
       try {
         await audio.play();
-        if (isCurrent() && remoteAudioRef.current === audio) {
+        if (isCurrent() && invitationRef.current === invitation && remoteAudioRef.current === audio) {
           setRuntime((current) => ({ ...current, audioPlaybackState: "playing" }));
         }
       } catch {
-        if (isCurrent() && remoteAudioRef.current === audio) {
+        if (isCurrent() && invitationRef.current === invitation && remoteAudioRef.current === audio) {
           setRuntime((current) => ({ ...current, audioPlaybackState: "blocked" }));
         }
       }
@@ -140,7 +142,7 @@ export function useSupervisorSoftphone(user: PublicUser | null): SupervisorSoftp
           logLevel: sipDiagnosticsEnabled ? "debug" : "warn",
           delegate: {
             onInvite: (invitation) => {
-              if (!isCurrent() || invitationRef.current) {
+              if (!isCurrent()) {
                 void invitation.reject().catch(() => undefined);
                 return;
               }
@@ -152,6 +154,16 @@ export function useSupervisorSoftphone(user: PublicUser | null): SupervisorSoftp
                 void invitation.reject().catch(() => undefined);
                 return;
               }
+              const currentInvitation = invitationRef.current;
+              if (
+                currentInvitation &&
+                currentInvitation.request.getHeader("X-Outbound-Dialer-Supervisor-Session-ID") !== sessionId
+              ) {
+                void invitation.reject().catch(() => undefined);
+                return;
+              }
+              // Mode changes replace the FreeSWITCH leg. The replacement INVITE can arrive before
+              // SIP.js reports the previous dialog as terminated, so allow only a same-session handoff.
               invitationRef.current = invitation;
               setRuntime((current) => ({
                 ...current,
@@ -163,7 +175,7 @@ export function useSupervisorSoftphone(user: PublicUser | null): SupervisorSoftp
                 error: null
               }));
               invitation.stateChange.addListener((state) => {
-                if (!isCurrent()) return;
+                if (!isCurrent() || invitationRef.current !== invitation) return;
                 if (state === SessionState.Established) {
                   setRuntime((current) => ({
                     ...current,
@@ -195,7 +207,7 @@ export function useSupervisorSoftphone(user: PublicUser | null): SupervisorSoftp
                   }
                 })
                 .catch((error: unknown) => {
-                  if (!isCurrent()) return;
+                  if (!isCurrent() || invitationRef.current !== invitation) return;
                   invitationRef.current = null;
                   clearAudio();
                   setRuntime((current) => ({
