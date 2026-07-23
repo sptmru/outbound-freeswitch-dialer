@@ -50,7 +50,6 @@ import {
   fetchAdminAnalytics,
   fetchAdminOverview,
   fetchAdminAudit,
-  fetchAdminLiveCalls,
   fetchAdminRecordings,
   fetchAdminUsers,
   fetchCampaignContacts,
@@ -78,21 +77,21 @@ import {
   startLeadCall,
   startManualCall,
   startNextCall,
-  startSupervisorSession,
-  stopSupervisorSession,
   suppressContact,
   subscribeAgentEvents,
   updateAgentAvailability,
   updateCampaign,
   updateUser,
   updateSystemSettings,
-  updateSupervisorMode,
   upsertCallAvmdReview,
   uploadRecording
 } from "./api";
 import type { AgentLiveRefreshEvent } from "./api";
-import { microphoneProcessingProfiles } from "./audio-setup";
-import type { MicrophoneProcessingProfile } from "./audio-setup";
+import { Metric, PanelHeader, StatusBadge } from "./components/ui-primitives";
+import { AudioSetupPanel } from "./features/audio/audio-setup-panel";
+import { LiveCallsView } from "./features/live-calls/live-calls-view";
+import { getErrorMessage } from "./lib/errors";
+import { formatDuration } from "./lib/formatters";
 import { useSoftphoneRegistration } from "./softphone";
 import type { SoftphoneRuntime } from "./softphone";
 import { useSupervisorSoftphone } from "./supervisor-softphone";
@@ -102,7 +101,6 @@ import type {
   AdminCampaignListResponse,
   AdminOverviewResponse,
   AdminAuditResponse,
-  AdminLiveCallsResponse,
   AdminRecordingListResponse,
   AdminUserListResponse,
   AdminSystemSettings,
@@ -123,8 +121,7 @@ import type {
   ImportCsvResponse,
   LeadSummary,
   PublicUser,
-  SuppressionListResponse,
-  SupervisorMode
+  SuppressionListResponse
 } from "./types";
 
 type View =
@@ -224,10 +221,6 @@ function sourceAffectsDesk(source: string): boolean {
 
 function sourceAffectsView(source: string, view: Exclude<View, "desk">): boolean {
   return source === "database" || adminRefreshSources[view].has(source);
-}
-
-function getErrorMessage(error: unknown, fallback: string): string {
-  return error instanceof Error ? error.message : fallback;
 }
 
 function getPhoneStatusCopy(softphone: SoftphoneRuntime): { detail: string; label: string } {
@@ -1571,169 +1564,6 @@ function AgentStatusPanel({
   );
 }
 
-function AudioSetupPanel({ softphone }: { softphone: SoftphoneRuntime }) {
-  const setup = softphone.audioSetup;
-  const controlsDisabled = setup.checking || softphone.callState !== "none";
-  const applied = setup.checkResult?.appliedSettings ?? setup.appliedSettings;
-  const signalTone =
-    setup.signalStatus === "good"
-      ? "good"
-      : setup.signalStatus === "quiet"
-        ? "warn"
-        : setup.signalStatus === "clipping"
-          ? "bad"
-          : "neutral";
-  const signalLabel =
-    setup.signalStatus === "listening"
-      ? "Listening"
-      : setup.signalStatus === "good"
-        ? "Level good"
-        : setup.signalStatus === "quiet"
-          ? "Too quiet"
-          : setup.signalStatus === "clipping"
-            ? "Clipping"
-            : "Not checked";
-
-  return (
-    <details className="audio-setup-panel">
-      <summary>
-        <span>Audio setup</span>
-        <StatusBadge label={signalLabel} tone={signalTone} />
-      </summary>
-      <div className="audio-setup-content">
-        <div className="audio-device-grid">
-          <label>
-            Microphone
-            <select
-              disabled={controlsDisabled}
-              onChange={(event) => softphone.selectMicrophone(event.target.value)}
-              value={setup.selectedInputId}
-            >
-              <option value="">System default</option>
-              {setup.inputDevices
-                .filter((device) => device.deviceId && device.deviceId !== "default")
-                .map((device) => (
-                  <option key={device.deviceId} value={device.deviceId}>
-                    {device.label}
-                  </option>
-                ))}
-            </select>
-          </label>
-          <label>
-            Speaker
-            <select
-              disabled={controlsDisabled || !setup.outputSelectionSupported}
-              onChange={(event) => void softphone.selectSpeaker(event.target.value)}
-              value={setup.selectedOutputId}
-            >
-              <option value="">System default</option>
-              {setup.outputDevices
-                .filter((device) => device.deviceId && device.deviceId !== "default")
-                .map((device) => (
-                  <option key={device.deviceId} value={device.deviceId}>
-                    {device.label}
-                  </option>
-                ))}
-            </select>
-            {!setup.outputSelectionSupported && (
-              <small>Speaker selection is unavailable in this browser.</small>
-            )}
-          </label>
-        </div>
-        <label>
-          Microphone processing
-          <select
-            disabled={controlsDisabled}
-            onChange={(event) =>
-              softphone.setMicrophoneProcessingProfile(event.target.value as MicrophoneProcessingProfile)
-            }
-            value={setup.processingProfile}
-          >
-            {microphoneProcessingProfiles.map((profile) => (
-              <option key={profile.id} value={profile.id}>
-                {profile.label} — {profile.description}
-              </option>
-            ))}
-          </select>
-        </label>
-        <div className="microphone-level-row">
-          <div>
-            <span>Input level</span>
-            <strong>{Math.round(setup.inputLevel * 100)}%</strong>
-          </div>
-          <div
-            aria-label="Microphone input level"
-            aria-valuemax={100}
-            aria-valuemin={0}
-            aria-valuenow={Math.round(setup.inputLevel * 100)}
-            className={`microphone-level-meter ${signalTone}`}
-            role="progressbar"
-          >
-            <span style={{ width: `${Math.round(setup.inputLevel * 100)}%` }} />
-          </div>
-        </div>
-        <button
-          className="secondary-action compact-action"
-          disabled={controlsDisabled || !softphone.microphoneAllowed}
-          onClick={() => void softphone.runAudioCheck()}
-          type="button"
-        >
-          <Activity size={16} />
-          {setup.checking ? "Checking audio and network" : "Run audio and network check"}
-        </button>
-        {setup.checkResult && (
-          <div className="audio-check-results" aria-live="polite">
-            <div>
-              <StatusBadge label={signalLabel} tone={signalTone} />
-              <small>{setup.checkResult.signalDetail}</small>
-            </div>
-            <div>
-              <StatusBadge
-                label={
-                  setup.checkResult.networkStatus === "ready"
-                    ? "Network ready"
-                    : setup.checkResult.networkStatus === "limited"
-                      ? "Network limited"
-                      : "Network failed"
-                }
-                tone={
-                  setup.checkResult.networkStatus === "ready"
-                    ? "good"
-                    : setup.checkResult.networkStatus === "limited"
-                      ? "warn"
-                      : "bad"
-                }
-              />
-              <small>{setup.checkResult.networkDetail}</small>
-            </div>
-          </div>
-        )}
-        {applied && (
-          <div className="applied-dsp-settings">
-            <span>Applied by browser</span>
-            <small>
-              Echo {formatAppliedSetting(applied.echoCancellation)} · Noise{" "}
-              {formatAppliedSetting(applied.noiseSuppression)} · Auto gain{" "}
-              {formatAppliedSetting(applied.autoGainControl)}
-              {applied.sampleRate ? ` · ${applied.sampleRate.toLocaleString()} Hz` : ""}
-              {applied.channelCount ? ` · ${applied.channelCount} channel` : ""}
-            </small>
-          </div>
-        )}
-        {setup.checkError && (
-          <small className="form-error" role="alert">
-            {setup.checkError}
-          </small>
-        )}
-      </div>
-    </details>
-  );
-}
-
-function formatAppliedSetting(value: boolean | null): string {
-  return value === null ? "unknown" : value ? "on" : "off";
-}
-
 function AgentNoCampaignStatus({
   desk,
   onDeskChanged,
@@ -2069,13 +1899,6 @@ function useActiveCallDuration(activeCall: ActiveCallUi | null): number {
 
 type ActiveCallUi = NonNullable<AgentDeskResponse["activeCall"]> & { campaignName?: string };
 
-function formatDuration(totalSeconds: number): string {
-  const safeSeconds = Math.max(0, Math.floor(totalSeconds));
-  const minutes = Math.floor(safeSeconds / 60);
-  const seconds = safeSeconds % 60;
-  return `${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`;
-}
-
 function formatVoicemailSignal(signal: NonNullable<AgentDeskResponse["activeCall"]>["voicemailSignal"]): {
   detail: string;
   label: string;
@@ -2087,249 +1910,6 @@ function formatVoicemailSignal(signal: NonNullable<AgentDeskResponse["activeCall
     return { detail: "Detection is not yet conclusive", label: "Possible VM" };
   }
   return { detail: "Listening during the connected call", label: "Listening" };
-}
-
-function LiveCallsView({
-  refreshVersion,
-  softphone
-}: {
-  refreshVersion: number;
-  softphone: SupervisorSoftphoneRuntime;
-}) {
-  const requestId = useRef(0);
-  const [data, setData] = useState<AdminLiveCallsResponse>({ calls: [], activeSession: null });
-  const [loading, setLoading] = useState(true);
-  const [pending, setPending] = useState<"start" | "mode" | "stop" | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let stopped = false;
-    const refresh = async (showLoading = false) => {
-      const currentRequest = ++requestId.current;
-      if (showLoading) setLoading(true);
-      try {
-        const next = await fetchAdminLiveCalls();
-        if (!stopped && currentRequest === requestId.current) {
-          setData(next);
-          setError(null);
-        }
-      } catch (loadError) {
-        if (!stopped && currentRequest === requestId.current) {
-          setError(getErrorMessage(loadError, "Could not load live calls"));
-        }
-      } finally {
-        if (!stopped && currentRequest === requestId.current) setLoading(false);
-      }
-    };
-    void refresh(true);
-    const interval = window.setInterval(() => void refresh(), 2_000);
-    return () => {
-      stopped = true;
-      requestId.current += 1;
-      window.clearInterval(interval);
-    };
-  }, [refreshVersion]);
-
-  async function start(callId: string) {
-    setPending("start");
-    setError(null);
-    try {
-      const session = await startSupervisorSession(callId);
-      setData((current) => ({ ...current, activeSession: session }));
-    } catch (startError) {
-      setError(getErrorMessage(startError, "Could not start live monitoring"));
-    } finally {
-      setPending(null);
-    }
-  }
-
-  async function changeMode(mode: SupervisorMode) {
-    const session = data.activeSession;
-    if (!session || session.mode === mode) return;
-    if (
-      mode === "join" &&
-      !window.confirm("Join this conversation? Both the agent and customer will hear your microphone.")
-    ) {
-      return;
-    }
-    setPending("mode");
-    setError(null);
-    try {
-      const updated = await updateSupervisorMode(session.id, mode);
-      setData((current) => ({ ...current, activeSession: updated }));
-    } catch (modeError) {
-      setError(getErrorMessage(modeError, "Could not change supervisor mode"));
-    } finally {
-      setPending(null);
-    }
-  }
-
-  async function stop() {
-    const session = data.activeSession;
-    if (!session) return;
-    setPending("stop");
-    setError(null);
-    try {
-      await stopSupervisorSession(session.id);
-      setData((current) => ({ ...current, activeSession: null }));
-    } catch (stopError) {
-      setError(getErrorMessage(stopError, "Could not stop live monitoring"));
-    } finally {
-      setPending(null);
-    }
-  }
-
-  const activeCall = data.activeSession
-    ? (data.calls.find((call) => call.id === data.activeSession?.callId) ?? null)
-    : null;
-  const phoneReady = softphone.registered;
-  return (
-    <div className="live-calls-view">
-      <section className="panel supervisor-safety-panel">
-        <PanelHeader
-          icon={Shield}
-          title="Supervisor audio"
-          meta={phoneReady ? "Phone connected" : "Connecting phone"}
-        />
-        <p>
-          Monitoring always starts listen-only. Microphone access is requested only for coaching or joining,
-          and FreeSWITCH enforces the selected mode.
-        </p>
-        <div className="supervisor-safety-badges">
-          <StatusBadge
-            label={phoneReady ? "● Supervisor phone ready" : "● Supervisor phone offline"}
-            tone={phoneReady ? "good" : "bad"}
-          />
-          <StatusBadge
-            label={softphone.microphoneActive ? "● Microphone live" : "● Microphone off"}
-            tone={softphone.microphoneActive ? "bad" : "neutral"}
-          />
-        </div>
-        {softphone.error && (
-          <p className="form-error" role="alert">
-            {softphone.error}
-          </p>
-        )}
-        {softphone.audioPlaybackState === "blocked" && (
-          <button
-            className="secondary-action compact-action"
-            onClick={() => void softphone.retryRemoteAudio()}
-            type="button"
-          >
-            <Play size={15} />
-            Play live audio
-          </button>
-        )}
-      </section>
-
-      {error && (
-        <p className="form-error" role="alert">
-          {error}
-        </p>
-      )}
-
-      {data.activeSession && (
-        <section className="panel active-supervisor-session" aria-live="polite">
-          <PanelHeader
-            icon={Headphones}
-            title={activeCall ? `${activeCall.agentName} · ${activeCall.leadName}` : "Live monitoring"}
-            meta={data.activeSession.state === "active" ? "Connected" : "Connecting"}
-          />
-          <div className="supervisor-mode-grid" role="group" aria-label="Supervisor mode">
-            <button
-              className={data.activeSession.mode === "listen" ? "mode-button active" : "mode-button"}
-              disabled={pending !== null || data.activeSession.state !== "active"}
-              onClick={() => void changeMode("listen")}
-              type="button"
-            >
-              <Headphones size={17} />
-              <strong>Listen</strong>
-              <span>Microphone off</span>
-            </button>
-            <button
-              className={data.activeSession.mode === "whisper" ? "mode-button active" : "mode-button"}
-              disabled={pending !== null || data.activeSession.state !== "active"}
-              onClick={() => void changeMode("whisper")}
-              type="button"
-            >
-              <Mic size={17} />
-              <strong>Coach agent</strong>
-              <span>Only the agent hears you</span>
-            </button>
-            <button
-              className={
-                data.activeSession.mode === "join" ? "mode-button danger active" : "mode-button danger"
-              }
-              disabled={pending !== null || data.activeSession.state !== "active"}
-              onClick={() => void changeMode("join")}
-              type="button"
-            >
-              <Users size={17} />
-              <strong>Join call</strong>
-              <span>Both parties hear you</span>
-            </button>
-          </div>
-          <button
-            className="secondary-action supervisor-stop"
-            disabled={pending !== null || data.activeSession.state !== "active"}
-            onClick={() => void stop()}
-            type="button"
-          >
-            <PhoneOff size={16} />
-            {pending === "stop"
-              ? "Disconnecting"
-              : data.activeSession.state === "connecting"
-                ? "Connecting"
-                : "Stop monitoring"}
-          </button>
-        </section>
-      )}
-
-      <section className="panel">
-        <PanelHeader icon={PhoneCall} title="Active conversations" meta={`${data.calls.length} available`} />
-        {loading ? (
-          <p className="empty-copy">Loading live calls</p>
-        ) : data.calls.length === 0 ? (
-          <p className="empty-copy">No connected agent calls are available right now.</p>
-        ) : (
-          <div className="live-call-list">
-            {data.calls.map((call) => {
-              const selected = data.activeSession?.callId === call.id;
-              return (
-                <article className={selected ? "live-call-row selected" : "live-call-row"} key={call.id}>
-                  <div>
-                    <strong>{call.agentName}</strong>
-                    <span>
-                      {call.leadName} · {call.phoneNumber}
-                    </span>
-                    <small>
-                      {call.campaignName} · {formatDuration(call.durationSeconds)}
-                    </small>
-                  </div>
-                  <div className="live-call-actions">
-                    {call.activeSupervisorCount > 0 && (
-                      <span>
-                        {call.activeSupervisorCount} supervisor{call.activeSupervisorCount === 1 ? "" : "s"}
-                      </span>
-                    )}
-                    <button
-                      className="primary-action compact-action"
-                      disabled={!phoneReady || pending !== null || Boolean(data.activeSession)}
-                      onClick={() => void start(call.id)}
-                      type="button"
-                    >
-                      <Headphones size={15} />
-                      {selected ? "Listening" : "Listen"}
-                    </button>
-                  </div>
-                </article>
-              );
-            })}
-          </div>
-        )}
-      </section>
-    </div>
-  );
 }
 
 function AdminView({
@@ -6889,38 +6469,4 @@ function AdminLibraryPagination({
       </button>
     </div>
   );
-}
-
-function PanelHeader({ icon: Icon, meta, title }: { icon: typeof BarChart3; meta: string; title: string }) {
-  return (
-    <div className="panel-header">
-      <div>
-        <Icon size={18} />
-        <h2>{title}</h2>
-      </div>
-      <span>{meta}</span>
-    </div>
-  );
-}
-
-function Metric({
-  icon: Icon,
-  label,
-  value
-}: {
-  icon: typeof BarChart3;
-  label: string;
-  value: number | string;
-}) {
-  return (
-    <div className="metric-card">
-      <Icon size={17} />
-      <strong>{value}</strong>
-      <span>{label}</span>
-    </div>
-  );
-}
-
-function StatusBadge({ label, tone }: { label: string; tone: "good" | "bad" | "neutral" | "warn" }) {
-  return <span className={`status-badge ${tone}`}>{label}</span>;
 }
