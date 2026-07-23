@@ -5,6 +5,21 @@ export function formatDuration(totalSeconds: number): string {
   return `${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`;
 }
 
+export function formatBytes(value: number): string {
+  if (value <= 0) {
+    return "0 B";
+  }
+  if (value < 1024) {
+    return `${value} B`;
+  }
+  const kilobytes = value / 1024;
+  if (kilobytes < 1024) {
+    return `${kilobytes.toFixed(kilobytes < 10 ? 1 : 0)} KB`;
+  }
+  const megabytes = kilobytes / 1024;
+  return `${megabytes.toFixed(megabytes < 10 ? 1 : 0)} MB`;
+}
+
 export function formatPercent(value: number): string {
   return `${value.toLocaleString(undefined, { maximumFractionDigits: 1 })}%`;
 }
