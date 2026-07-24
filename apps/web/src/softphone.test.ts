@@ -66,6 +66,35 @@ describe("softphone runtime helpers", () => {
     await __testing.applyAudioOutput({ setSinkId } as unknown as HTMLAudioElement, "speaker-2");
     expect(setSinkId).toHaveBeenCalledWith("speaker-2");
   });
+
+  it("stops browser ringback when remote media is already flowing", () => {
+    const stopBrowserRingback = vi.fn();
+    __testing.stopBrowserRingbackOnRemoteAudio({ muted: false } as MediaStreamTrack, stopBrowserRingback);
+    expect(stopBrowserRingback).toHaveBeenCalledTimes(1);
+  });
+
+  it("waits for the first remote-media unmute before stopping browser ringback", () => {
+    const stopBrowserRingback = vi.fn();
+    let onUnmute: (() => void) | undefined;
+    const track = {
+      muted: true,
+      addEventListener: vi.fn(
+        (event: string, listener: EventListenerOrEventListenerObject, options?: AddEventListenerOptions) => {
+          expect(event).toBe("unmute");
+          expect(options).toEqual({ once: true });
+          onUnmute =
+            typeof listener === "function"
+              ? () => listener(new Event("unmute"))
+              : () => listener.handleEvent(new Event("unmute"));
+        }
+      )
+    } as unknown as MediaStreamTrack;
+
+    __testing.stopBrowserRingbackOnRemoteAudio(track, stopBrowserRingback);
+    expect(stopBrowserRingback).not.toHaveBeenCalled();
+    onUnmute?.();
+    expect(stopBrowserRingback).toHaveBeenCalledTimes(1);
+  });
 });
 
 function runtime(overrides: Partial<SoftphoneRuntime> = {}): SoftphoneRuntime {
@@ -101,7 +130,9 @@ function runtime(overrides: Partial<SoftphoneRuntime> = {}): SoftphoneRuntime {
     selectMicrophone: () => undefined,
     selectSpeaker: async () => undefined,
     setMicrophoneProcessingProfile: () => undefined,
+    startBrowserRingback: () => undefined,
     state: "registered",
+    stopBrowserRingback: () => undefined,
     ...overrides
   };
 }

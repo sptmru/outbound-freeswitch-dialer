@@ -141,7 +141,9 @@ const softphoneRuntime = {
   answerIncomingCall: async () => undefined,
   declineIncomingCall: async () => undefined,
   hangUpSoftphoneCall: async () => undefined,
-  retryRemoteAudio: async () => undefined
+  retryRemoteAudio: async () => undefined,
+  startBrowserRingback: vi.fn(),
+  stopBrowserRingback: vi.fn()
 };
 
 const supervisorSoftphoneRuntime = {
@@ -1079,6 +1081,7 @@ describe("App Agent Desk empty states", () => {
     fireEvent.change(phoneNumber, { target: { value: "+1 415 555 0000" } });
     fireEvent.click(screen.getByRole("button", { name: "Call" }));
 
+    expect(softphoneRuntime.startBrowserRingback).toHaveBeenCalledTimes(1);
     await waitFor(() => {
       expect(apiMocks.startManualCall).toHaveBeenCalledWith({
         campaignId: "11111111-1111-4111-8111-111111111111",
@@ -1087,6 +1090,23 @@ describe("App Agent Desk empty states", () => {
     });
     expect(screen.queryByText("Pre-call checks")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Check number" })).not.toBeInTheDocument();
+  });
+
+  it("stops browser ringback when call creation fails", async () => {
+    apiMocks.useSoftphoneRegistration.mockReturnValue({ ...softphoneRuntime, registered: true });
+    apiMocks.fetchAgentDesk.mockResolvedValue(deskResponse());
+    apiMocks.startManualCall.mockRejectedValue(new Error("Trunk unavailable"));
+
+    render(<App />);
+
+    fireEvent.change(await screen.findByLabelText("Manual call"), {
+      target: { value: "+1 415 555 0000" }
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Call" }));
+
+    await screen.findByText("Trunk unavailable");
+    expect(softphoneRuntime.startBrowserRingback).toHaveBeenCalledTimes(1);
+    expect(softphoneRuntime.stopBrowserRingback).toHaveBeenCalledTimes(1);
   });
 
   it("confirms before calling a completed lead again", async () => {

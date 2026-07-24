@@ -118,8 +118,16 @@ export function AgentDesk({
     }
     callStartPendingRef.current = true;
     setCallNextPending(true);
+    softphone.startBrowserRingback();
     try {
-      onDeskChanged(await action());
+      const nextDesk = await action();
+      if (!nextDesk.activeCall) {
+        softphone.stopBrowserRingback();
+      }
+      onDeskChanged(nextDesk);
+    } catch (error) {
+      softphone.stopBrowserRingback();
+      throw error;
     } finally {
       callStartPendingRef.current = false;
       setCallNextPending(false);
@@ -149,6 +157,7 @@ export function AgentDesk({
   }, [desk.activeCall?.id]);
 
   async function hangUp(callId: string) {
+    softphone.stopBrowserRingback();
     await runCallControl("hangup", () => endCall(callId, { campaignId: campaign?.id }), "Could not end call");
   }
 

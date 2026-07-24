@@ -43,6 +43,7 @@ This document is the current product and operational contract. Items described a
 - Keep provider credentials and routing details out of the product UI.
 - Browser SIP uses WSS. PSTN codec/routing behavior must be validated with the selected provider.
 - Use a backend-owned, agent-first originate/bridge flow; the browser never receives authority to choose the PSTN endpoint.
+- Agent-initiated calls play browser-local ringback immediately while the internal WebRTC leg is still connecting. The browser tone stops on the first real remote audio, call-start failure, hangup, or softphone teardown; provider early media and the FreeSWITCH RTP-driven fallback remain authoritative after media begins.
 - Store calls, legs, state-changing events, UUIDs, commands, hangup causes, and automatic outcomes required for diagnosis.
 - Present call lifecycle status with the product vocabulary `Calling`, `Ringing`, `Answered`, `In progress`, `Failed`, `No answer`, `Cancelled`, `Completed`, and `Completed (voicemail dropped)`; keep technical states and outcomes internal.
 - Allow DTMF only when the backend reports the action eligible.

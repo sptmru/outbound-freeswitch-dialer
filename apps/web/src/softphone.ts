@@ -15,6 +15,7 @@ import type {
   MicrophoneProcessingProfile
 } from "./audio-setup";
 import { BrowserMediaTelemetryCollector } from "./browser-media";
+import { createBrowserRingbackController, type BrowserRingbackController } from "./browser-ringback";
 import type { PublicUser } from "./types";
 
 export type SoftphoneRuntimeState =
@@ -34,6 +35,8 @@ interface SoftphoneCoreRuntime {
   declineIncomingCall: () => Promise<void>;
   hangUpSoftphoneCall: () => Promise<void>;
   retryRemoteAudio: () => Promise<void>;
+  startBrowserRingback: () => void;
+  stopBrowserRingback: () => void;
 }
 
 export interface AudioSetupRuntime {
@@ -73,7 +76,9 @@ const idleRuntime: SoftphoneCoreRuntime = {
   answerIncomingCall: async () => undefined,
   declineIncomingCall: async () => undefined,
   hangUpSoftphoneCall: async () => undefined,
-  retryRemoteAudio: async () => undefined
+  retryRemoteAudio: async () => undefined,
+  startBrowserRingback: () => undefined,
+  stopBrowserRingback: () => undefined
 };
 
 const initialAudioSetup: AudioSetupRuntime = {
@@ -170,6 +175,7 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
   const invitationRef = useRef<Invitation | null>(null);
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
   const browserMediaTelemetryRef = useRef<ActiveBrowserMediaTelemetry | null>(null);
+  const browserRingbackRef = useRef<BrowserRingbackController | null>(null);
   const iceServersRef = useRef<RTCIceServer[]>([]);
   const registrationGenerationRef = useRef(0);
   const [runtime, setRuntime] = useState<SoftphoneCoreRuntime>(idleRuntime);
@@ -294,6 +300,17 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
     );
   }
 
+  function startBrowserRingback() {
+    if (!browserRingbackRef.current) {
+      browserRingbackRef.current = createBrowserRingbackController();
+    }
+    browserRingbackRef.current.start(selectedOutputRef.current);
+  }
+
+  function stopBrowserRingback() {
+    browserRingbackRef.current?.stop();
+  }
+
   async function acceptInvitation(
     invitation: Invitation,
     incomingCallLabel: string,
@@ -331,6 +348,7 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
   }
 
   async function hangUpSoftphoneCall() {
+    stopBrowserRingback();
     const invitation = invitationRef.current;
     if (!invitation) {
       return;
@@ -385,7 +403,9 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
       answerIncomingCall,
       declineIncomingCall,
       hangUpSoftphoneCall,
-      retryRemoteAudio
+      retryRemoteAudio,
+      startBrowserRingback,
+      stopBrowserRingback
     });
     const failRegistration = (
       detail: string,
@@ -738,6 +758,7 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
     peerConnection.getReceivers().forEach((receiver) => {
       if (receiver.track) {
         remoteStream.addTrack(receiver.track);
+        stopBrowserRingbackOnRemoteAudio(receiver.track, stopBrowserRingback);
       }
     });
 
@@ -764,6 +785,7 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
   }
 
   function clearRemoteAudio() {
+    stopBrowserRingback();
     if (!remoteAudioRef.current) {
       return;
     }
@@ -829,6 +851,14 @@ function getPeerConnection(invitation: Invitation): RTCPeerConnection | null {
       }
     | undefined;
   return handler?.peerConnection ?? null;
+}
+
+function stopBrowserRingbackOnRemoteAudio(track: MediaStreamTrack, stopBrowserRingback: () => void) {
+  if (track.muted === false) {
+    stopBrowserRingback();
+    return;
+  }
+  track.addEventListener?.("unmute", stopBrowserRingback, { once: true });
 }
 
 function loadAudioSetup(): AudioSetupRuntime {
@@ -969,6 +999,7 @@ export const __testing = {
   applyAudioOutput,
   reconcileAudioDevices,
   formatRegisterRejectError,
+  stopBrowserRingbackOnRemoteAudio,
   stopSoftphoneRegistration,
   toCallIdleRuntime,
   toRegistrationFailureRuntime
