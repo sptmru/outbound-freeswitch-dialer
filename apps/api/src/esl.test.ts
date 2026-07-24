@@ -9,7 +9,9 @@ const config = {
   SIP_TRUNK_PROXY: "sip.example.com",
   SIP_TRUNK_USERNAME: "agent",
   SIP_TRUNK_CALLER_ID: undefined,
-  FREESWITCH_RINGBACK_TONE: "%(400,200,400,450);%(400,2000,400,450)"
+  FREESWITCH_RINGBACK_TONE: "%(400,200,400,450);%(400,2000,400,450)",
+  FREESWITCH_TRUNK_JITTER_BUFFER_MSEC: "120:200:20",
+  FREESWITCH_WEBRTC_REWRITE_TIMESTAMPS: true
 } as AppConfig;
 
 describe("ESL helpers", () => {
@@ -56,6 +58,36 @@ describe("ESL helpers", () => {
       /bridge\(\{[^}]*absolute_codec_string=\^\^:PCMU:PCMA:G729[^}]*\}sofia\/gateway\/sip-trunk\//
     );
     assert.match(command, /ignore_early_media=false,media_bug_answer_req=false/);
+    assert.match(
+      command,
+      /rtp_rewrite_timestamps=true,rtp_autoflush_during_bridge=true,rtp_notimer_during_bridge=false/
+    );
+    assert.match(
+      command,
+      /jitterbuffer_msec=120:200:20,rtp_jitter_buffer_during_bridge=true,rtp_jitter_buffer_plc=true,rtp_media_autofix_timing=true,rtp_autoflush_during_bridge=false/
+    );
+  });
+
+  it("can disable the trunk jitter buffer and WebRTC timestamp rewriting for rollback", () => {
+    const command = __testing.buildAgentBridgeOriginateCommand(
+      {
+        ...config,
+        FREESWITCH_TRUNK_JITTER_BUFFER_MSEC: "off",
+        FREESWITCH_WEBRTC_REWRITE_TIMESTAMPS: false
+      },
+      {
+        agentLegUuid: "11111111-1111-4111-8111-111111111111",
+        callId: "22222222-2222-4222-8222-222222222222",
+        customerLegUuid: "33333333-3333-4333-8333-333333333333",
+        destinationNumber: "+14155550100",
+        sipUsername: "agent1000"
+      }
+    );
+
+    assert.doesNotMatch(command, /jitterbuffer_msec=/);
+    assert.doesNotMatch(command, /rtp_jitter_buffer_/);
+    assert.doesNotMatch(command, /rtp_rewrite_timestamps=/);
+    assert.doesNotMatch(command, /rtp_notimer_during_bridge=/);
   });
 
   it("parses bgapi job UUIDs from command response body", () => {

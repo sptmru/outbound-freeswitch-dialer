@@ -73,6 +73,8 @@ Do not reuse these values. `DATABASE_URL` must contain the same application data
 | `FREESWITCH_AGENT_OPUS_ENABLED`                                                | `true` prefers Opus on the browser agent leg; `false` keeps `PCMU,PCMA,G729`. Default `false`.        |
 | `FREESWITCH_RINGBACK_TONE`                                                     | Valid TGML cadence used as the silent-early-media fallback; defaults to Australian ringback.          |
 | `FREESWITCH_EARLY_MEDIA_FALLBACK_DELAY_MS`                                     | Wait before checking for inbound callee RTP and starting fallback; default `700`, range `100`-`5000`. |
+| `FREESWITCH_TRUNK_JITTER_BUFFER_MSEC`                                          | Customer-leg RTP jitter buffer as `target:max:drift`; default `120:200:20`. Use `off` to disable.     |
+| `FREESWITCH_WEBRTC_REWRITE_TIMESTAMPS`                                         | Regenerate continuous RTP timestamps toward the browser during bridge. Default `true`.                |
 | `FREESWITCH_ESL_*`                                                             | API-to-FreeSWITCH control channel plus queue/retry/reconciliation bounds. ESL is not a public API.    |
 | `SIP_TRUNK_MODE`                                                               | `registration` requires proxy, username, and password; `ip_auth` requires the proxy.                  |
 
@@ -83,6 +85,14 @@ Keep `ALLOW_UNCONFIGURED_SIP_TRUNK=false` for a production dialer. Setting it to
 `FREESWITCH_AGENT_OPUS_ENABLED=true` changes only the `internal-webrtc` profile to `OPUS,PCMU,PCMA,G729`. The provider-facing external profile and each customer-leg originate remain pinned to `PCMU,PCMA,G729`; the per-leg pin prevents the bridged customer offer from inheriting an agent-side Opus negotiation. When the browser selects Opus and the trunk selects another codec, FreeSWITCH transcodes between the two call legs. Apply a change by recreating the FreeSWITCH service, then verify both profile codec lists and a real call's negotiated read/write codecs before comparing media quality and CPU usage.
 
 The outbound bridge passes provider early media to the agent. After `FREESWITCH_EARLY_MEDIA_FALLBACK_DELAY_MS`, the API refreshes live RTP statistics. If `rtp_audio_in_media_packet_count` is still zero, it installs a customer-leg `api_on_answer` safety hook, injects `FREESWITCH_RINGBACK_TONE` only toward the agent, and polls every 200 ms. The first inbound callee media packet permanently wins for that pre-answer phase and stops the local tone; natural gaps in an announcement do not restart it. The fallback is also stopped on answer, bridge, or hangup. If the safety hook or RTP inspection fails, the controller fails closed and does not start a tone that could mask callee media.
+
+The bridged customer leg enables the FreeSWITCH jitter buffer only when
+`FREESWITCH_TRUNK_JITTER_BUFFER_MSEC` is not `off`; it remains active during the bridge, keeps
+packet-loss concealment enabled, and leaves RTP autoflush disabled so burst-paced provider media can
+be emitted at the negotiated packet cadence. The browser agent leg separately enables RTP timestamp
+rewriting, bridge autoflush, and the configured soft timer when
+`FREESWITCH_WEBRTC_REWRITE_TIMESTAMPS=true`. These controls add bounded latency in exchange for
+stable playout; validate them with a real call, per-call PCAP, and `call_browser_media_stats`.
 
 ### STUN and TURN
 

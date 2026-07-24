@@ -110,7 +110,10 @@ function buildAgentBridgeOriginateCommand(config: AppConfig, input: OriginateAge
     "originate_timeout=30",
     "bridge_early_media=true",
     "hangup_after_bridge=true",
-    "continue_on_fail=false"
+    "continue_on_fail=false",
+    ...(config.FREESWITCH_WEBRTC_REWRITE_TIMESTAMPS
+      ? ["rtp_rewrite_timestamps=true", "rtp_autoflush_during_bridge=true", "rtp_notimer_during_bridge=false"]
+      : [])
   ]);
   const customerVariables = buildOriginateVariables([
     `origination_uuid=${input.customerLegUuid}`,
@@ -120,6 +123,15 @@ function buildAgentBridgeOriginateCommand(config: AppConfig, input: OriginateAge
     "ignore_early_media=false",
     "media_bug_answer_req=false",
     "originate_timeout=45",
+    ...(config.FREESWITCH_TRUNK_JITTER_BUFFER_MSEC === "off"
+      ? []
+      : [
+          `jitterbuffer_msec=${config.FREESWITCH_TRUNK_JITTER_BUFFER_MSEC}`,
+          "rtp_jitter_buffer_during_bridge=true",
+          "rtp_jitter_buffer_plc=true",
+          "rtp_media_autofix_timing=true",
+          "rtp_autoflush_during_bridge=false"
+        ]),
     config.SIP_TRUNK_CALLER_ID
       ? `origination_caller_id_number=${escapeOriginateVariable(config.SIP_TRUNK_CALLER_ID)}`
       : null

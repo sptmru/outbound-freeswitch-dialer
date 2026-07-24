@@ -3,6 +3,18 @@ import { isSupportedCountry } from "libphonenumber-js";
 import { z } from "zod";
 
 const freeswitchToneSegment = String.raw`%\(\d{1,5},\d{1,5},\d{1,5}(?:\.\d+)?,\d{1,5}(?:\.\d+)?\)`;
+const freeswitchJitterBufferSetting = z.string().refine((value) => {
+  if (value === "off") {
+    return true;
+  }
+  const parts = value.split(":").map(Number);
+  return (
+    parts.length === 3 &&
+    parts.every((part) => Number.isInteger(part) && part >= 10 && part <= 10_000) &&
+    parts[0]! <= parts[1]! &&
+    parts[2]! <= parts[1]!
+  );
+}, "FREESWITCH_TRUNK_JITTER_BUFFER_MSEC must be off or target:max:drift in milliseconds");
 
 const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
@@ -84,6 +96,11 @@ const envSchema = z.object({
     )
     .default("%(400,200,400,450);%(400,2000,400,450)"),
   FREESWITCH_EARLY_MEDIA_FALLBACK_DELAY_MS: z.coerce.number().int().min(100).max(5_000).default(700),
+  FREESWITCH_TRUNK_JITTER_BUFFER_MSEC: freeswitchJitterBufferSetting.default("120:200:20"),
+  FREESWITCH_WEBRTC_REWRITE_TIMESTAMPS: z
+    .string()
+    .optional()
+    .transform((value) => value !== "false"),
   FREESWITCH_WEBRTC_WSS_PORT: z.coerce.number().int().positive().default(7443),
   FREESWITCH_WEBRTC_PUBLIC_WS_URL: z.string().url().optional(),
   ICE_STUN_URLS: z.string().default("stun:stun.l.google.com:19302,stun:stun1.l.google.com:19302"),
