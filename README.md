@@ -39,6 +39,7 @@ Firewall policy and changes to host-published ports were intentionally excluded 
 - [Architecture](docs/architecture.md)
 - [Environment configuration](docs/environment-configuration.md)
 - [Design plan](docs/design-plan.md)
+- [Frontend API integration guide](docs/frontend-api-integration-guide.md)
 - [Agent guide](docs/agent-guide.md)
 - [Administrator guide](docs/admin-guide.md)
 - [Deployment and rollback](docs/runbooks/deployment.md)
