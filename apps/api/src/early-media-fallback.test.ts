@@ -79,7 +79,7 @@ describe("early media fallback", () => {
     assert.equal(harness.hasTimer(), false);
   });
 
-  it("starts local ringback after silence and stops it when callee RTP later appears", async () => {
+  it("actively generates local ringback after zero-RTP silence and stops it when callee RTP appears", async () => {
     const harness = createHarness([0, 12]);
     harness.controller.handle(frame("CHANNEL_CREATE", "agent", agentLegUuid));
     harness.controller.handle(frame("CHANNEL_CREATE", "customer", customerLegUuid));
@@ -89,9 +89,13 @@ describe("early media fallback", () => {
     assert.deepEqual(harness.commands, [
       `uuid_set_media_stats ${customerLegUuid}`,
       `uuid_getvar ${customerLegUuid} rtp_audio_in_media_packet_count`,
-      `uuid_setvar ${customerLegUuid} api_on_answer uuid_displace ${agentLegUuid} stop tone_stream://${tone};loops=-1`,
-      `uuid_displace ${agentLegUuid} start tone_stream://${tone};loops=-1`
+      `uuid_setvar ${customerLegUuid} api_on_answer uuid_break ${agentLegUuid} all`,
+      `uuid_broadcast ${agentLegUuid} tone_stream://${tone};loops=-1 aleg`
     ]);
+    assert.equal(
+      harness.commands.some((command) => command.includes("uuid_displace")),
+      false
+    );
     assert.equal(harness.hasTimer(), true);
 
     harness.fireTimer();
@@ -99,11 +103,11 @@ describe("early media fallback", () => {
     assert.deepEqual(harness.commands, [
       `uuid_set_media_stats ${customerLegUuid}`,
       `uuid_getvar ${customerLegUuid} rtp_audio_in_media_packet_count`,
-      `uuid_setvar ${customerLegUuid} api_on_answer uuid_displace ${agentLegUuid} stop tone_stream://${tone};loops=-1`,
-      `uuid_displace ${agentLegUuid} start tone_stream://${tone};loops=-1`,
+      `uuid_setvar ${customerLegUuid} api_on_answer uuid_break ${agentLegUuid} all`,
+      `uuid_broadcast ${agentLegUuid} tone_stream://${tone};loops=-1 aleg`,
       `uuid_set_media_stats ${customerLegUuid}`,
       `uuid_getvar ${customerLegUuid} rtp_audio_in_media_packet_count`,
-      `uuid_displace ${agentLegUuid} stop tone_stream://${tone};loops=-1`
+      `uuid_break ${agentLegUuid} all`
     ]);
   });
 
@@ -129,10 +133,7 @@ describe("early media fallback", () => {
     harness.controller.handle(frame("CHANNEL_ANSWER", "customer", customerLegUuid));
     await harness.controller.waitForIdle();
 
-    assert.equal(
-      harness.commands.at(-1),
-      `uuid_displace ${agentLegUuid} stop tone_stream://${tone};loops=-1`
-    );
+    assert.equal(harness.commands.at(-1), `uuid_break ${agentLegUuid} all`);
     assert.equal(harness.hasTimer(), false);
   });
 });

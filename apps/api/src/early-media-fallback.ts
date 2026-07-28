@@ -78,7 +78,7 @@ export function createEarlyMediaFallbackController(
     const agentLegUuid = state.agentLegUuid;
     state.fallbackActive = false;
     try {
-      await runApiCommand(`uuid_displace ${agentLegUuid} stop ${tonePath}`);
+      await runApiCommand(`uuid_break ${agentLegUuid} all`);
       logger.info({ agentLegUuid, callId, reason }, "stopped local early-media fallback tone");
     } catch (error) {
       if (!state.terminated) {
@@ -135,14 +135,17 @@ export function createEarlyMediaFallbackController(
           const agentLegUuid = state.agentLegUuid;
           if (!state.answerHookInstalled) {
             await runApiCommand(
-              `uuid_setvar ${state.customerLegUuid} api_on_answer uuid_displace ${agentLegUuid} stop ${tonePath}`
+              `uuid_setvar ${state.customerLegUuid} api_on_answer uuid_break ${agentLegUuid} all`
             );
             state.answerHookInstalled = true;
           }
           if (state.terminated) {
             return;
           }
-          await runApiCommand(`uuid_displace ${agentLegUuid} start ${tonePath}`);
+          // uuid_displace only replaces existing write frames. A trunk that advertises
+          // early media but sends zero RTP leaves it with no frames to replace, so use
+          // playback through uuid_broadcast to create browser-bound media actively.
+          await runApiCommand(`uuid_broadcast ${agentLegUuid} ${tonePath} aleg`);
           state.fallbackActive = true;
           logger.info(
             { agentLegUuid, callId, delayMilliseconds: config.FREESWITCH_EARLY_MEDIA_FALLBACK_DELAY_MS },
