@@ -28,6 +28,9 @@
   "engines": {
     "node": ">=22"
   },
+  "overrides": {
+    "@fastify/static": "10.1.2"
+  },
   "devDependencies": {
     "@eslint/js": "^9.39.5",
     "@playwright/test": "^1.61.1",
