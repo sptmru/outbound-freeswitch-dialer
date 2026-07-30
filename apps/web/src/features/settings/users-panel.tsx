@@ -60,7 +60,7 @@ export function UsersPanel({
             setQuery(event.target.value);
             setPage(1);
           }}
-          placeholder="Search name, email, role or status"
+          placeholder="Search name, email, role, Caller ID or status"
           value={query}
         />
       </label>
@@ -105,6 +105,7 @@ function UserRow({
   const [email, setEmail] = useState(user.email);
   const [role, setRole] = useState(user.role);
   const [password, setPassword] = useState("");
+  const [callerId, setCallerId] = useState(user.callerId ?? "");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -113,7 +114,13 @@ function UserRow({
     setPending(true);
     setError(null);
     try {
-      await updateUser(user.id, { name, email, role, ...(password ? { password } : {}) });
+      await updateUser(user.id, {
+        name,
+        email,
+        role,
+        callerId: callerId.trim() || null,
+        ...(password ? { password } : {})
+      });
       setPassword("");
       setEditing(false);
       await onChanged();
@@ -161,6 +168,17 @@ function UserRow({
           Email
           <input required type="email" value={email} onChange={(event) => setEmail(event.target.value)} />
         </label>
+        {(role === "agent" || user.agentRegistered !== null) && (
+          <label>
+            Caller ID
+            <input
+              maxLength={80}
+              onChange={(event) => setCallerId(event.target.value)}
+              placeholder="Blank uses the default Caller ID"
+              value={callerId}
+            />
+          </label>
+        )}
         <label>
           New password
           <input
@@ -201,6 +219,8 @@ function UserRow({
         <b>
           {user.role} · {user.isActive ? "active" : "inactive"}
           {user.agentRegistered !== null ? ` · phone ${user.agentRegistered ? "connected" : "offline"}` : ""}
+          {(user.role === "agent" || user.agentRegistered !== null) &&
+            ` · Caller ID ${user.callerId ?? "default"}`}
         </b>
         <div className="row-actions">
           <button
@@ -237,6 +257,7 @@ function CreateUserForm({ onChanged }: { onChanged: () => Promise<void> }) {
   const [name, setName] = useState("");
   const [role, setRole] = useState<"agent" | "admin">("agent");
   const [password, setPassword] = useState("");
+  const [callerId, setCallerId] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -245,10 +266,17 @@ function CreateUserForm({ onChanged }: { onChanged: () => Promise<void> }) {
     setPending(true);
     setError(null);
     try {
-      await createUser({ email, name, role, password });
+      await createUser({
+        email,
+        name,
+        role,
+        password,
+        ...(role === "agent" ? { callerId: callerId.trim() || null } : {})
+      });
       setEmail("");
       setName("");
       setPassword("");
+      setCallerId("");
       await onChanged();
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : "Could not create user");
@@ -287,6 +315,17 @@ function CreateUserForm({ onChanged }: { onChanged: () => Promise<void> }) {
           value={email}
         />
       </label>
+      {role === "agent" && (
+        <label>
+          Caller ID
+          <input
+            maxLength={80}
+            onChange={(event) => setCallerId(event.target.value)}
+            placeholder="Blank uses the default Caller ID"
+            value={callerId}
+          />
+        </label>
+      )}
       <label>
         Password
         <input

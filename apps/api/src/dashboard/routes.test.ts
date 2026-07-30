@@ -274,9 +274,7 @@ describe("dashboard route helpers", () => {
   });
 
   it("auto-detects semicolon-separated CSV while preserving delimiters inside quoted fields", () => {
-    const parsed = parseCsv(
-      '\r\nName;Phone;Company\r\n"Doe, Jane";"+1 415 555 0100";"Acme; Europe"\r\n'
-    );
+    const parsed = parseCsv('\r\nName;Phone;Company\r\n"Doe, Jane";"+1 415 555 0100";"Acme; Europe"\r\n');
 
     assert.deepEqual(parsed.headers, ["Name", "Phone", "Company"]);
     assert.deepEqual(parsed.rows, [["Doe, Jane", "+1 415 555 0100", "Acme; Europe"]]);
@@ -627,8 +625,14 @@ describe("dashboard route helpers", () => {
     const pool = createTransactionalPool({
       clientHandler: (sql, params) => {
         clientQueries.push({ sql, params });
-        if (sql.includes("select registered, availability_status from agents")) {
-          return rows([{ registered: true, availability_status: "available" }]);
+        if (sql.includes("select registered, availability_status, caller_id from agents")) {
+          return rows([
+            {
+              registered: true,
+              availability_status: "available",
+              caller_id: "15551112222"
+            }
+          ]);
         }
         if (sql.includes("from calls") && sql.includes("for update")) {
           return rows([{ id: "active-call" }]);
@@ -664,8 +668,14 @@ describe("dashboard route helpers", () => {
         if (sql === "select agent_id from calls where id = $1") {
           return rows([{ agent_id: "33333333-3333-4333-8333-333333333333" }]);
         }
-        if (sql.includes("select registered, availability_status from agents")) {
-          return rows([{ registered: true, availability_status: "available" }]);
+        if (sql.includes("select registered, availability_status, caller_id from agents")) {
+          return rows([
+            {
+              registered: true,
+              availability_status: "available",
+              caller_id: "15551112222"
+            }
+          ]);
         }
         if (sql.includes("voicemail_signal_status") && sql.includes("for update")) {
           return rows([
@@ -740,6 +750,9 @@ describe("dashboard route helpers", () => {
       campaignId: selectedCampaignId
     });
     assert.ok(clientQueries.some((query) => query.sql.includes("for update of contacts skip locked")));
+    const createdCall = clientQueries.find((query) => query.sql.includes("insert into calls"));
+    assert.equal(createdCall?.params[5], "15551112222");
+    assert.match(createdCall?.sql ?? "", /caller_id/);
     assert.ok(clientQueries.some((query) => query.sql === "commit"));
     assert.ok(clientQueries.some((query) => query.sql.includes("set state = $2")));
     assert.ok(clientQueries.some((query) => query.sql === "commit"));
@@ -749,7 +762,7 @@ describe("dashboard route helpers", () => {
     const contactQueries: Array<{ params: readonly unknown[]; sql: string }> = [];
     const pool = createTransactionalPool({
       clientHandler: (sql, params) => {
-        if (sql.includes("select registered, availability_status from agents")) {
+        if (sql.includes("select registered, availability_status, caller_id from agents")) {
           return rows([{ registered: true, availability_status: "available" }]);
         }
         if (sql.includes("from calls") && sql.includes("for update")) {
@@ -858,7 +871,7 @@ describe("dashboard route helpers", () => {
     const pool = createTransactionalPool({
       clientHandler: (sql) => {
         queries.push(sql);
-        return sql.includes("select registered, availability_status from agents")
+        return sql.includes("select registered, availability_status, caller_id from agents")
           ? rows([{ registered: false, availability_status: "available" }])
           : rows([]);
       }

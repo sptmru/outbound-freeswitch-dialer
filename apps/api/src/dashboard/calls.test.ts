@@ -21,6 +21,12 @@ describe("call lifecycle", () => {
     assert.equal(__testing.originateWatchdogDelayMilliseconds(config, "agent", true), 5_000);
   });
 
+  it("prefers the agent Caller ID and falls back to the global trunk Caller ID", () => {
+    assert.equal(__testing.resolveOutboundCallerId(" 15551112222 ", "15550000000"), "15551112222");
+    assert.equal(__testing.resolveOutboundCallerId(null, " 15550000000 "), "15550000000");
+    assert.equal(__testing.resolveOutboundCallerId("", ""), null);
+  });
+
   it("does not fail voicemail background playback when the agent leg was intentionally released", async () => {
     for (const state of [
       "voicemail_drop_requested",

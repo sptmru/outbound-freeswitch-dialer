@@ -12,6 +12,7 @@ export interface EslCommandResponse {
 }
 
 export interface OriginateCustomerLegInput {
+  callerId?: string | null;
   callId: string;
   destinationNumber: string;
   legUuid: string;
@@ -19,6 +20,7 @@ export interface OriginateCustomerLegInput {
 
 export interface OriginateAgentBridgeCallInput {
   agentLegUuid: string;
+  callerId?: string | null;
   callId: string;
   customerLegUuid: string;
   destinationNumber: string;
@@ -53,14 +55,13 @@ export async function originateCustomerLeg(
   input: OriginateCustomerLegInput
 ): Promise<{ command: string; jobUuid: string; legUuid: string }> {
   const dialString = buildCustomerDialString(config, input.destinationNumber);
+  const callerId = input.callerId === undefined ? config.SIP_TRUNK_CALLER_ID : input.callerId;
   const variables = [
     `origination_uuid=${input.legUuid}`,
     `outbound_dialer_call_id=${input.callId}`,
     "ignore_early_media=true",
     "originate_timeout=45",
-    config.SIP_TRUNK_CALLER_ID
-      ? `origination_caller_id_number=${escapeOriginateVariable(config.SIP_TRUNK_CALLER_ID)}`
-      : null
+    callerId ? `origination_caller_id_number=${escapeOriginateVariable(callerId)}` : null
   ]
     .filter(Boolean)
     .join(",");
@@ -102,6 +103,7 @@ export async function originateSupervisorEavesdrop(
 
 function buildAgentBridgeOriginateCommand(config: AppConfig, input: OriginateAgentBridgeCallInput): string {
   const customerDialString = buildCustomerDialString(config, input.destinationNumber);
+  const callerId = input.callerId === undefined ? config.SIP_TRUNK_CALLER_ID : input.callerId;
   const agentVariables = buildOriginateVariables([
     `origination_uuid=${input.agentLegUuid}`,
     `outbound_dialer_call_id=${input.callId}`,
@@ -132,9 +134,7 @@ function buildAgentBridgeOriginateCommand(config: AppConfig, input: OriginateAge
           "rtp_media_autofix_timing=true",
           "rtp_autoflush_during_bridge=false"
         ]),
-    config.SIP_TRUNK_CALLER_ID
-      ? `origination_caller_id_number=${escapeOriginateVariable(config.SIP_TRUNK_CALLER_ID)}`
-      : null
+    callerId ? `origination_caller_id_number=${escapeOriginateVariable(callerId)}` : null
   ]);
   return `originate {${agentVariables}}user/${input.sipUsername}@${config.FREESWITCH_DOMAIN} &bridge({${customerVariables}}${customerDialString})`;
 }

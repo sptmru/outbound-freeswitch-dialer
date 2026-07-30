@@ -67,6 +67,7 @@ describe("admin library pagination", () => {
         role: "agent",
         isActive: true,
         agentRegistered: false,
+        callerId: "15551112222",
         total_count: "6"
       }
     ]);
@@ -75,6 +76,8 @@ describe("admin library pagination", () => {
     assert.match(usersQuery.sql, /users\.email ilike/);
     assert.equal(users.totalPages, 2);
     assert.equal(users.items[0]?.agentRegistered, false);
+    assert.equal(users.items[0]?.callerId, "15551112222");
+    assert.match(usersQuery.sql, /agents\.caller_id as "callerId"/);
     assert.ok(!("total_count" in (users.items[0] ?? {})));
   });
 

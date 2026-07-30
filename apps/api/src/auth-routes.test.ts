@@ -7,6 +7,7 @@ import cookie from "@fastify/cookie";
 import Fastify from "fastify";
 import type pg from "pg";
 import type { AppConfig } from "./config.js";
+import { encryptSecret } from "./auth/crypto.js";
 import { __testing, registerAuthRoutes } from "./auth/routes.js";
 import { hashSecret } from "./auth/passwords.js";
 import { provisionAgentDirectory } from "./freeswitch/provisioning.js";
@@ -174,12 +175,64 @@ describe("auth route helpers", () => {
     assert.ok(queries.includes("rollback"));
     assert.ok(!queries.some((query) => query.includes("update users set is_active = false")));
   });
+
+  it("updates the agent Caller ID and preserves the normalized value after provisioning", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "outbound-dialer-caller-id-"));
+    const config = createConfig(tempDir);
+    const userId = "11111111-1111-4111-8111-111111111111";
+    const user = {
+      id: userId,
+      email: "agent@example.com",
+      name: "Agent",
+      role: "agent" as const,
+      password_hash: "unused",
+      auth_version: 1,
+      is_active: true,
+      created_at: new Date(),
+      updated_at: new Date()
+    };
+    const queries: Array<{ params: readonly unknown[]; sql: string }> = [];
+    const pool = createClientPool((sql, params) => {
+      queries.push({ sql, params });
+      if (sql.includes("select * from users")) return rows([user]);
+      if (sql.includes("update users") && sql.includes("returning *")) return rows([user]);
+      if (sql.includes("select id, sip_username, sip_password_encrypted, display_name")) {
+        return rows([
+          {
+            id: "22222222-2222-4222-8222-222222222222",
+            sip_username: "agent_caller_id",
+            sip_password_encrypted: encryptSecret(config, "sip-secret"),
+            display_name: "Agent"
+          }
+        ]);
+      }
+      return rows([]);
+    });
+
+    try {
+      const result = await __testing.updateUser(pool, config, userId, { callerId: "15551112222" });
+
+      assert.notEqual(result, "not_found");
+      const transactionalUpdate = queries.find((query) => query.sql.includes("case when $3::boolean"));
+      assert.deepEqual(transactionalUpdate?.params, [userId, "Agent", true, "15551112222"]);
+      const postProvisioningUpdate = queries.find((query) =>
+        query.sql.includes("update agents set caller_id = $2")
+      );
+      assert.deepEqual(postProvisioningUpdate?.params, [
+        "22222222-2222-4222-8222-222222222222",
+        "15551112222"
+      ]);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
 });
 
 function createConfig(generatedConfigDir: string): AppConfig {
   return {
     FREESWITCH_GENERATED_CONFIG_DIR: generatedConfigDir,
-    FREESWITCH_DOMAIN: "dialer.local"
+    FREESWITCH_DOMAIN: "dialer.local",
+    JWT_SECRET: "test-secret-that-is-at-least-32-bytes"
   } as AppConfig;
 }
 
@@ -201,7 +254,8 @@ function createClientPool(
     release: () => undefined
   };
   return {
-    connect: () => Promise.resolve(client)
+    connect: () => Promise.resolve(client),
+    query: (sql: string, params: readonly unknown[] = []) => Promise.resolve(handler(sql, params))
   } as unknown as pg.Pool;
 }
 

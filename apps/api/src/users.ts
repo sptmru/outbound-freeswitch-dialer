@@ -73,6 +73,7 @@ export interface CreateUserInput {
   name: string;
   role: UserRole;
   password: string;
+  callerId?: string | null;
 }
 
 export function toPublicUser(user: UserRecord): PublicUser {
@@ -123,10 +124,24 @@ export async function createUserWithOptionalAgent(
       const sipUsername = await nextSipUsername(client, config.SIP_USERNAME_PREFIX);
       await client.query(
         `
-          insert into agents (user_id, sip_username, sip_password_hash, sip_password_encrypted, display_name)
-          values ($1, $2, $3, $4, $5)
+          insert into agents (
+            user_id,
+            sip_username,
+            sip_password_hash,
+            sip_password_encrypted,
+            display_name,
+            caller_id
+          )
+          values ($1, $2, $3, $4, $5, $6)
         `,
-        [user.id, sipUsername, await hashSecret(sipPassword), encryptSecret(config, sipPassword), input.name]
+        [
+          user.id,
+          sipUsername,
+          await hashSecret(sipPassword),
+          encryptSecret(config, sipPassword),
+          input.name,
+          input.callerId ?? null
+        ]
       );
       directoryAgent = { sipUsername, sipPassword, displayName: input.name };
     }

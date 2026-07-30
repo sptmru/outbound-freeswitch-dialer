@@ -109,6 +109,7 @@ This document is the current product and operational contract. Items described a
 ## Users And Administrative Audit
 
 - Admins can create, edit, deactivate/reactivate, change role, and reset passwords.
+- Admins can assign an optional Caller ID to an agent. Outbound calls use that value first and fall back to the current global trunk Caller ID when the agent override is empty.
 - Deactivation is rejected while the user has an active interactive call or supervisor session, revokes sessions, removes agent/supervisor registration material, and preserves historical attribution. Removing the admin role is likewise rejected until that user's supervisor session ends.
 - Successful mutating `/admin/*` requests create `admin_audit_events` with actor, request ID, method, route, response status, source IP, user agent, bounded string route parameters, and timestamp.
 - Audit history is paginated and filterable by actor, method, and date.

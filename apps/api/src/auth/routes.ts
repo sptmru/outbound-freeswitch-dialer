@@ -34,7 +34,8 @@ const createUserSchema = z.object({
   email: z.string().email(),
   name: z.string().min(1),
   role: z.enum(["agent", "admin"]),
-  password: z.string().min(12)
+  password: z.string().min(12),
+  callerId: z.string().trim().min(1).max(80).nullable().optional()
 }) satisfies z.ZodType<CreateUserRequest>;
 
 const userParamsSchema = z.object({
@@ -47,7 +48,8 @@ const updateUserSchema = z
     name: z.string().min(1).max(160).optional(),
     role: z.enum(["agent", "admin"]).optional(),
     isActive: z.boolean().optional(),
-    password: z.string().min(12).optional()
+    password: z.string().min(12).optional(),
+    callerId: z.string().trim().min(1).max(80).nullable().optional()
   })
   .refine(
     (value) => Object.keys(value).length > 0,
@@ -271,10 +273,14 @@ async function updateUser(
         revokeSessions ? 1 : 0
       ]
     );
-    await client.query("update agents set display_name = $2, updated_at = now() where user_id = $1", [
-      userId,
-      input.name ?? existing.name
-    ]);
+    await client.query(
+      `update agents
+       set display_name = $2,
+           caller_id = case when $3::boolean then $4 else caller_id end,
+           updated_at = now()
+       where user_id = $1`,
+      [userId, input.name ?? existing.name, input.callerId !== undefined, input.callerId ?? null]
+    );
     await client.query(
       "update admin_supervisor_endpoints set display_name = $2, updated_at = now() where user_id = $1",
       [userId, `${input.name ?? existing.name} (supervisor)`]
@@ -325,7 +331,13 @@ async function updateUser(
         });
       }
     } else if (publicUser?.isActive) {
-      await ensureAgentForUser(pool, config, publicUser);
+      const ensuredAgent = await ensureAgentForUser(pool, config, publicUser);
+      if (input.callerId !== undefined) {
+        await pool.query("update agents set caller_id = $2, updated_at = now() where id = $1", [
+          ensuredAgent.id,
+          input.callerId
+        ]);
+      }
     }
   } catch (error) {
     if (!options.onProvisioningError) throw error;

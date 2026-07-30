@@ -49,6 +49,7 @@ async function queryUsers(
         users.role,
         users.is_active as "isActive",
         case when agents.id is null then null else agents.registered end as "agentRegistered",
+        agents.caller_id as "callerId",
         count(*) over() as total_count
       from users
       left join agents on agents.user_id = users.id
@@ -57,6 +58,7 @@ async function queryUsers(
         or users.name ilike '%' || $1 || '%'
         or users.email ilike '%' || $1 || '%'
         or users.role::text ilike '%' || $1 || '%'
+        or agents.caller_id ilike '%' || $1 || '%'
         or case when users.is_active then 'active' else 'inactive' end ilike '%' || $1 || '%'
       )
       order by users.created_at desc

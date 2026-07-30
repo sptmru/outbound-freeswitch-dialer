@@ -337,7 +337,12 @@ export interface AdminOverviewResponse {
     fileSizeBytes: number;
     status: string;
   }>;
-  users: Array<PublicUser & { agentRegistered: boolean | null }>;
+  users: Array<
+    PublicUser & {
+      agentRegistered: boolean | null;
+      callerId: string | null;
+    }
+  >;
   callHistory: CallHistoryItem[];
   suppression: Array<{
     id: string;
@@ -669,6 +674,7 @@ export interface CreateUserRequest {
   name: string;
   role: UserRole;
   password: string;
+  callerId?: string | null;
 }
 
 export interface CreateUserResponse {
@@ -681,6 +687,7 @@ export interface UpdateUserRequest {
   role?: UserRole;
   isActive?: boolean;
   password?: string;
+  callerId?: string | null;
 }
 
 export interface UpdateUserResponse {

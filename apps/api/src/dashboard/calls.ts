@@ -215,6 +215,7 @@ export async function createDialerCall(
   let callId: string | null = null;
   let callContext: DialerCallContext;
   let committedContext: DialerCallContext | null = null;
+  let effectiveCallerId: string | null = null;
   try {
     await client.query("begin");
 
@@ -274,8 +275,11 @@ export async function createDialerCall(
     );
     const agent = await client.query<{
       availability_status: "available" | "paused" | "wrap_up";
+      caller_id: string | null;
       registered: boolean;
-    }>("select registered, availability_status from agents where id = $1 for update", [input.agentId]);
+    }>("select registered, availability_status, caller_id from agents where id = $1 for update", [
+      input.agentId
+    ]);
     const agentState = agent.rows[0];
     if (!agentState?.registered) {
       await client.query("rollback");
@@ -285,6 +289,7 @@ export async function createDialerCall(
       await client.query("rollback");
       return { ok: false, reason: "agent_paused" };
     }
+    effectiveCallerId = resolveOutboundCallerId(agentState.caller_id, config.SIP_TRUNK_CALLER_ID);
     const activeCall = await client.query<{ id: string }>(
       `
         select id
@@ -369,6 +374,7 @@ export async function createDialerCall(
           contact_id,
           destination_number,
           normalized_destination_number,
+          caller_id,
           state,
           recording_id,
           manual_dial,
@@ -377,7 +383,21 @@ export async function createDialerCall(
           early_media_avmd_enabled,
           started_at
         )
-        values ($1, $2, $3, $4, $5, 'customer_dialing', $6, $7, $8, case when $8 then 'pending' else 'disabled' end, $9, now())
+        values (
+          $1,
+          $2,
+          $3,
+          $4,
+          $5,
+          $6,
+          'customer_dialing',
+          $7,
+          $8,
+          $9,
+          case when $9 then 'pending' else 'disabled' end,
+          $10,
+          now()
+        )
         returning id
       `,
       [
@@ -386,6 +406,7 @@ export async function createDialerCall(
         callContext.contactId,
         callContext.destinationNumber,
         callContext.normalizedDestinationNumber,
+        effectiveCallerId,
         recordingId,
         input.manualDial,
         callContext.callRecordingEnabled,
@@ -462,6 +483,7 @@ export async function createDialerCall(
   await syncFreeSwitchOriginate(pool, config, {
     agentId: input.agentId,
     callId,
+    callerId: effectiveCallerId,
     destinationNumber: committedContext.destinationNumber,
     sipUsername: input.sipUsername
   });
@@ -507,10 +529,23 @@ function mapCreateDialerCallUniqueViolation(error: unknown): CreateDialerCallFai
   return null;
 }
 
+function resolveOutboundCallerId(
+  agentCallerId: string | null | undefined,
+  defaultCallerId: string | undefined
+): string | null {
+  return agentCallerId?.trim() || defaultCallerId?.trim() || null;
+}
+
 export async function syncFreeSwitchOriginate(
   pool: pg.Pool,
   config: AppConfig,
-  input: { agentId: string; callId: string; destinationNumber: string; sipUsername: string }
+  input: {
+    agentId: string;
+    callId: string;
+    callerId?: string | null;
+    destinationNumber: string;
+    sipUsername: string;
+  }
 ): Promise<void> {
   if (!canOriginateCustomerLeg(config)) {
     await failDialerCallFromFreeSwitch(pool, config, input.agentId, input.callId, null, {
@@ -530,6 +565,7 @@ export async function syncFreeSwitchOriginate(
     const originate = await originateAgentBridgeCall(config, {
       agentLegUuid,
       callId: input.callId,
+      callerId: input.callerId,
       customerLegUuid,
       destinationNumber: input.destinationNumber,
       sipUsername: input.sipUsername
@@ -1330,5 +1366,6 @@ export const __testing = {
   closeMissingOriginateLeg,
   getCallableContactForUpdate,
   getNextCallableContactForUpdate,
-  originateWatchdogDelayMilliseconds
+  originateWatchdogDelayMilliseconds,
+  resolveOutboundCallerId
 };

@@ -40,6 +40,7 @@ Firewall and host-published-port changes were excluded by instruction. They are 
 - Origin allowlist CSRF protection for cookie-authenticated mutations; Bearer compatibility retained for explicit API clients.
 - Per-IP login rate limiting, safe proxy trust, active-user/auth-version checks, logout, and session revocation on password reset/deactivation.
 - Generated agent SIP credentials and FreeSWITCH directory provisioning.
+- Optional admin-managed per-agent Caller ID overrides with global trunk Caller ID fallback.
 - Dual-read SIP secret format with opt-in writes: rollback-compatible `v1`, independent-key `v2`, and transactional startup migration.
 
 ### 3. FreeSWITCH, WSS, And Call Control

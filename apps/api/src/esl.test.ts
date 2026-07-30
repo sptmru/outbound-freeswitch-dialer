@@ -68,6 +68,38 @@ describe("ESL helpers", () => {
     );
   });
 
+  it("uses a per-call Caller ID instead of the global trunk default", () => {
+    const command = __testing.buildAgentBridgeOriginateCommand(
+      { ...config, SIP_TRUNK_CALLER_ID: "15550000000" },
+      {
+        agentLegUuid: "11111111-1111-4111-8111-111111111111",
+        callId: "22222222-2222-4222-8222-222222222222",
+        callerId: "15551112222",
+        customerLegUuid: "33333333-3333-4333-8333-333333333333",
+        destinationNumber: "+14155550100",
+        sipUsername: "agent1000"
+      }
+    );
+
+    assert.match(command, /origination_caller_id_number=15551112222/);
+    assert.doesNotMatch(command, /origination_caller_id_number=15550000000/);
+  });
+
+  it("keeps the global Caller ID fallback when no per-call value is supplied", () => {
+    const command = __testing.buildAgentBridgeOriginateCommand(
+      { ...config, SIP_TRUNK_CALLER_ID: "15550000000" },
+      {
+        agentLegUuid: "11111111-1111-4111-8111-111111111111",
+        callId: "22222222-2222-4222-8222-222222222222",
+        customerLegUuid: "33333333-3333-4333-8333-333333333333",
+        destinationNumber: "+14155550100",
+        sipUsername: "agent1000"
+      }
+    );
+
+    assert.match(command, /origination_caller_id_number=15550000000/);
+  });
+
   it("can disable the trunk jitter buffer and WebRTC timestamp rewriting for rollback", () => {
     const command = __testing.buildAgentBridgeOriginateCommand(
       {

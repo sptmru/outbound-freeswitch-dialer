@@ -718,13 +718,14 @@
           "additionalProperties": false,
           "properties": {
             "agentRegistered": { "type": ["boolean", "null"] },
+            "callerId": { "type": ["string", "null"] },
             "id": { "type": "string" },
             "email": { "type": "string" },
             "name": { "type": "string" },
             "role": { "$ref": "UserRole#" },
             "isActive": { "type": "boolean" }
           },
-          "required": ["agentRegistered", "email", "id", "isActive", "name", "role"]
+          "required": ["agentRegistered", "callerId", "email", "id", "isActive", "name", "role"]
         }
       },
       "callHistory": { "type": "array", "items": { "$ref": "CallHistoryItem#" } },
@@ -1265,13 +1266,14 @@
           "additionalProperties": false,
           "properties": {
             "agentRegistered": { "type": ["boolean", "null"] },
+            "callerId": { "type": ["string", "null"] },
             "id": { "type": "string" },
             "email": { "type": "string" },
             "name": { "type": "string" },
             "role": { "$ref": "UserRole#" },
             "isActive": { "type": "boolean" }
           },
-          "required": ["agentRegistered", "email", "id", "isActive", "name", "role"]
+          "required": ["agentRegistered", "callerId", "email", "id", "isActive", "name", "role"]
         }
       },
       "page": { "type": "number" },
@@ -1766,7 +1768,8 @@
       "email": { "type": "string" },
       "name": { "type": "string" },
       "role": { "$ref": "UserRole#" },
-      "password": { "type": "string" }
+      "password": { "type": "string" },
+      "callerId": { "type": ["string", "null"] }
     },
     "required": ["email", "name", "role", "password"],
     "additionalProperties": false
@@ -1786,7 +1789,8 @@
       "name": { "type": "string" },
       "role": { "$ref": "UserRole#" },
       "isActive": { "type": "boolean" },
-      "password": { "type": "string" }
+      "password": { "type": "string" },
+      "callerId": { "type": ["string", "null"] }
     },
     "additionalProperties": false
   },
