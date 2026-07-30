@@ -675,7 +675,7 @@ The API supports:
 
 For multipart requests, use `FormData` and let the browser set the multipart boundary. Do not manually set `Content-Type`.
 
-Campaign CSV requires mapped `name` and `phone` data. The response includes an import ID and counts; use `/admin/csv-imports/:importId` to show paginated failures.
+Campaign CSV accepts comma or semicolon delimiters (auto-detected from the header row) and requires mapped `name` and `phone` data. The response includes an import ID and counts; use `/admin/csv-imports/:importId` to show paginated failures.
 
 ### Audio playback and media tickets
 

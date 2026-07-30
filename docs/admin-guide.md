@@ -23,7 +23,7 @@
 
 - Create a campaign in `draft`, review its contact data and policy, then activate it. Use `paused` to stop new calls temporarily and `archived` to preserve closed campaign history.
 - Configure manual dialing, call recording, and early-media AVMD per campaign. These controls do not replace legal/provider approval.
-- Import CSV with the intentionally narrow required `name` and `phone` columns. Review accepted/rejected/duplicate counts and page through every rejected row before activation.
+- Import comma- or semicolon-separated CSV with the intentionally narrow required `name` and `phone` columns; the delimiter is detected automatically. Review accepted/rejected/duplicate counts and page through every rejected row before activation.
 - Search/filter the paginated contact list and verify that completed, suppressed, currently calling, exhausted, or retry-delay contacts are not offered as callable. Opening Contacts follows the campaign selected on Agent Desk.
 - Defaults are three committed attempts and a 15-minute retry delay. Change `CONTACT_MAX_ATTEMPTS`/`CONTACT_RETRY_DELAY_SECONDS` only after the operating policy is approved.
 

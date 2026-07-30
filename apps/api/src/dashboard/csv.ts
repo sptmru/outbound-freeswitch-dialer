@@ -398,6 +398,7 @@ export function parseCsv(input: string, limits: CsvParseLimits = {}): ParsedCsv 
   if (Buffer.byteLength(input, "utf8") > maxBytes) {
     throw new CsvImportError(`CSV exceeds configured limit of ${maxBytes} bytes`);
   }
+  const delimiter = detectCsvDelimiter(input);
   const rows: string[][] = [];
   let field = "";
   let row: string[] = [];
@@ -422,7 +423,7 @@ export function parseCsv(input: string, limits: CsvParseLimits = {}): ParsedCsv 
       continue;
     }
 
-    if (char === "," && !inQuotes) {
+    if (char === delimiter && !inQuotes) {
       row.push(field.trim());
       enforceCsvColumnLimit(row.length, maxColumns);
       field = "";
@@ -486,6 +487,51 @@ export function parseCsv(input: string, limits: CsvParseLimits = {}): ParsedCsv 
     headers,
     rows: rows.filter((csvRow) => csvRow.some((value) => value.trim().length > 0))
   };
+}
+
+function detectCsvDelimiter(input: string): "," | ";" {
+  let commaCount = 0;
+  let semicolonCount = 0;
+  let inQuotes = false;
+  let rowHasValue = false;
+
+  for (let index = 0; index < input.length; index += 1) {
+    const char = input[index];
+    const next = input[index + 1];
+
+    if (char === '"' && inQuotes && next === '"') {
+      index += 1;
+      continue;
+    }
+    if (char === '"') {
+      inQuotes = !inQuotes;
+      continue;
+    }
+    if (!inQuotes && (char === "\n" || char === "\r")) {
+      if (rowHasValue) {
+        break;
+      }
+      if (char === "\r" && next === "\n") {
+        index += 1;
+      }
+      commaCount = 0;
+      semicolonCount = 0;
+      continue;
+    }
+    if (!inQuotes && char === ",") {
+      commaCount += 1;
+      continue;
+    }
+    if (!inQuotes && char === ";") {
+      semicolonCount += 1;
+      continue;
+    }
+    if (!/\s/u.test(char)) {
+      rowHasValue = true;
+    }
+  }
+
+  return semicolonCount > commaCount ? ";" : ",";
 }
 
 function enforceCsvColumnLimit(columns: number, maxColumns: number): void {

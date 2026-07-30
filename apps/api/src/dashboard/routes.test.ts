@@ -273,6 +273,15 @@ describe("dashboard route helpers", () => {
     assert.deepEqual(parsed.rows, [["Doe, Jane", "+1 415 555 0100", 'Acme "Labs"']]);
   });
 
+  it("auto-detects semicolon-separated CSV while preserving delimiters inside quoted fields", () => {
+    const parsed = parseCsv(
+      '\r\nName;Phone;Company\r\n"Doe, Jane";"+1 415 555 0100";"Acme; Europe"\r\n'
+    );
+
+    assert.deepEqual(parsed.headers, ["Name", "Phone", "Company"]);
+    assert.deepEqual(parsed.rows, [["Doe, Jane", "+1 415 555 0100", "Acme; Europe"]]);
+  });
+
   it("neutralizes spreadsheet formulas in exported CSV cells", () => {
     assert.equal(
       __testing.csvCell('=HYPERLINK("https://example.test")'),
