@@ -40,6 +40,12 @@ export default tseslint.config(
     }
   },
   {
+    rules: {
+      "no-useless-assignment": "off",
+      "preserve-caught-error": "off"
+    }
+  },
+  {
     files: ["**/*.mjs", "**/*.js"],
     languageOptions: {
       globals: globals.node
