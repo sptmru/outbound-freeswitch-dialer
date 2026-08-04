@@ -820,6 +820,17 @@ export interface EndCallRequest {
   campaignId?: string;
 }
 
+export interface UpdateCallStatusRequest {
+  outcome: CallOutcome;
+}
+
+export interface ManualCallStatusResponse {
+  callId: string;
+  state: Extract<CallState, "completed" | "failed" | "canceled">;
+  outcome: CallOutcome;
+  manualStatusLockedAt: string;
+}
+
 export interface DropVoicemailRequest {
   campaignId?: string;
   recordingId?: string;

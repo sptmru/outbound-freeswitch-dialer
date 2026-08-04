@@ -2052,6 +2052,25 @@
     "properties": { "campaignId": { "type": "string" } },
     "additionalProperties": false
   },
+  "UpdateCallStatusRequest": {
+    "$id": "UpdateCallStatusRequest",
+    "type": "object",
+    "properties": { "outcome": { "$ref": "CallOutcome#" } },
+    "required": ["outcome"],
+    "additionalProperties": false
+  },
+  "ManualCallStatusResponse": {
+    "$id": "ManualCallStatusResponse",
+    "type": "object",
+    "properties": {
+      "callId": { "type": "string" },
+      "state": { "type": "string", "enum": ["completed", "failed", "canceled"] },
+      "outcome": { "$ref": "CallOutcome#" },
+      "manualStatusLockedAt": { "type": "string" }
+    },
+    "required": ["callId", "state", "outcome", "manualStatusLockedAt"],
+    "additionalProperties": false
+  },
   "DropVoicemailRequest": {
     "$id": "DropVoicemailRequest",
     "type": "object",

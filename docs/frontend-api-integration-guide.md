@@ -437,8 +437,9 @@ Do not mark a call answered because SIP registration succeeded, the browser acce
 - End: `POST /api/agent/calls/:callId/end`
 - DTMF: `POST /api/agent/calls/:callId/dtmf`
 - Voicemail drop: `POST /api/agent/calls/:callId/drop-voicemail`
+- Final status override: `PUT /api/agent/calls/:callId/status`
 
-All return a refreshed `AgentDeskResponse`.
+The first three call-control endpoints return a refreshed `AgentDeskResponse`. The final status override returns `ManualCallStatusResponse`.
 
 Render `activeCall.actions.dropVoicemail` and `activeCall.actions.sendDtmf` directly:
 
@@ -454,6 +455,16 @@ Do not reproduce the eligibility rules in the frontend. Disable the control when
 Allow only one call-control mutation at a time. Repeated `Hang up`, `DTMF`, or `Drop voicemail` requests can race real telephony events.
 
 DTMF accepts one supported digit per request. Consult the OpenAPI schema for the exact allowed values.
+
+After a call has ended, its authenticated owner may correct the terminal result once:
+
+```json
+{
+  "outcome": "answered"
+}
+```
+
+The endpoint rejects active calls. Repeating the same `PUT` is idempotent, but a different later outcome returns `409`: the first manually set result is permanently locked against subsequent API calls and late or replayed FreeSWITCH events.
 
 ### 7.6 Voicemail drop
 
@@ -633,6 +644,7 @@ Frontend rules:
 - Keep `callId` in support-visible diagnostics.
 - A missing `activeCall` after a mutation or refresh normally means the interactive call is terminal or the agent has been released; check `recentCalls` and `voicemailJobs`.
 - Never overwrite a newer snapshot with an older request response. Use request sequence numbers or cancellation.
+- If `/agent/calls/:callId/status` was used, treat the returned `outcome` as final; a manual status lock cannot be replaced.
 
 ## 10. Administrator Interface
 

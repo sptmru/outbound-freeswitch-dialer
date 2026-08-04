@@ -46,6 +46,7 @@ This document is the current product and operational contract. Items described a
 - Agent-initiated calls play browser-local ringback immediately while the internal WebRTC leg is still connecting. The browser tone stops on the first real remote audio, call-start failure, hangup, or softphone teardown; provider early media and the FreeSWITCH RTP-driven fallback remain authoritative after media begins.
 - Store calls, legs, state-changing events, UUIDs, commands, hangup causes, and automatic outcomes required for diagnosis.
 - Present call lifecycle status with the product vocabulary `Calling`, `Ringing`, `Answered`, `In progress`, `Failed`, `No answer`, `Cancelled`, `Completed`, and `Completed (voicemail dropped)`; keep technical states and outcomes internal.
+- An authenticated agent may correct the terminal outcome of an owned ended call through the API. The first manual correction is immutable: later API requests and late or replayed FreeSWITCH events must not replace its state or outcome.
 - Allow DTMF only when the backend reports the action eligible.
 - Persist subscribed ESL events in arrival order through a bounded queue. Retry transient database failures with backoff; if the queue fills, disconnect/reconnect the listener and raise an observable overflow rather than silently discarding backlog.
 - Reconcile unfinished database calls with FreeSWITCH `uuid_exists` after ESL subscription/reconnect and periodically. Missing calls are closed, orphaned agent legs are released when possible, and active voicemail playback is recovered or finalized.

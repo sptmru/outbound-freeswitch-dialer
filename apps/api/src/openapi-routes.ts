@@ -690,6 +690,18 @@ add(
   }
 );
 add(
+  "PUT",
+  "/agent/calls/:callId/status",
+  "Set final call status",
+  "Sets the terminal outcome of an owned ended call. The first manual status is immutable and cannot be replaced by later API or FreeSWITCH updates.",
+  {
+    params: callParams,
+    body: ref("UpdateCallStatusRequest"),
+    success: ref("ManualCallStatusResponse"),
+    errors: [...agentErrors, 404, 409]
+  }
+);
+add(
   "POST",
   "/agent/calls/:callId/drop-voicemail",
   "Drop voicemail",

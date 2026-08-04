@@ -12,7 +12,7 @@
 - FreeSWITCH playback completion proves the local application flow, not that the far-end mailbox stored the entire message. Representative carrier/device testing is required.
 - Provider routing, caller ID, codecs/DTMF, throughput, hangup mapping, WSS/NAT behavior, and external audio have not been accepted until evidenced in the target environment.
 - The default retry policy is three attempts with a 15-minute delay. It is a technical default, not approval of calling windows, jurisdictional limits, or outcome-specific retry rules.
-- Automatic outcomes are backend-derived. There is no mandatory agent-selected disposition/override workflow in this version.
+- Outcomes are backend-derived unless the authenticated call owner explicitly uses the one-time API status override after the call ends. There is no mandatory agent-selected disposition workflow in this version.
 - CSV import intentionally accepts only `name` and `phone`; arbitrary field mapping and additional lead attributes are deferred.
 - Campaign status supports archive but not a separate automatic `completed` state. Archiving is an administrator action.
 - Voicemail assets are global with one default; there are no per-campaign/per-agent recording libraries.

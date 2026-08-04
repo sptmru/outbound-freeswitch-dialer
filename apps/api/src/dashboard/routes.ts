@@ -6,56 +6,59 @@ import { randomUUID } from "node:crypto";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type pg from "pg";
-import type {
-  AdminCampaignListResponse,
-  AdminAnalyticsResponse,
-  AdminOverviewResponse,
-  AdminAuditResponse,
-  AdminLiveCallsResponse,
-  AdminRecordingListResponse,
-  AdminUserListResponse,
-  AgentDeskResponse,
-  CallDetailResponse,
-  CallAvmdReview,
-  CallHistoryResponse,
-  CampaignContactListItem,
-  CampaignContactsResponse,
-  CreateCampaignRequest,
-  CreateContactRequest,
-  CreateRecordingResponse,
-  CreateSuppressionRequest,
-  CsvImportDetailResponse,
-  CsvImportFailure,
-  CsvImportHistoryResponse,
-  DeleteResponse,
-  DropVoicemailRequest,
-  EndCallRequest,
-  FreeSwitchDiagnosticsResponse,
-  FreeSwitchSafeTestResponse,
-  FreeSwitchTrunkStatus,
-  ImportCsvRequest,
-  ImportCsvResponse,
-  LeadSummary,
-  ManualDialValidationResponse,
-  MutationResponse,
-  MediaTicketResponse,
-  PublicUser,
-  RetentionRunResponse,
-  ResetCampaignLeadsResponse,
-  SendDtmfRequest,
-  SoftphoneProvisioningResponse,
-  SupervisorSession,
-  SuppressionImportResponse,
-  SuppressionListResponse,
-  StartLeadCallRequest,
-  StartNextCallRequest,
-  StartManualCallRequest,
-  SuppressContactRequest,
-  UpdateAgentAvailabilityRequest,
-  UpdateSupervisorSessionRequest,
-  UpdateCampaignRequest,
-  UpsertCallAvmdReviewRequest,
-  AdminSystemSettings
+import {
+  callOutcomes,
+  type AdminAnalyticsResponse,
+  type AdminAuditResponse,
+  type AdminCampaignListResponse,
+  type AdminLiveCallsResponse,
+  type AdminOverviewResponse,
+  type AdminRecordingListResponse,
+  type AdminSystemSettings,
+  type AdminUserListResponse,
+  type AgentDeskResponse,
+  type CallAvmdReview,
+  type CallDetailResponse,
+  type CallHistoryResponse,
+  type CampaignContactListItem,
+  type CampaignContactsResponse,
+  type CreateCampaignRequest,
+  type CreateContactRequest,
+  type CreateRecordingResponse,
+  type CreateSuppressionRequest,
+  type CsvImportDetailResponse,
+  type CsvImportFailure,
+  type CsvImportHistoryResponse,
+  type DeleteResponse,
+  type DropVoicemailRequest,
+  type EndCallRequest,
+  type FreeSwitchDiagnosticsResponse,
+  type FreeSwitchSafeTestResponse,
+  type FreeSwitchTrunkStatus,
+  type ImportCsvRequest,
+  type ImportCsvResponse,
+  type LeadSummary,
+  type ManualCallStatusResponse,
+  type ManualDialValidationResponse,
+  type MediaTicketResponse,
+  type MutationResponse,
+  type PublicUser,
+  type ResetCampaignLeadsResponse,
+  type RetentionRunResponse,
+  type SendDtmfRequest,
+  type SoftphoneProvisioningResponse,
+  type StartLeadCallRequest,
+  type StartManualCallRequest,
+  type StartNextCallRequest,
+  type SupervisorSession,
+  type SuppressContactRequest,
+  type SuppressionImportResponse,
+  type SuppressionListResponse,
+  type UpdateAgentAvailabilityRequest,
+  type UpdateCallStatusRequest,
+  type UpdateCampaignRequest,
+  type UpdateSupervisorSessionRequest,
+  type UpsertCallAvmdReviewRequest
 } from "@outbound-dialer/shared";
 import { z } from "zod";
 import { requireUser } from "../auth/routes.js";
@@ -102,6 +105,7 @@ import {
 } from "./csv.js";
 import { createMediaTicket, verifyMediaTicket, type MediaResourceType } from "./media-tickets.js";
 import { validateDialableNumber } from "./manual-dial.js";
+import { setManualCallStatus } from "./manual-call-status.js";
 import { normalizePhoneNumber } from "./phone.js";
 import {
   createRecording,
@@ -163,6 +167,10 @@ const startLeadCallSchema = z.object({
 const endCallSchema = z.object({
   campaignId: z.string().uuid().optional()
 }) satisfies z.ZodType<EndCallRequest>;
+
+const updateCallStatusSchema = z.object({
+  outcome: z.enum(callOutcomes)
+}) satisfies z.ZodType<UpdateCallStatusRequest>;
 
 const dropVoicemailSchema = z.object({
   campaignId: z.string().uuid().optional(),
@@ -1059,6 +1067,32 @@ export function registerDashboardRoutes(
     }
 
     return buildAgentDeskResponse(pool, publicUser, input.campaignId, contactRetryPolicy);
+  });
+
+  app.put("/agent/calls/:callId/status", async (request, reply): Promise<ManualCallStatusResponse | void> => {
+    const user = await requireUser(request, config, pool);
+    if (!user) {
+      return reply.code(401).send({ message: "Unauthorized" });
+    }
+
+    const params = z.object({ callId: z.string().uuid() }).parse(request.params);
+    const input = updateCallStatusSchema.parse(request.body);
+    const result = await setManualCallStatus(pool, {
+      callId: params.callId,
+      outcome: input.outcome,
+      userId: user.id
+    });
+    if (result.status === "missing") {
+      return reply.code(404).send({ message: "Call not found" });
+    }
+    if (result.status === "active") {
+      return reply.code(409).send({ message: "The call must end before its status can be set manually" });
+    }
+    if (result.status === "locked") {
+      return reply.code(409).send({ message: "The manually set call status is locked" });
+    }
+    if ("response" in result) return result.response;
+    throw new Error(`Unexpected manual call status result: ${result.status}`);
   });
 
   app.post(
