@@ -186,13 +186,15 @@ The event record is the source of lifecycle evidence. A local completion event s
 3. The audio endpoint accepts either the admin session or the matching ticket, verifies the active user and scope, and streams the file.
 4. Valid single byte ranges return partial content for seeking. Invalid/missing/empty files do not return misleading success.
 
+Campaign bulk export uses a separate admin-only GET. The API verifies the campaign before sending headers, selects only `available` rows from that exact campaign, and accepts a file only when its database path exactly matches `CALL_RECORDINGS_STORAGE_DIR/<callId>.wav` and `lstat` reports a non-empty regular file. It then streams a store-mode ZIP with UUID-named WAV entries and a spreadsheet-safe manifest. Preflight skips are listed without raw paths; a retention unlink race aborts the stream rather than producing a misleading partial archive. The export start is written to the admin audit log with campaign and included/skipped counts.
+
 ## Campaign, User, Suppression, And Audit Model
 
 - Campaigns use `draft`, `active`, `paused`, and `archived`; only active campaigns are callable.
 - Contacts retain attempt count/time and move among new/calling/completed/suppressed states according to lifecycle.
 - Users are deactivated, not physically deleted, so historical call/audit attribution remains available. Deactivation revokes sessions and agent registration material.
 - Suppression entries store the current block; `suppression_events` preserve create/update/import/remove/blocked-manual-dial evidence.
-- A Fastify hook records every successful mutating `/admin/*` request in `admin_audit_events`. It stores identifiers and bounded string route parameters, not request bodies/secrets.
+- A Fastify hook records every successful mutating `/admin/*` request in `admin_audit_events`. The sensitive campaign-recording bulk GET writes its own export-start audit event. Audit records store identifiers and bounded metadata, not request bodies, phone numbers, storage paths, or secrets.
 - Supervisor start/mode/stop audit entries are enriched with a bounded action, call/session identifier, and selected mode. SIP credentials and media are not placed in audit metadata.
 
 ## Runtime Administration Settings

@@ -83,6 +83,7 @@ import {
   getCampaignsPage,
   resetCampaignLeads
 } from "./campaigns.js";
+import { openCampaignRecordingExport } from "./campaign-recording-export.js";
 import {
   createDialerCall,
   createDialerCallFailureMessage,
@@ -299,7 +300,7 @@ const adminAuditQuerySchema = z.object({
   page: z.coerce.number().int().positive().default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(25),
   actorId: z.string().uuid().optional(),
-  method: z.enum(["DELETE", "PATCH", "POST", "PUT"]).optional(),
+  method: z.enum(["DELETE", "GET", "PATCH", "POST", "PUT"]).optional(),
   dateFrom: z.string().datetime().optional(),
   dateTo: z.string().datetime().optional()
 });
@@ -544,6 +545,51 @@ export function registerDashboardRoutes(
     const query = adminLibraryQuerySchema.parse(request.query);
     return getCampaignsPage(pool, query, contactRetryPolicy);
   });
+
+  app.get(
+    "/admin/campaigns/:campaignId/recordings.zip",
+    async (request, reply): Promise<FastifyReply | void> => {
+      const user = await requireAdmin(request, reply, config, pool);
+      if (!user) {
+        return;
+      }
+      const params = campaignParamsSchema.parse(request.params);
+      const exported = await openCampaignRecordingExport(
+        pool,
+        params.campaignId,
+        config.CALL_RECORDINGS_STORAGE_DIR
+      );
+      if (exported.status === "campaign_not_found") {
+        return reply.code(404).send({ message: "Campaign not found" });
+      }
+      if (exported.status === "no_recordings") {
+        return reply.code(404).send({ message: "No playable call recordings found for this campaign" });
+      }
+
+      try {
+        await recordCampaignRecordingExportAudit(pool, request, user.id, {
+          campaignId: params.campaignId,
+          includedCount: exported.includedCount,
+          skippedCount: exported.skippedCount
+        });
+      } catch (error) {
+        exported.abort();
+        throw error;
+      }
+      const abortExport = () => exported.abort();
+      request.raw.once("aborted", abortExport);
+      reply.raw.once("close", () => {
+        if (!reply.raw.writableEnded) abortExport();
+      });
+      return reply
+        .header("Content-Type", "application/zip")
+        .header("Cache-Control", "private, no-store")
+        .header("X-Recording-Count", exported.includedCount)
+        .header("X-Recording-Skipped-Count", exported.skippedCount)
+        .header("Content-Disposition", `attachment; filename="${exported.filename}"`)
+        .send(exported.stream);
+    }
+  );
 
   app.get("/admin/recordings", async (request, reply): Promise<AdminRecordingListResponse | void> => {
     const user = await requireAdmin(request, reply, config, pool);
@@ -1814,6 +1860,36 @@ export function registerDashboardRoutes(
     }
     return { ok: true };
   });
+}
+
+async function recordCampaignRecordingExportAudit(
+  pool: pg.Pool,
+  request: FastifyRequest,
+  actorUserId: string,
+  details: { campaignId: string; includedCount: number; skippedCount: number }
+): Promise<void> {
+  await pool.query(
+    `
+      insert into admin_audit_events (
+        actor_user_id,
+        request_id,
+        method,
+        route,
+        status_code,
+        source_ip,
+        user_agent,
+        metadata_json
+      )
+      values ($1, $2, 'GET', '/admin/campaigns/:campaignId/recordings.zip', 200, $3, $4, $5::jsonb)
+    `,
+    [
+      actorUserId,
+      request.id,
+      request.ip,
+      request.headers["user-agent"] ?? null,
+      JSON.stringify({ action: "campaign_recordings_export_started", ...details })
+    ]
+  );
 }
 
 async function requireAdmin(

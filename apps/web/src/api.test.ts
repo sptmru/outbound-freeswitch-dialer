@@ -9,6 +9,7 @@ import {
   fetchCsvImportDetail,
   fetchCsvImports,
   fetchMe,
+  getCampaignRecordingsExportUrl,
   logout,
   resetCampaignLeads,
   subscribeAgentEvents,
@@ -75,6 +76,12 @@ describe("cookie-authenticated API client", () => {
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/admin/campaigns/campaign-1/reset-leads",
       expect.objectContaining({ credentials: "include", method: "POST" })
+    );
+  });
+
+  it("builds a direct cookie-authenticated campaign recording export URL", () => {
+    expect(getCampaignRecordingsExportUrl("campaign/id")).toBe(
+      "/api/admin/campaigns/campaign%2Fid/recordings.zip"
     );
   });
 

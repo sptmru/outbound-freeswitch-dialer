@@ -136,6 +136,10 @@ test("documents every registered API route with request and response contracts",
   const upload = document.paths["/admin/recordings"].post;
   assert.equal(upload.requestBody.content["multipart/form-data"].schema.properties.file.format, "binary");
 
+  const campaignRecordingExport = document.paths["/admin/campaigns/{campaignId}/recordings.zip"].get;
+  assert.equal(campaignRecordingExport.parameters[0].schema.format, "uuid");
+  assert.equal(campaignRecordingExport.responses[200].content["application/zip"].schema.format, "binary");
+
   assert.ok(document.components.schemas.CallDetailResponse.properties.timeline);
   assert.ok(document.components.schemas.AgentDeskResponse.properties.activeCall);
   assert.ok(document.components.schemas.ErrorResponse.properties.message);

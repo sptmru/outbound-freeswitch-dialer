@@ -314,6 +314,18 @@ add("GET", "/admin/campaigns", "List campaigns", "Returns a searchable, paginate
 });
 add(
   "GET",
+  "/admin/campaigns/:campaignId/recordings.zip",
+  "Export campaign call recordings",
+  "Streams a ZIP containing every playable call recording in the campaign plus a spreadsheet-safe manifest. Missing, empty, non-canonical, and non-regular files are excluded and counted; the export is audited.",
+  {
+    params: campaignParams,
+    success: binaryResponse,
+    produces: ["application/zip"],
+    errors: [...adminErrors, 404]
+  }
+);
+add(
+  "GET",
   "/admin/recordings",
   "List voicemail recordings",
   "Returns a searchable, paginated voicemail recording library.",
@@ -540,7 +552,11 @@ add(
       {
         ...pagination(25),
         actorId: optionalUuid("Actor user identifier"),
-        method: { type: "string", enum: ["DELETE", "PATCH", "POST", "PUT"], description: "HTTP method" },
+        method: {
+          type: "string",
+          enum: ["DELETE", "GET", "PATCH", "POST", "PUT"],
+          description: "HTTP method"
+        },
         dateFrom: dateTime("Inclusive creation-time lower bound"),
         dateTo: dateTime("Inclusive creation-time upper bound")
       },

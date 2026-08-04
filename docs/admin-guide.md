@@ -23,6 +23,7 @@
 
 - Create a campaign in `draft`, review its contact data and policy, then activate it. Use `paused` to stop new calls temporarily and `archived` to preserve closed campaign history.
 - Configure manual dialing, call recording, and early-media AVMD per campaign. These controls do not replace legal/provider approval.
+- Use **Download recordings** on a campaign to stream its playable call recordings as a ZIP. WAV entries are named by call UUID; `manifest.csv` maps each UUID to call time, resolved lead name, destination, outcome, and whether the row was included or skipped. Missing, empty, non-regular, and non-canonical files are never packaged. A campaign with no playable files returns a not-found response instead of an empty archive. Starting an export is recorded in Admin audit without phone numbers, filenames, or storage paths.
 - Import comma- or semicolon-separated CSV with the intentionally narrow required `name` and `phone` columns; the delimiter is detected automatically. Review accepted/rejected/duplicate counts and page through every rejected row before activation.
 - Search/filter the paginated contact list and verify that completed, suppressed, currently calling, exhausted, or retry-delay contacts are not offered as callable. Opening Contacts follows the campaign selected on Agent Desk.
 - Defaults are three committed attempts and a 15-minute retry delay. Change `CONTACT_MAX_ATTEMPTS`/`CONTACT_RETRY_DELAY_SECONDS` only after the operating policy is approved.
@@ -50,7 +51,7 @@
 
 ## History And Audit
 
-- Filter call history by search text, campaign, agent, outcome, date, voicemail drop/signal, and recording availability.
+- Filter call history by search text, campaign, agent, outcome, date, voicemail drop/signal, and recording availability. Manual calls reuse a known lead name when their normalized number matches an existing named lead; otherwise they appear as **Manual dial**.
 - Open call detail for leg UUIDs, state events, commands, hangup causes, AVMD/voicemail lifecycle, and media availability. Technical history shows the latest 100 events and explicitly reports when older events were omitted.
 - For an answered call with a playable recording, use **AVMD review** to label what actually answered as Human, Voicemail / machine, or Uncertain. Listen before labeling; the detector result alone is not ground truth. Analytics always shows reviewed-sample coverage next to precision/recall.
 - Technical media cards report FreeSWITCH RTP counters captured at hangup separately for the agent and customer legs. Browser WebRTC evidence is shown separately and includes packet loss, concealed samples, maximum jitter/RTT, average playout jitter-buffer delay, ICE candidate path, codecs, and applied microphone DSP. A suspected one-way flag is diagnostic evidence, not confirmation of what either party heard.

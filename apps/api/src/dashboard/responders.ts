@@ -609,7 +609,7 @@ export async function getCallHistoryPage(
     `
     select
       calls.id,
-      contacts.display_name as lead_name,
+      resolved_contact.display_name as lead_name,
       users.name as agent_name,
       calls.destination_number as phone_number,
       campaigns.name as campaign_name,
@@ -632,7 +632,18 @@ export async function getCallHistoryPage(
       ${filters.includeTotal === false ? "null::bigint" : "count(*) over()"} as total_count,
       extract(epoch from (coalesce(calls.ended_at, now()) - coalesce(calls.answered_at, calls.started_at, calls.created_at)))::int as duration_seconds
     from calls
-    left join contacts on contacts.id = calls.contact_id
+    left join lateral (
+      select matched_contacts.display_name
+      from contacts matched_contacts
+      where matched_contacts.normalized_phone_number = calls.normalized_destination_number
+        and nullif(btrim(matched_contacts.display_name), '') is not null
+      order by
+        coalesce(matched_contacts.id = calls.contact_id, false) desc,
+        coalesce(matched_contacts.campaign_id = calls.campaign_id, false) desc,
+        matched_contacts.created_at desc,
+        matched_contacts.id desc
+      limit 1
+    ) resolved_contact on true
     left join agents on agents.id = calls.agent_id
     left join users on users.id = agents.user_id
     left join campaigns on campaigns.id = calls.campaign_id
@@ -645,7 +656,7 @@ export async function getCallHistoryPage(
         and call_events.event_type = 'voicemail_detection_started'
       limit 1
     ) avmd on true
-    where ($1::text is null or concat_ws(' ', contacts.display_name, calls.destination_number, users.name, campaigns.name) ilike '%' || $1 || '%')
+    where ($1::text is null or concat_ws(' ', resolved_contact.display_name, calls.destination_number, users.name, campaigns.name) ilike '%' || $1 || '%')
       and ($2::uuid is null or calls.campaign_id = $2)
       and ($3::uuid is null or users.id = $3)
       and ($4::text is null or calls.outcome = $4)
@@ -780,7 +791,7 @@ export async function getCallDetail(pool: pg.Pool, callId: string): Promise<Call
     `
       select
         calls.id,
-        contacts.display_name as lead_name,
+        resolved_contact.display_name as lead_name,
         users.name as agent_name,
         calls.destination_number as phone_number,
         campaigns.name as campaign_name,
@@ -820,7 +831,18 @@ export async function getCallDetail(pool: pg.Pool, callId: string): Promise<Call
         voicemail.confidence as voicemail_confidence,
         extract(epoch from (coalesce(calls.ended_at, now()) - coalesce(calls.answered_at, calls.started_at, calls.created_at)))::int as duration_seconds
       from calls
-      left join contacts on contacts.id = calls.contact_id
+      left join lateral (
+        select matched_contacts.display_name
+        from contacts matched_contacts
+        where matched_contacts.normalized_phone_number = calls.normalized_destination_number
+          and nullif(btrim(matched_contacts.display_name), '') is not null
+        order by
+          coalesce(matched_contacts.id = calls.contact_id, false) desc,
+          coalesce(matched_contacts.campaign_id = calls.campaign_id, false) desc,
+          matched_contacts.created_at desc,
+          matched_contacts.id desc
+        limit 1
+      ) resolved_contact on true
       left join agents on agents.id = calls.agent_id
       left join users on users.id = agents.user_id
       left join campaigns on campaigns.id = calls.campaign_id

@@ -19,7 +19,7 @@ function historyDateBoundary(value: string, endOfDay: boolean): string | undefin
 export function AdminAuditPanel({ users }: { users: PublicUser[] }) {
   const [page, setPage] = useState(1);
   const [actorId, setActorId] = useState("");
-  const [method, setMethod] = useState<"" | "DELETE" | "PATCH" | "POST" | "PUT">("");
+  const [method, setMethod] = useState<"" | "DELETE" | "GET" | "PATCH" | "POST" | "PUT">("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [audit, setAudit] = useState<AdminAuditResponse>({ page: 1, pageSize: 25, total: 0, items: [] });
@@ -84,8 +84,8 @@ export function AdminAuditPanel({ users }: { users: PublicUser[] }) {
               setPage(1);
             }}
           >
-            <option value="">All changes</option>
-            {["POST", "PATCH", "PUT", "DELETE"].map((item) => (
+            <option value="">All activity</option>
+            {["GET", "POST", "PATCH", "PUT", "DELETE"].map((item) => (
               <option key={item} value={item}>
                 {item}
               </option>
@@ -134,7 +134,7 @@ export function AdminAuditPanel({ users }: { users: PublicUser[] }) {
             <StatusBadge label={String(item.statusCode)} tone="neutral" />
           </div>
         ))}
-        {!audit.items.length && !pending && <div className="empty-row">No admin changes match</div>}
+        {!audit.items.length && !pending && <div className="empty-row">No admin activity matches</div>}
       </div>
       <div className="pagination-controls">
         <button

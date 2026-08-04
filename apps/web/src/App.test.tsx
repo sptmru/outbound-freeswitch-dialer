@@ -1786,6 +1786,13 @@ describe("App Agent Desk empty states", () => {
 
     render(<App />);
     fireEvent.click(await screen.findByRole("button", { name: "Campaigns" }));
+    const recordingExport = await screen.findByRole("link", { name: "Download recordings" });
+    expect(recordingExport).toHaveAttribute(
+      "href",
+      "/api/admin/campaigns/11111111-1111-4111-8111-111111111111/recordings.zip"
+    );
+    expect(recordingExport).toHaveAttribute("target", "_blank");
+    expect(recordingExport).not.toHaveAttribute("download");
     fireEvent.click(await screen.findByTitle("Edit campaign"));
     fireEvent.click(screen.getByRole("button", { name: "Reset Leads" }));
 

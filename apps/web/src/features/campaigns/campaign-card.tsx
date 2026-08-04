@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import {
   CheckCircle2,
+  Download,
   History,
   Pencil,
   PhoneCall,
@@ -11,7 +12,7 @@ import {
   Users,
   XCircle
 } from "lucide-react";
-import { resetCampaignLeads, updateCampaign } from "../../api";
+import { getCampaignRecordingsExportUrl, resetCampaignLeads, updateCampaign } from "../../api";
 import { Metric, StatusBadge } from "../../components/ui-primitives";
 import type { AdminOverviewResponse } from "../../types";
 
@@ -227,6 +228,15 @@ export function CampaignCard({
         <Metric label="Callable" value={campaign.callable} icon={PhoneCall} />
         <Metric label="Attempted" value={campaign.attempted} icon={History} />
       </div>
+      <a
+        className="secondary-action compact-action campaign-recordings-export"
+        href={getCampaignRecordingsExportUrl(campaign.id)}
+        rel="noreferrer"
+        target="_blank"
+      >
+        <Download size={16} />
+        Download recordings
+      </a>
       {campaign.outcomeDistribution.length > 0 && (
         <div className="kpi-outcomes campaign-outcomes" aria-label="Campaign outcome breakdown">
           {campaign.outcomeDistribution.map((item) => (

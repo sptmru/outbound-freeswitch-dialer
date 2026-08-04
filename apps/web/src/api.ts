@@ -241,7 +241,7 @@ export async function fetchAdminAudit(
     page?: number;
     pageSize?: number;
     actorId?: string;
-    method?: "DELETE" | "PATCH" | "POST" | "PUT";
+    method?: "DELETE" | "GET" | "PATCH" | "POST" | "PUT";
     dateFrom?: string;
     dateTo?: string;
   } = {}
@@ -505,6 +505,10 @@ export async function resetCampaignLeads(campaignId: string): Promise<ResetCampa
   return apiFetch<ResetCampaignLeadsResponse>(`/admin/campaigns/${campaignId}/reset-leads`, {
     method: "POST"
   });
+}
+
+export function getCampaignRecordingsExportUrl(campaignId: string): string {
+  return `${API_BASE_URL}/admin/campaigns/${encodeURIComponent(campaignId)}/recordings.zip`;
 }
 
 export async function uploadRecording(input: {

@@ -91,13 +91,14 @@ This document is the current product and operational contract. Items described a
 - Call recording remains campaign-controlled and is started on the customer leg through FreeSWITCH.
 - Media playback supports single byte ranges for browser seeking.
 - Browser media access uses short-lived opaque tickets scoped to one user, resource type, resource ID, and route. Only ticket hashes are stored in PostgreSQL.
+- Admins can download a campaign-scoped streaming ZIP of playable call recordings. UUID-named WAV entries are accompanied by a spreadsheet-safe manifest with call context and explicit reasons for rows skipped because a file is missing, empty, non-regular, or outside its canonical path. Empty exports return an explicit not-found response, and export starts are audited without phone numbers or storage paths.
 - Default ticket TTL is 60 seconds; renewal is bounded by `MEDIA_TICKET_MAX_LIFETIME_SECONDS`.
 - Recording storage, consent, legal hold, and deletion rules require client approval before production acceptance.
 
 ## Campaigns, Contacts, And Suppression
 
 - Campaign states are `draft`, `active`, `paused`, and `archived`.
-- Admins can create/edit campaigns, reset every campaign lead to new eligibility, and configure manual dialing, call recording, early-media AVMD, and automatic next-lead calling per campaign. Resetting leads clears attempt/cooldown state, preserves call history and global suppression entries, and is blocked while the campaign has an active call. Automatic next-lead calling is opt-in and runs only after the current call has reached a terminal state.
+- Admins can create/edit campaigns, reset every campaign lead to new eligibility, bulk-export playable campaign call recordings, and configure manual dialing, call recording, early-media AVMD, and automatic next-lead calling per campaign. Resetting leads clears attempt/cooldown state, preserves call history and global suppression entries, and is blocked while the campaign has an active call. Automatic next-lead calling is opt-in and runs only after the current call has reached a terminal state.
 - Archived campaigns preserve operational history and are not callable.
 - Contact import accepts comma- or semicolon-separated CSV, auto-detects the delimiter from the header row, requires mapped `name` and `phone` values, preserves additional CSV columns in the contact/import JSON fields, normalizes numbers, reports row errors, and avoids duplicates. Upload byte and row ceilings reject oversized work before database writes without imposing a column whitelist.
 - Campaign contacts and CSV row failures are paginated. Opening Contacts follows the campaign selected on Agent Desk, and every rejected CSV row remains reviewable instead of being silently limited to the first page.
@@ -124,7 +125,7 @@ This document is the current product and operational contract. Items described a
 - Admins can classify answered calls as human, machine, or uncertain from Call History. AVMD precision/recall and false-positive reporting use only persisted reviewer labels, expose their review coverage and confusion counts, and never present an unreviewed population as measured ground truth.
 - Reporting distinguishes technical answer rate (`answered_at` / attempts) from connected-contact rate. A connected contact has answer evidence and excludes calls classified as detected or dropped voicemail; it is an operational proxy, not independently verified human-contact ground truth.
 - Date-filtered call metrics and current contact-queue snapshots are labeled separately. Current callable/suppressed/exhausted counts must not be presented as historical values for the selected call period.
-- Admin call history is paginated and filterable by text, campaign, agent, outcome, date range, voicemail drop/signal, and recording availability.
+- Admin call history is paginated and filterable by text, campaign, agent, outcome, date range, voicemail drop/signal, and recording availability. Manual calls show a matching named lead when the normalized destination exists in any campaign; matches from the call's campaign take precedence, otherwise the most recently added named lead is used. Calls without a named match remain labeled **Manual dial**.
 - Call detail includes lifecycle events and technical identifiers needed for diagnosis. The technical timeline is bounded to the latest 100 events and reports the total and whether older events were omitted.
 - CSV export applies the same filters, refuses exports above `CALL_HISTORY_EXPORT_MAX_ROWS` (50,000 by default), and streams accepted rows in bounded pages.
 - Outcomes are derived from backend call events. Agents do not select a mandatory post-call disposition in this version.

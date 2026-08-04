@@ -266,6 +266,210 @@ describe("dashboard route helpers", () => {
     }
   });
 
+  it("requires an authenticated admin before inspecting a campaign recording export", async () => {
+    const app = Fastify();
+    let queryCount = 0;
+    const pool = createQueryPool(() => {
+      queryCount += 1;
+      return rows([]);
+    });
+    registerDashboardRoutes(app, { CALL_RECORDINGS_STORAGE_DIR: "/recordings" } as AppConfig, pool);
+
+    try {
+      const response = await app.inject({
+        method: "GET",
+        url: `/admin/campaigns/${selectedCampaignId}/recordings.zip`,
+        headers: { authorization: "Bearer invalid" }
+      });
+      assert.equal(response.statusCode, 401);
+      assert.equal(queryCount, 0);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("returns campaign 404 before querying recording paths", async () => {
+    const app = Fastify();
+    const queries: string[] = [];
+    const admin = userRow({ role: "admin" });
+    const routeConfig = {
+      CALL_RECORDINGS_STORAGE_DIR: "/recordings",
+      JWT_EXPIRES_SECONDS: 3_600,
+      JWT_SECRET: "campaign-recording-export-test-secret"
+    } as AppConfig;
+    const pool = createQueryPool((sql) => {
+      queries.push(sql);
+      if (sql.includes("from users")) {
+        return rows([
+          {
+            ...admin,
+            auth_version: 1,
+            is_active: true,
+            password_hash: "unused",
+            created_at: new Date(),
+            updated_at: new Date()
+          }
+        ]);
+      }
+      if (sql.includes("from campaigns")) return rows([]);
+      throw new Error(`Unexpected query: ${sql}`);
+    });
+    registerDashboardRoutes(app, routeConfig, pool);
+    const token = signAuthToken(routeConfig, {
+      sub: admin.id,
+      email: admin.email,
+      role: "admin",
+      ver: 1
+    });
+
+    try {
+      const response = await app.inject({
+        method: "GET",
+        url: `/admin/campaigns/${selectedCampaignId}/recordings.zip`,
+        headers: { authorization: `Bearer ${token}` }
+      });
+      assert.equal(response.statusCode, 404);
+      assert.deepEqual(response.json(), { message: "Campaign not found" });
+      assert.equal(
+        queries.some((sql) => sql.includes("from calls")),
+        false
+      );
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("returns 404 instead of an empty ZIP when a campaign has no playable recordings", async () => {
+    const app = Fastify();
+    const admin = userRow({ role: "admin" });
+    const routeConfig = {
+      CALL_RECORDINGS_STORAGE_DIR: "/recordings",
+      JWT_EXPIRES_SECONDS: 3_600,
+      JWT_SECRET: "campaign-recording-export-test-secret"
+    } as AppConfig;
+    const pool = createQueryPool((sql) => {
+      if (sql.includes("from users")) {
+        return rows([
+          {
+            ...admin,
+            auth_version: 1,
+            is_active: true,
+            password_hash: "unused",
+            created_at: new Date(),
+            updated_at: new Date()
+          }
+        ]);
+      }
+      if (sql.includes("from campaigns")) return rows([{ id: selectedCampaignId }]);
+      if (sql.includes("from calls")) return rows([]);
+      throw new Error(`Unexpected query: ${sql}`);
+    });
+    registerDashboardRoutes(app, routeConfig, pool);
+    const token = signAuthToken(routeConfig, {
+      sub: admin.id,
+      email: admin.email,
+      role: "admin",
+      ver: 1
+    });
+
+    try {
+      const response = await app.inject({
+        method: "GET",
+        url: `/admin/campaigns/${selectedCampaignId}/recordings.zip`,
+        headers: { authorization: `Bearer ${token}` }
+      });
+      assert.equal(response.statusCode, 404);
+      assert.deepEqual(response.json(), {
+        message: "No playable call recordings found for this campaign"
+      });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("streams a campaign ZIP and records a metadata-only admin audit event", async () => {
+    const storageDir = await mkdtemp(join(tmpdir(), "outbound-dialer-campaign-zip-"));
+    const callId = "44444444-4444-4444-8444-444444444444";
+    const filePath = join(storageDir, `${callId}.wav`);
+    await writeFile(filePath, Buffer.from("RIFF-campaign-recording"));
+    const app = Fastify();
+    const admin = userRow({ role: "admin" });
+    const auditParams: Array<readonly unknown[]> = [];
+    const routeConfig = {
+      CALL_RECORDINGS_STORAGE_DIR: storageDir,
+      JWT_EXPIRES_SECONDS: 3_600,
+      JWT_SECRET: "campaign-recording-export-test-secret"
+    } as AppConfig;
+    const pool = createQueryPool((sql, params) => {
+      if (sql.includes("from users")) {
+        return rows([
+          {
+            ...admin,
+            auth_version: 1,
+            is_active: true,
+            password_hash: "unused",
+            created_at: new Date(),
+            updated_at: new Date()
+          }
+        ]);
+      }
+      if (sql.includes("from campaigns")) return rows([{ id: selectedCampaignId }]);
+      if (sql.includes("from calls")) {
+        return rows([
+          {
+            id: callId,
+            call_recording_path: filePath,
+            created_at: new Date("2026-08-04T10:20:30.000Z"),
+            destination_number: "+14155550100",
+            lead_name: "Avery Johnson",
+            outcome: "answered"
+          }
+        ]);
+      }
+      if (sql.includes("insert into admin_audit_events")) {
+        auditParams.push(params);
+        return rows([]);
+      }
+      throw new Error(`Unexpected query: ${sql}`);
+    });
+    registerDashboardRoutes(app, routeConfig, pool);
+    const token = signAuthToken(routeConfig, {
+      sub: admin.id,
+      email: admin.email,
+      role: "admin",
+      ver: 1
+    });
+
+    try {
+      const response = await app.inject({
+        method: "GET",
+        url: `/admin/campaigns/${selectedCampaignId}/recordings.zip`,
+        headers: { authorization: `Bearer ${token}`, "user-agent": "route-test" }
+      });
+      assert.equal(response.statusCode, 200, response.body);
+      assert.equal(response.headers["content-type"], "application/zip");
+      assert.equal(response.headers["x-recording-count"], "1");
+      assert.equal(response.headers["x-recording-skipped-count"], "0");
+      assert.equal(
+        response.headers["content-disposition"],
+        `attachment; filename="campaign-${selectedCampaignId}-recordings.zip"`
+      );
+      assert.equal(response.rawPayload.subarray(0, 4).toString("hex"), "504b0304");
+      assert.equal(auditParams.length, 1);
+      assert.equal(auditParams[0]?.[0], admin.id);
+      assert.equal(auditParams[0]?.[3], "route-test");
+      const metadata = String(auditParams[0]?.[4]);
+      assert.match(metadata, /campaign_recordings_export_started/);
+      assert.match(metadata, new RegExp(selectedCampaignId));
+      assert.match(metadata, /"includedCount":1/);
+      assert.match(metadata, /"skippedCount":0/);
+      assert.doesNotMatch(metadata, /14155550100|Avery|\.wav|recordings\//);
+    } finally {
+      await app.close();
+      await rm(storageDir, { force: true, recursive: true });
+    }
+  });
+
   it("parses quoted CSV fields and escaped quotes", () => {
     const parsed = parseCsv('Name,Phone,Company\n"Doe, Jane","+1 415 555 0100","Acme ""Labs"""');
 

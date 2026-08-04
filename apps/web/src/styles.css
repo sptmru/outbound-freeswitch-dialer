@@ -1197,6 +1197,11 @@ input[type="checkbox"] {
   margin-top: 12px;
 }
 
+.campaign-recordings-export {
+  margin-top: 12px;
+  text-decoration: none;
+}
+
 .campaign-edit-form {
   display: grid;
   gap: 10px;
