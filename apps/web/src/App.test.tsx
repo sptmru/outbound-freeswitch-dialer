@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App, formatCallLifecycleStatus } from "./App";
@@ -160,6 +160,7 @@ const supervisorSoftphoneRuntime = {
 
 describe("App Agent Desk empty states", () => {
   afterEach(() => {
+    cleanup();
     vi.restoreAllMocks();
   });
 
