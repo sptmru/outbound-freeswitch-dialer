@@ -1400,6 +1400,7 @@ button.table-row {
 
 .outcome-answered,
 .outcome-customer_hung_up,
+.outcome-voicemail_detected,
 .outcome-voicemail_dropped {
   background: #dff7ed;
   color: #08775b !important;
