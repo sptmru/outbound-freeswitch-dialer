@@ -1510,7 +1510,16 @@ describe("App Agent Desk empty states", () => {
 
     await waitFor(() => {
       expect(apiMocks.endCall).toHaveBeenCalledWith("33333333-3333-4333-8333-333333333333", {
-        campaignId: "11111111-1111-4111-8111-111111111111"
+        campaignId: "11111111-1111-4111-8111-111111111111",
+        clientContext: {
+          initiator: "agent_desk_hangup_button",
+          browserEventTrusted: false,
+          clientTimestamp: expect.any(String),
+          pagePath: expect.any(String),
+          visibilityState: "visible",
+          activeCallStatus: "bridged",
+          softphoneCallState: "none"
+        }
       });
     });
   });
@@ -1906,6 +1915,43 @@ describe("App Agent Desk empty states", () => {
           apiCommandName: null,
           agentLegUuid: null,
           customerLegUuid: null
+        },
+        {
+          at: call.createdAt,
+          eventType: "call_ended",
+          state: "completed",
+          label: "Call Ended",
+          reasonCode: null,
+          freeSwitchEventName: null,
+          apiCommandName: null,
+          agentLegUuid: null,
+          customerLegUuid: null,
+          callEndRequest: {
+            actorUserId: "22222222-2222-4222-8222-222222222222",
+            actorName: "Alex Agent",
+            actorRole: "agent",
+            requestId: "req-hangup-1",
+            receivedAt: call.createdAt,
+            sourceIp: "203.0.113.8",
+            authTransport: "cookie",
+            userAgent: "Test Browser",
+            origin: "https://dialer.example.com",
+            referrer: "https://dialer.example.com/agent",
+            secFetchSite: "same-origin",
+            secFetchMode: "cors",
+            secFetchDest: "empty",
+            selectedCampaignId: call.campaignId,
+            previousCallState: "bridged",
+            clientContext: {
+              initiator: "agent_desk_hangup_button",
+              browserEventTrusted: true,
+              clientTimestamp: call.createdAt,
+              pagePath: "/agent?view=desk",
+              visibilityState: "visible",
+              activeCallStatus: "bridged",
+              softphoneCallState: "active"
+            }
+          }
         }
       ],
       timelineTotal: 125,
@@ -1946,9 +1992,14 @@ describe("App Agent Desk empty states", () => {
     expect(await screen.findByText("AVMD review saved")).toBeInTheDocument();
     expect(player).toHaveAttribute("src", "/api/media/ticketed-recording");
     expect(screen.queryByText("Customer connected")).not.toBeInTheDocument();
+    expect(screen.queryByText("Agent Desk Hang up request")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Show technical details" }));
     expect(await screen.findByText("Customer connected")).toBeInTheDocument();
-    expect(screen.getByText("Showing the latest 1 of 125 recorded events.")).toBeInTheDocument();
+    expect(screen.getByText("Agent Desk Hang up request")).toBeInTheDocument();
+    expect(screen.getByText("Browser marked the Hang up click as trusted")).toBeInTheDocument();
+    expect(screen.getByText(/req-hangup-1 · cookie/)).toBeInTheDocument();
+    expect(screen.getByText(/call bridged · softphone active · tab visible/)).toBeInTheDocument();
+    expect(screen.getByText("Showing the latest 2 of 125 recorded events.")).toBeInTheDocument();
     expect(screen.getByText("Terminal persistence")).toBeInTheDocument();
     expect(screen.getByText("primary-trunk")).toBeInTheDocument();
     expect(screen.getByText("external")).toBeInTheDocument();

@@ -5,10 +5,11 @@ import { join } from "node:path";
 import { describe, it } from "node:test";
 import type { PublicUser } from "@outbound-dialer/shared";
 import multipart from "@fastify/multipart";
-import Fastify from "fastify";
+import Fastify, { type FastifyRequest } from "fastify";
 import type pg from "pg";
 import type { AppConfig } from "../config.js";
 import { signAuthToken } from "../auth/tokens.js";
+import { SESSION_COOKIE_NAME } from "../security.js";
 import { getAgentCampaign, getAgentCampaignForDialerAction } from "./campaigns.js";
 import {
   createDialerCall,
@@ -35,6 +36,44 @@ describe("dashboard route helpers", () => {
 
     assert.equal(calculateActiveCallDuration(startedAt, new Date("2026-07-21T08:00:12.900Z").getTime()), 12);
     assert.equal(calculateActiveCallDuration(null), 0);
+  });
+
+  it("captures safe server and browser evidence for an Agent Desk call-end request", () => {
+    const request = {
+      id: "req-hangup-1",
+      ip: "203.0.113.8",
+      cookies: { [SESSION_COOKIE_NAME]: "secret-session-token" },
+      headers: {
+        cookie: `${SESSION_COOKIE_NAME}=secret-session-token`,
+        "user-agent": "Test Browser",
+        origin: "https://dialer.example.com",
+        referer: "https://dialer.example.com/agent",
+        "sec-fetch-site": "same-origin",
+        "sec-fetch-mode": "cors",
+        "sec-fetch-dest": "empty"
+      }
+    } as unknown as FastifyRequest;
+
+    const context = __testing.buildCallEndRequestContext(request, userRow(), {
+      campaignId: selectedCampaignId,
+      clientContext: {
+        initiator: "agent_desk_hangup_button",
+        browserEventTrusted: true,
+        clientTimestamp: "2026-08-07T08:00:00.000Z",
+        pagePath: "/agent?view=desk",
+        visibilityState: "visible",
+        activeCallStatus: "ringing",
+        softphoneCallState: "active"
+      }
+    });
+
+    assert.equal(context.actorUserId, userRow().id);
+    assert.equal(context.authTransport, "cookie");
+    assert.equal(context.sourceIp, "203.0.113.8");
+    assert.equal(context.userAgent, "Test Browser");
+    assert.equal(context.secFetchSite, "same-origin");
+    assert.equal(context.clientContext?.browserEventTrusted, true);
+    assert.doesNotMatch(JSON.stringify(context), /secret-session-token/);
   });
 
   it("rejects an oversized legacy JSON CSV body before authentication or database work", async () => {
@@ -1194,6 +1233,46 @@ describe("dashboard route helpers", () => {
             raw_json: { headers: { "hangup-cause": "NORMAL_CLEARING" } },
             created_at: createdAt,
             total_count: "125"
+          },
+          {
+            event_type: "call_ended",
+            state: "completed",
+            reason_code: null,
+            freeswitch_event_name: null,
+            api_command_name: null,
+            agent_leg_uuid: null,
+            customer_leg_uuid: null,
+            raw_json: {
+              outcome: "answered",
+              endRequest: {
+                actorUserId: userRow().id,
+                actorName: "Agent Example",
+                actorRole: "agent",
+                requestId: "req-hangup-1",
+                receivedAt: endedAt.toISOString(),
+                sourceIp: "203.0.113.8",
+                authTransport: "cookie",
+                userAgent: "Test Browser",
+                origin: "https://dialer.example.com",
+                referrer: "https://dialer.example.com/agent",
+                secFetchSite: "same-origin",
+                secFetchMode: "cors",
+                secFetchDest: "empty",
+                selectedCampaignId,
+                previousCallState: "bridged",
+                clientContext: {
+                  initiator: "agent_desk_hangup_button",
+                  browserEventTrusted: true,
+                  clientTimestamp: endedAt.toISOString(),
+                  pagePath: "/agent?view=desk",
+                  visibilityState: "visible",
+                  activeCallStatus: "bridged",
+                  softphoneCallState: "active"
+                }
+              }
+            },
+            created_at: endedAt,
+            total_count: "125"
           }
         ]);
       }
@@ -1253,6 +1332,43 @@ describe("dashboard route helpers", () => {
         apiCommandName: null,
         agentLegUuid: "agent-leg",
         customerLegUuid: "customer-leg"
+      },
+      {
+        at: endedAt.toISOString(),
+        eventType: "call_ended",
+        state: "completed",
+        label: "Call Ended",
+        reasonCode: null,
+        freeSwitchEventName: null,
+        apiCommandName: null,
+        agentLegUuid: null,
+        customerLegUuid: null,
+        callEndRequest: {
+          actorUserId: userRow().id,
+          actorName: "Agent Example",
+          actorRole: "agent",
+          requestId: "req-hangup-1",
+          receivedAt: endedAt.toISOString(),
+          sourceIp: "203.0.113.8",
+          authTransport: "cookie",
+          userAgent: "Test Browser",
+          origin: "https://dialer.example.com",
+          referrer: "https://dialer.example.com/agent",
+          secFetchSite: "same-origin",
+          secFetchMode: "cors",
+          secFetchDest: "empty",
+          selectedCampaignId,
+          previousCallState: "bridged",
+          clientContext: {
+            initiator: "agent_desk_hangup_button",
+            browserEventTrusted: true,
+            clientTimestamp: endedAt.toISOString(),
+            pagePath: "/agent?view=desk",
+            visibilityState: "visible",
+            activeCallStatus: "bridged",
+            softphoneCallState: "active"
+          }
+        }
       }
     ]);
     assert.equal(detail?.legs.length, 2);

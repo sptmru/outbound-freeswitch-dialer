@@ -19,6 +19,7 @@ import {
   type AgentDeskResponse,
   type CallAvmdReview,
   type CallDetailResponse,
+  type CallEndRequestAudit,
   type CallHistoryResponse,
   type CampaignContactListItem,
   type CampaignContactsResponse,
@@ -64,6 +65,7 @@ import { z } from "zod";
 import { requireUser } from "../auth/routes.js";
 import { setAgentAvailability } from "../agent-availability.js";
 import type { AppConfig } from "../config.js";
+import { SESSION_COOKIE_NAME } from "../security.js";
 import { RuntimeSettingsService, updateSystemSettingsSchema } from "../runtime-settings.js";
 import {
   canOriginateCustomerLeg,
@@ -164,9 +166,54 @@ const startLeadCallSchema = z.object({
   confirmRetryWait: z.boolean().optional()
 }) satisfies z.ZodType<StartLeadCallRequest>;
 
+const callEndClientContextSchema = z.object({
+  initiator: z.literal("agent_desk_hangup_button"),
+  browserEventTrusted: z.boolean(),
+  clientTimestamp: z.string().datetime({ offset: true }),
+  pagePath: z.string().min(1).max(512),
+  visibilityState: z.enum(["hidden", "visible"]),
+  activeCallStatus: z.enum(["dialing", "ringing", "bridged", "voicemail_drop", "completed", "missing"]),
+  softphoneCallState: z.enum(["none", "incoming", "answering", "active"])
+});
+
 const endCallSchema = z.object({
-  campaignId: z.string().uuid().optional()
+  campaignId: z.string().uuid().optional(),
+  clientContext: callEndClientContextSchema.optional()
 }) satisfies z.ZodType<EndCallRequest>;
+
+function buildCallEndRequestContext(
+  request: FastifyRequest,
+  user: PublicUser,
+  input: EndCallRequest
+): Omit<CallEndRequestAudit, "previousCallState"> {
+  return {
+    actorUserId: user.id,
+    actorName: user.name,
+    actorRole: user.role,
+    requestId: String(request.id).slice(0, 128),
+    receivedAt: new Date().toISOString(),
+    sourceIp: request.ip ? request.ip.slice(0, 128) : null,
+    authTransport: request.headers.authorization?.startsWith("Bearer ")
+      ? "bearer"
+      : request.cookies[SESSION_COOKIE_NAME]
+        ? "cookie"
+        : "unknown",
+    userAgent: callEndAuditHeader(request, "user-agent"),
+    origin: callEndAuditHeader(request, "origin"),
+    referrer: callEndAuditHeader(request, "referer"),
+    secFetchSite: callEndAuditHeader(request, "sec-fetch-site"),
+    secFetchMode: callEndAuditHeader(request, "sec-fetch-mode"),
+    secFetchDest: callEndAuditHeader(request, "sec-fetch-dest"),
+    selectedCampaignId: input.campaignId ?? null,
+    clientContext: input.clientContext ?? null
+  };
+}
+
+function callEndAuditHeader(request: FastifyRequest, name: string): string | null {
+  const rawValue = request.headers[name];
+  const value = Array.isArray(rawValue) ? rawValue.join(", ") : rawValue;
+  return typeof value === "string" && value.trim() ? value.slice(0, 512) : null;
+}
 
 const updateCallStatusSchema = z.object({
   outcome: z.enum(callOutcomes)
@@ -1061,8 +1108,11 @@ export function registerDashboardRoutes(
     const publicUser = toPublicUser(user);
     const params = z.object({ callId: z.string().uuid() }).parse(request.params);
     const input = endCallSchema.parse(request.body ?? {});
-    const ended = await endDialerCall(pool, config, publicUser.id, params.callId);
+    const endRequest = buildCallEndRequestContext(request, publicUser, input);
+    request.log.info({ callId: params.callId, endRequest }, "Agent call end requested");
+    const ended = await endDialerCall(pool, config, publicUser.id, params.callId, endRequest);
     if (!ended) {
+      request.log.warn({ callId: params.callId, endRequest }, "Agent call end target was not active");
       return reply.code(404).send({ message: "Active call not found" });
     }
 
@@ -2576,6 +2626,7 @@ async function getCampaignContacts(
 
 export const __testing = {
   buildAgentDeskResponse,
+  buildCallEndRequestContext,
   callHistoryCsvRows,
   createDialerCall,
   csvCell,

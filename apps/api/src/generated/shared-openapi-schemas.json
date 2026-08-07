@@ -1433,7 +1433,8 @@
             "freeSwitchEventName": { "type": ["string", "null"] },
             "apiCommandName": { "type": ["string", "null"] },
             "agentLegUuid": { "type": ["string", "null"] },
-            "customerLegUuid": { "type": ["string", "null"] }
+            "customerLegUuid": { "type": ["string", "null"] },
+            "callEndRequest": { "$ref": "CallEndRequestAudit#" }
           },
           "required": [
             "at",
@@ -1628,6 +1629,73 @@
       "sampleCount",
       "schemaVersion",
       "startedAt"
+    ],
+    "additionalProperties": false
+  },
+  "CallEndRequestAudit": {
+    "$id": "CallEndRequestAudit",
+    "type": "object",
+    "properties": {
+      "actorUserId": { "type": "string" },
+      "actorName": { "type": "string" },
+      "actorRole": { "$ref": "UserRole#" },
+      "requestId": { "type": "string" },
+      "receivedAt": { "type": "string" },
+      "sourceIp": { "type": ["string", "null"] },
+      "authTransport": { "type": "string", "enum": ["cookie", "bearer", "unknown"] },
+      "userAgent": { "type": ["string", "null"] },
+      "origin": { "type": ["string", "null"] },
+      "referrer": { "type": ["string", "null"] },
+      "secFetchSite": { "type": ["string", "null"] },
+      "secFetchMode": { "type": ["string", "null"] },
+      "secFetchDest": { "type": ["string", "null"] },
+      "selectedCampaignId": { "type": ["string", "null"] },
+      "previousCallState": { "$ref": "CallState#" },
+      "clientContext": { "anyOf": [{ "$ref": "CallEndClientContext#" }, { "type": "null" }] }
+    },
+    "required": [
+      "actorUserId",
+      "actorName",
+      "actorRole",
+      "requestId",
+      "receivedAt",
+      "sourceIp",
+      "authTransport",
+      "userAgent",
+      "origin",
+      "referrer",
+      "secFetchSite",
+      "secFetchMode",
+      "secFetchDest",
+      "selectedCampaignId",
+      "previousCallState",
+      "clientContext"
+    ],
+    "additionalProperties": false
+  },
+  "CallEndClientContext": {
+    "$id": "CallEndClientContext",
+    "type": "object",
+    "properties": {
+      "initiator": { "type": "string", "const": "agent_desk_hangup_button" },
+      "browserEventTrusted": { "type": "boolean" },
+      "clientTimestamp": { "type": "string" },
+      "pagePath": { "type": "string" },
+      "visibilityState": { "type": "string", "enum": ["hidden", "visible"] },
+      "activeCallStatus": {
+        "type": "string",
+        "enum": ["dialing", "ringing", "bridged", "voicemail_drop", "completed", "missing"]
+      },
+      "softphoneCallState": { "type": "string", "enum": ["none", "incoming", "answering", "active"] }
+    },
+    "required": [
+      "initiator",
+      "browserEventTrusted",
+      "clientTimestamp",
+      "pagePath",
+      "visibilityState",
+      "activeCallStatus",
+      "softphoneCallState"
     ],
     "additionalProperties": false
   },
@@ -2049,7 +2117,10 @@
   "EndCallRequest": {
     "$id": "EndCallRequest",
     "type": "object",
-    "properties": { "campaignId": { "type": "string" } },
+    "properties": {
+      "campaignId": { "type": "string" },
+      "clientContext": { "$ref": "CallEndClientContext#" }
+    },
     "additionalProperties": false
   },
   "UpdateCallStatusRequest": {

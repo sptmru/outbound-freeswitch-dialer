@@ -586,6 +586,7 @@ export interface CallDetailResponse {
     apiCommandName: string | null;
     agentLegUuid: string | null;
     customerLegUuid: string | null;
+    callEndRequest?: CallEndRequestAudit;
   }>;
   timelineTotal: number;
   timelineTruncated: boolean;
@@ -816,8 +817,38 @@ export interface StartLeadCallRequest {
   confirmRetryWait?: boolean;
 }
 
+export interface CallEndClientContext {
+  initiator: "agent_desk_hangup_button";
+  browserEventTrusted: boolean;
+  clientTimestamp: string;
+  pagePath: string;
+  visibilityState: "hidden" | "visible";
+  activeCallStatus: "dialing" | "ringing" | "bridged" | "voicemail_drop" | "completed" | "missing";
+  softphoneCallState: "none" | "incoming" | "answering" | "active";
+}
+
+export interface CallEndRequestAudit {
+  actorUserId: string;
+  actorName: string;
+  actorRole: UserRole;
+  requestId: string;
+  receivedAt: string;
+  sourceIp: string | null;
+  authTransport: "cookie" | "bearer" | "unknown";
+  userAgent: string | null;
+  origin: string | null;
+  referrer: string | null;
+  secFetchSite: string | null;
+  secFetchMode: string | null;
+  secFetchDest: string | null;
+  selectedCampaignId: string | null;
+  previousCallState: CallState;
+  clientContext: CallEndClientContext | null;
+}
+
 export interface EndCallRequest {
   campaignId?: string;
+  clientContext?: CallEndClientContext;
 }
 
 export interface UpdateCallStatusRequest {

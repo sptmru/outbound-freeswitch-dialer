@@ -156,9 +156,25 @@ export function AgentDesk({
     void callNext();
   }, [desk.activeCall?.id]);
 
-  async function hangUp(callId: string) {
+  async function hangUp(callId: string, browserEventTrusted: boolean) {
     softphone.stopBrowserRingback();
-    await runCallControl("hangup", () => endCall(callId, { campaignId: campaign?.id }), "Could not end call");
+    await runCallControl(
+      "hangup",
+      () =>
+        endCall(callId, {
+          campaignId: campaign?.id,
+          clientContext: {
+            initiator: "agent_desk_hangup_button",
+            browserEventTrusted,
+            clientTimestamp: new Date().toISOString(),
+            pagePath: `${window.location.pathname}${window.location.search}`.slice(0, 512),
+            visibilityState: document.visibilityState,
+            activeCallStatus: desk.activeCall?.id === callId ? desk.activeCall.status : "missing",
+            softphoneCallState: softphone.callState
+          }
+        }),
+      "Could not end call"
+    );
   }
 
   async function handleDropVoicemail(callId: string, recordingId?: string) {

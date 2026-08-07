@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type pg from "pg";
 import type { AppConfig } from "../config.js";
-import { __testing, dropVoicemailForCall } from "./calls.js";
+import { __testing, dropVoicemailForCall, endDialerCall } from "./calls.js";
 
 const callId = "11111111-1111-4111-8111-111111111111";
 const userId = "22222222-2222-4222-8222-222222222222";
@@ -137,6 +137,95 @@ describe("call lifecycle", () => {
     assert.deepEqual(queries[0]?.params, ["contact-1", false, 5, 60, true]);
     assert.match(queries[0]?.sql ?? "", /\$5 = true/);
     assert.match(queries[0]?.sql ?? "", /contacts\.attempt_count < \$3/);
+  });
+
+  it("persists the authenticated request and browser click evidence when an agent ends a call", async () => {
+    const clientQueries: Query[] = [];
+    const agentId = "55555555-5555-4555-8555-555555555555";
+    const pool = createTransactionalPool({
+      poolHandler: () => rows([]),
+      clientHandler: (sql, params) => {
+        clientQueries.push({ sql, params });
+        if (sql.includes("left join call_legs")) {
+          return rows([
+            {
+              id: callId,
+              agent_id: agentId,
+              contact_id: null,
+              agent_leg_uuid: agentLegUuid,
+              customer_leg_uuid: customerLegUuid,
+              state: "customer_ringing"
+            }
+          ]);
+        }
+        if (sql.includes("join agents") && sql.includes("agents.user_id")) {
+          return rows([{ agent_id: agentId }]);
+        }
+        if (sql.includes("select id from agents")) {
+          return rows([{ id: agentId }]);
+        }
+        return rows([]);
+      }
+    });
+
+    const ended = await endDialerCall(pool, { FREESWITCH_ESL_ENABLED: false } as AppConfig, userId, callId, {
+      actorUserId: userId,
+      actorName: "Alex Agent",
+      actorRole: "agent",
+      requestId: "req-hangup-1",
+      receivedAt: "2026-08-07T08:00:00.000Z",
+      sourceIp: "203.0.113.8",
+      authTransport: "cookie",
+      userAgent: "Test Browser",
+      origin: "https://dialer.example.com",
+      referrer: "https://dialer.example.com/agent",
+      secFetchSite: "same-origin",
+      secFetchMode: "cors",
+      secFetchDest: "empty",
+      selectedCampaignId: "66666666-6666-4666-8666-666666666666",
+      clientContext: {
+        initiator: "agent_desk_hangup_button",
+        browserEventTrusted: true,
+        clientTimestamp: "2026-08-07T07:59:59.900Z",
+        pagePath: "/agent?view=desk",
+        visibilityState: "visible",
+        activeCallStatus: "ringing",
+        softphoneCallState: "active"
+      }
+    });
+
+    assert.equal(ended, true);
+    const eventInsert = clientQueries.find((query) => query.sql.includes("'call_ended'"));
+    assert.ok(eventInsert);
+    assert.deepEqual(JSON.parse(String(eventInsert.params[2])), {
+      outcome: "agent_canceled",
+      endRequest: {
+        actorUserId: userId,
+        actorName: "Alex Agent",
+        actorRole: "agent",
+        requestId: "req-hangup-1",
+        receivedAt: "2026-08-07T08:00:00.000Z",
+        sourceIp: "203.0.113.8",
+        authTransport: "cookie",
+        userAgent: "Test Browser",
+        origin: "https://dialer.example.com",
+        referrer: "https://dialer.example.com/agent",
+        secFetchSite: "same-origin",
+        secFetchMode: "cors",
+        secFetchDest: "empty",
+        selectedCampaignId: "66666666-6666-4666-8666-666666666666",
+        previousCallState: "customer_ringing",
+        clientContext: {
+          initiator: "agent_desk_hangup_button",
+          browserEventTrusted: true,
+          clientTimestamp: "2026-08-07T07:59:59.900Z",
+          pagePath: "/agent?view=desk",
+          visibilityState: "visible",
+          activeCallStatus: "ringing",
+          softphoneCallState: "active"
+        }
+      }
+    });
   });
 
   it("claims a voicemail drop without ending the customer call before playback completes", async () => {

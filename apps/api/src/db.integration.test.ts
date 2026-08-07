@@ -1103,7 +1103,24 @@ describe("PostgreSQL migration integration", { skip: !databaseUrl }, () => {
         pool,
         { FREESWITCH_ESL_ENABLED: false } as AppConfig,
         userId!,
-        endCallId!
+        endCallId!,
+        {
+          actorUserId: userId!,
+          actorName: "Lock order integration agent",
+          actorRole: "agent",
+          requestId: "lock-order-integration",
+          receivedAt: new Date().toISOString(),
+          sourceIp: null,
+          authTransport: "unknown",
+          userAgent: null,
+          origin: null,
+          referrer: null,
+          secFetchSite: null,
+          secFetchMode: null,
+          secFetchDest: null,
+          selectedCampaignId: campaignId,
+          clientContext: null
+        }
       );
       assert.match(
         await waitForQueryBlockedBy(pool, holderPid),

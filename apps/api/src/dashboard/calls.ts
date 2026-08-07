@@ -1,5 +1,5 @@
 import type pg from "pg";
-import type { CallOutcome, CallState } from "@outbound-dialer/shared";
+import type { CallEndRequestAudit, CallOutcome, CallState } from "@outbound-dialer/shared";
 import type { AppConfig } from "../config.js";
 import { finishAgentCall } from "../agent-availability.js";
 import { finalizeCallTransaction, lockCallOwnerAgent } from "../call-finalization.js";
@@ -1249,7 +1249,8 @@ export async function endDialerCall(
   pool: pg.Pool,
   config: AppConfig,
   userId: string,
-  callId: string
+  callId: string,
+  endRequest: Omit<CallEndRequestAudit, "previousCallState">
 ): Promise<boolean> {
   const client = await pool.connect();
   try {
@@ -1294,6 +1295,10 @@ export async function endDialerCall(
       return false;
     }
     const outcome = inferAgentEndOutcome(row.state);
+    const auditedEndRequest = {
+      ...endRequest,
+      previousCallState: row.state
+    } satisfies CallEndRequestAudit;
 
     await client.query(
       `
@@ -1315,7 +1320,7 @@ export async function endDialerCall(
         insert into call_events (call_id, agent_id, event_type, state, raw_json)
         values ($1, $2, 'call_ended', 'completed', $3::jsonb)
       `,
-      [callId, row.agent_id, JSON.stringify({ outcome })]
+      [callId, row.agent_id, JSON.stringify({ outcome, endRequest: auditedEndRequest })]
     );
     await client.query(
       `

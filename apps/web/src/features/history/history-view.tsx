@@ -5,7 +5,12 @@ import { PanelHeader } from "../../components/ui-primitives";
 import { formatCallLifecycleStatus } from "../../lib/call-formatters";
 import { getErrorMessage } from "../../lib/errors";
 import { formatBytes, formatDateTime, formatDuration } from "../../lib/formatters";
-import type { AdminOverviewResponse, CallDetailResponse, CallHistoryResponse } from "../../types";
+import type {
+  AdminOverviewResponse,
+  CallDetailResponse,
+  CallEndRequestAudit,
+  CallHistoryResponse
+} from "../../types";
 import { AvmdReviewCard } from "./avmd-review-card";
 import { CallRecordingPlayer } from "./call-recording-player";
 import { CallTechnicalEvidence } from "./call-technical-evidence";
@@ -541,6 +546,9 @@ export function HistoryView({
                                       .join(" · ")}
                                   </code>
                                 )}
+                                {item.callEndRequest && (
+                                  <CallEndRequestEvidence audit={item.callEndRequest} />
+                                )}
                               </div>
                             ))}
                             {!detail.timeline.length && (
@@ -580,6 +588,70 @@ export function HistoryView({
         </button>
       </div>
     </article>
+  );
+}
+
+function CallEndRequestEvidence({ audit }: { audit: CallEndRequestAudit }) {
+  const client = audit.clientContext;
+  const isAgentDeskButton = client?.initiator === "agent_desk_hangup_button";
+  const clickEvidence = isAgentDeskButton
+    ? client.browserEventTrusted
+      ? "Browser marked the Hang up click as trusted"
+      : "Browser did not mark the Hang up event as trusted"
+    : "No first-party Agent Desk click context was supplied";
+
+  return (
+    <div className="timeline-end-request">
+      <strong>{isAgentDeskButton ? "Agent Desk Hang up request" : "API or legacy Hang up request"}</strong>
+      <small>{clickEvidence}</small>
+      <dl>
+        <div>
+          <dt>Actor</dt>
+          <dd>
+            {audit.actorName} · {audit.actorRole}
+          </dd>
+        </div>
+        <div>
+          <dt>Previous call state</dt>
+          <dd>{audit.previousCallState}</dd>
+        </div>
+        <div>
+          <dt>Request</dt>
+          <dd>
+            {audit.requestId} · {audit.authTransport}
+          </dd>
+        </div>
+        <div>
+          <dt>Source</dt>
+          <dd>{[audit.sourceIp, audit.userAgent].filter(Boolean).join(" · ") || "Not recorded"}</dd>
+        </div>
+        {client && (
+          <>
+            <div>
+              <dt>Client state</dt>
+              <dd>
+                call {client.activeCallStatus} · softphone {client.softphoneCallState} · tab{" "}
+                {client.visibilityState}
+              </dd>
+            </div>
+            <div>
+              <dt>Client time and page</dt>
+              <dd>
+                {formatDateTime(client.clientTimestamp)} · {client.pagePath}
+              </dd>
+            </div>
+          </>
+        )}
+        <div>
+          <dt>Browser request</dt>
+          <dd>
+            {[audit.origin, audit.referrer, audit.secFetchSite, audit.secFetchMode, audit.secFetchDest]
+              .filter(Boolean)
+              .join(" · ") || "No browser fetch headers recorded"}
+          </dd>
+        </div>
+      </dl>
+    </div>
   );
 }
 

@@ -454,6 +454,31 @@ Do not reproduce the eligibility rules in the frontend. Disable the control when
 
 Allow only one call-control mutation at a time. Repeated `Hang up`, `DTMF`, or `Drop voicemail` requests can race real telephony events.
 
+The first-party Agent Desk includes forensic context with every `Hang up` request:
+
+```json
+{
+  "campaignId": "11111111-1111-4111-8111-111111111111",
+  "clientContext": {
+    "initiator": "agent_desk_hangup_button",
+    "browserEventTrusted": true,
+    "clientTimestamp": "2026-08-07T08:00:00.000Z",
+    "pagePath": "/agent?view=desk",
+    "visibilityState": "visible",
+    "activeCallStatus": "ringing",
+    "softphoneCallState": "active"
+  }
+}
+```
+
+`clientContext` remains optional for backward-compatible API clients. The API durably stores it on the
+`call_ended` timeline event together with the authenticated actor, previous call state, server receive time,
+request ID, source IP, auth transport, User-Agent, Origin, Referrer, and Fetch Metadata headers. A missing
+`clientContext` therefore identifies an API or legacy-client request with no first-party UI click evidence.
+`browserEventTrusted` records the browser's `Event.isTrusted` value: it distinguishes a normal browser click
+from a synthetic DOM event, but it is forensic evidence rather than cryptographic attestation because a custom
+API client can construct its own request body.
+
 DTMF accepts one supported digit per request. Consult the OpenAPI schema for the exact allowed values.
 
 After a call has ended, its authenticated owner may correct the terminal result once:

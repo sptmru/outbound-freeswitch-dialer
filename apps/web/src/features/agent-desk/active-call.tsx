@@ -27,7 +27,7 @@ export function ActiveCall({
   onAvailabilityChangeStarted: (status: "available" | "paused") => void;
   onDeskChanged: (desk: AgentDeskResponse) => void;
   onDropVoicemail: (callId: string, recordingId?: string) => Promise<void>;
-  onHangUp: (callId: string) => Promise<void>;
+  onHangUp: (callId: string, browserEventTrusted: boolean) => Promise<void>;
   onSendDtmf: (callId: string, digit: string) => Promise<void>;
   softphone: SoftphoneRuntime;
 }) {
@@ -216,7 +216,7 @@ export function ActiveCall({
         <button
           className="danger-action"
           disabled={controlPending !== null}
-          onClick={() => onHangUp(activeCall.id)}
+          onClick={(event) => onHangUp(activeCall.id, event.nativeEvent.isTrusted)}
           type="button"
         >
           <PhoneOff size={17} />

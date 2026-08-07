@@ -4,6 +4,7 @@ import type {
   AgentDeskResponse,
   CallActionAvailability,
   CallDetailResponse,
+  CallEndRequestAudit,
   CallHistoryItem,
   CallHistoryResponse,
   CallOutcome,
@@ -1161,17 +1162,21 @@ export async function getCallDetail(pool: pg.Pool, callId: string): Promise<Call
         reasonCode: [...legEvents].reverse().find((event) => event.reason_code)?.reason_code ?? null
       };
     }),
-    timeline: events.rows.map((event) => ({
-      at: event.created_at.toISOString(),
-      eventType: event.event_type,
-      state: event.state ?? "",
-      label: humanize(event.event_type),
-      reasonCode: event.reason_code,
-      freeSwitchEventName: event.freeswitch_event_name,
-      apiCommandName: event.api_command_name,
-      agentLegUuid: event.agent_leg_uuid,
-      customerLegUuid: event.customer_leg_uuid
-    })),
+    timeline: events.rows.map((event) => {
+      const callEndRequest = readCallEndRequestAudit(event);
+      return {
+        at: event.created_at.toISOString(),
+        eventType: event.event_type,
+        state: event.state ?? "",
+        label: humanize(event.event_type),
+        reasonCode: event.reason_code,
+        freeSwitchEventName: event.freeswitch_event_name,
+        apiCommandName: event.api_command_name,
+        agentLegUuid: event.agent_leg_uuid,
+        customerLegUuid: event.customer_leg_uuid,
+        ...(callEndRequest ? { callEndRequest } : {})
+      };
+    }),
     timelineTotal,
     timelineTruncated: timelineTotal > events.rows.length
   };
@@ -1189,6 +1194,25 @@ type CallDetailEventRow = {
   created_at: Date;
   total_count?: string | number;
 };
+
+function readCallEndRequestAudit(event: CallDetailEventRow): CallEndRequestAudit | null {
+  if (event.event_type !== "call_ended") return null;
+  const value = event.raw_json?.endRequest;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const audit = value as Record<string, unknown>;
+  if (
+    typeof audit.actorUserId !== "string" ||
+    typeof audit.actorName !== "string" ||
+    typeof audit.actorRole !== "string" ||
+    typeof audit.requestId !== "string" ||
+    typeof audit.receivedAt !== "string" ||
+    typeof audit.authTransport !== "string" ||
+    typeof audit.previousCallState !== "string"
+  ) {
+    return null;
+  }
+  return audit as unknown as CallEndRequestAudit;
+}
 
 function nullableNumber(value: string | number | null | undefined): number | null {
   if (value === null || value === undefined) return null;

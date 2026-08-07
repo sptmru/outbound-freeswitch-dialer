@@ -681,7 +681,7 @@ add(
   "POST",
   "/agent/calls/:callId/end",
   "End active call",
-  "Ends an owned active call and returns refreshed Agent Desk state.",
+  "Ends an owned active call, durably records request and optional first-party browser click evidence, and returns refreshed Agent Desk state.",
   {
     params: callParams,
     body: ref("EndCallRequest"),

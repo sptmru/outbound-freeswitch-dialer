@@ -14,6 +14,7 @@ export type {
   CampaignContactListItem,
   CallAvmdReview,
   CallDetailResponse,
+  CallEndRequestAudit,
   CallMediaQuality,
   CallHistoryResponse,
   CreateCampaignRequest,
