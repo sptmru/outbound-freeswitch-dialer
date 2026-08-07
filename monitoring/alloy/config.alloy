@@ -56,6 +56,14 @@ loki.source.file "certificate_renewal" {
 
 loki.process "default" {
 	forward_to = [loki.write.default.receiver]
+
+	// loki.source.docker can replay old container entries after Alloy restarts.
+	// Drop them before batching so one entry outside Loki's 168h ingestion
+	// window cannot make Loki reject fresh entries in the same batch.
+	stage.drop {
+		older_than          = "167h"
+		drop_counter_reason = "outside_loki_ingestion_window"
+	}
 }
 
 loki.write "default" {

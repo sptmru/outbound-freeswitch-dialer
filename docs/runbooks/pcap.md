@@ -24,6 +24,8 @@ Prometheus exposes `outbound_dialer_pcap_capture_enabled`, `outbound_dialer_pcap
 
 If **Recent PCAP capture events** shows `No data`, verify that Loki has a `service="api"` label and inspect Alloy for Docker discovery errors. The read-only `docker-socket-proxy` must permit both container and network metadata (`CONTAINERS=1`, `NETWORKS=1`) because Alloy computes network labels while discovering container log streams. Keep `POST=0`.
 
+After an Alloy restart, `loki.source.docker` can replay old container entries even when its positions state is persisted. The shared Alloy pipeline drops entries older than 167 hours before they reach Loki; Loki's explicit maximum accepted age is 168 hours. If Loki reports `timestamp too old`, inspect `loki_process_dropped_lines_total` and confirm both deployed monitoring configs match the same release before restarting services again.
+
 ## SIP ladder
 
 Start before the controlled reproduction:

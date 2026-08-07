@@ -72,6 +72,21 @@ test("monitoring config rejects incomplete or insecure Slack settings", () => {
   );
 });
 
+test("log ingestion drops replayed entries before Loki rejects their batch", () => {
+  const alloy = readFileSync(join(root, "monitoring/alloy/config.alloy"), "utf8");
+  const loki = readFileSync(join(root, "monitoring/loki/loki.yml"), "utf8");
+
+  const alloyDropHours = Number(alloy.match(/older_than\s+=\s+"(\d+)h"/)?.[1]);
+  const lokiRejectHours = Number(loki.match(/reject_old_samples_max_age:\s+(\d+)h/)?.[1]);
+
+  assert.match(alloy, /drop_counter_reason = "outside_loki_ingestion_window"/);
+  assert.match(loki, /reject_old_samples:\s+true/);
+  assert.ok(Number.isFinite(alloyDropHours));
+  assert.ok(Number.isFinite(lokiRejectHours));
+  assert.ok(alloyDropHours < lokiRejectHours);
+  assert.equal(lokiRejectHours - alloyDropHours, 1);
+});
+
 test("monitoring dashboard provisions the application link and PCAP panels", () => {
   const dashboard = JSON.parse(
     readFileSync(join(root, "monitoring/grafana/dashboards/outbound-dialer-overview.json"), "utf8")
