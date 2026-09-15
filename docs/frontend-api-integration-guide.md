@@ -339,7 +339,7 @@ After login:
 
 Keep the selected `campaignId` in every related request. Do not silently reset to the first campaign after a mutation or refresh.
 
-Each `LeadSummary` may include `zohoLeadId: string | null`, extracted from the contact's imported `lead_id` independently of the eight-entry `fields` display limit. Preserve it as a string; never convert CRM IDs to JavaScript numbers. For a non-empty value, show a Zoho CRM link to `https://crm.zoho.com.au/crm/org7002688441/tab/Leads/{encoded ID}` with `target="_blank"` and `rel="noopener noreferrer"`. Hide the link when the property is absent, null, or blank (including when talking to an older API).
+Each `LeadSummary` may include `zohoLeadId: string | null`, extracted from the contact's `lead_id` (CSV or manual entry) independently of the eight-entry `fields` display limit. Preserve it as a string; never convert CRM IDs to JavaScript numbers. For a non-empty value, show a Zoho CRM link to `https://crm.zoho.com.au/crm/org7002688441/tab/Leads/{encoded ID}` with `target="_blank"` and `rel="noopener noreferrer"`. Hide the link when the property is absent, null, or blank (including when talking to an older API).
 
 ### 7.2 Availability
 
@@ -703,6 +703,10 @@ Successful mutating `/admin/*` requests are audit-recorded. The UI should requir
 - joining a monitored call.
 
 Do not automatically retry administrator mutations after a network error. Refetch first.
+
+### Manual lead creation
+
+`POST /admin/contacts` accepts an optional Zoho Lead ID through the existing `fields` array: `[{ "label": "lead_id", "value": "51445000042207511" }]`. The Add lead form trims surrounding whitespace, keeps the ID as a string (maximum 400 characters), and omits it when blank. The saved ID is exposed as `zohoLeadId` on subsequent Agent Desk responses, enabling the same CRM links as CSV-imported leads.
 
 ### CSV import
 

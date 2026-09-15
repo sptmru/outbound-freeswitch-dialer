@@ -21,7 +21,7 @@ import {
 import { CsvImportError, importContactsFromCsv, importSuppressionFromCsv, parseCsv } from "./csv.js";
 import { validateDialableNumber } from "./manual-dial.js";
 import { normalizePhoneNumber } from "./phone.js";
-import { calculateActiveCallDuration, getCallHistoryPage } from "./responders.js";
+import { calculateActiveCallDuration, getCallHistoryPage, getLeadQueue } from "./responders.js";
 import { __testing, registerDashboardRoutes } from "./routes.js";
 
 const selectedCampaignId = "11111111-1111-4111-8111-111111111111";
@@ -31,6 +31,62 @@ const config = {
 } as AppConfig;
 
 describe("dashboard route helpers", () => {
+  it("preserves a manual lead's Zoho ID for the agent queue", async () => {
+    let savedFields: Record<string, string> = {};
+    const contact = {
+      id: "22222222-2222-4222-8222-222222222222",
+      display_name: "Jane Doe",
+      phone_number: "+14155550100",
+      status: "ready"
+    };
+    const pool = createQueryPool((sql, params) => {
+      if (sql.includes("from users")) {
+        return rows([{ ...userRow({ role: "admin" }), is_active: true, auth_version: 1 }]);
+      }
+      if (sql.includes("from campaigns")) return rows([{ id: selectedCampaignId }]);
+      if (sql.includes("insert into contacts")) {
+        savedFields = JSON.parse(String(params[4]));
+        return rows([{ ...contact, mapped_fields_json: savedFields }]);
+      }
+      if (sql.includes("from contacts")) return rows([{ ...contact, mapped_fields_json: savedFields }]);
+      if (sql.includes("from suppression_entries")) return rows([]);
+      throw new Error(`Unexpected query: ${sql}`);
+    });
+    const routeConfig = {
+      DEFAULT_PHONE_COUNTRY_CODE: "US",
+      JWT_SECRET: "manual-lead-test-secret",
+      JWT_EXPIRES_SECONDS: 3_600
+    } as AppConfig;
+    const app = Fastify();
+    registerDashboardRoutes(app, routeConfig, pool);
+    const token = signAuthToken(routeConfig, {
+      sub: userRow().id,
+      email: userRow().email,
+      role: "admin",
+      ver: 1
+    });
+
+    try {
+      const response = await app.inject({
+        method: "POST",
+        url: "/admin/contacts",
+        headers: { authorization: `Bearer ${token}` },
+        payload: {
+          campaignId: selectedCampaignId,
+          name: "Jane Doe",
+          phoneNumber: contact.phone_number,
+          fields: [{ label: "lead_id", value: "51445000042207511" }]
+        }
+      });
+      assert.equal(response.statusCode, 201, response.body);
+      assert.equal(savedFields.lead_id, "51445000042207511");
+      const [lead] = await getLeadQueue(pool, selectedCampaignId);
+      assert.equal(lead.zohoLeadId, "51445000042207511");
+    } finally {
+      await app.close();
+    }
+  });
+
   it("keeps active call duration anchored to the call start", () => {
     const startedAt = new Date("2026-07-21T08:00:00.000Z");
 
