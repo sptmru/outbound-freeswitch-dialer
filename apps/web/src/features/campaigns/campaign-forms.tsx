@@ -125,6 +125,7 @@ export function CreateContactForm({
   const [name, setName] = useState("");
   const [company, setCompany] = useState("");
   const [phoneNumber, setPhoneNumber] = useState("");
+  const [zohoLeadId, setZohoLeadId] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -140,10 +141,18 @@ export function CreateContactForm({
     setPending(true);
     setError(null);
     try {
-      await createContact({ campaignId, name, company: company || undefined, phoneNumber });
+      const leadId = zohoLeadId.trim();
+      await createContact({
+        campaignId,
+        name,
+        company: company || undefined,
+        phoneNumber,
+        fields: leadId ? [{ label: "lead_id", value: leadId }] : undefined
+      });
       setName("");
       setCompany("");
       setPhoneNumber("");
+      setZohoLeadId("");
       await onChanged();
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : "Could not add lead");
@@ -195,6 +204,16 @@ export function CreateContactForm({
             onChange={(event) => setCompany(event.target.value)}
             placeholder="North Bay Solar"
             value={company}
+          />
+        </label>
+        <label>
+          Zoho Lead ID
+          <input
+            type="text"
+            maxLength={400}
+            onChange={(event) => setZohoLeadId(event.target.value)}
+            placeholder="Optional"
+            value={zohoLeadId}
           />
         </label>
         {error && <p className="form-error">{error}</p>}

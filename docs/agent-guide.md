@@ -13,7 +13,7 @@ The page refreshes state from the server through live update signals and periodi
 
 ## Call Workflow
 
-- Use **Zoho CRM** beside a lead in **Next leads**, **Lead queue**, or **Lead context** during a call to open their CRM profile in a new tab. The link appears only when the lead has an imported `lead_id`. Sign in to Zoho with an account that has access to the profile.
+- Use **Zoho CRM** beside a lead in **Next leads**, **Lead queue**, or **Lead context** during a call to open their CRM profile in a new tab. The link appears only when the lead has a `lead_id` from CSV import or manual entry. Sign in to Zoho with an account that has access to the profile.
 - Use **Call** for the offered lead, or **Manual dial** only when the campaign permits it. Every destination is normalized and checked against suppression by the backend.
 - The browser plays an immediate local ringing cue while call audio connects. It yields to carrier-provided ringback or announcements as soon as remote audio starts. When the carrier supplies no audible early media, FreeSWITCH continues with its own ringback fallback after a short delay. The operator remains responsible for deciding whether a human or mailbox answered after answer audio begins.
 - Use the keypad for DTMF only when it is enabled.
