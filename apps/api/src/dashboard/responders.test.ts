@@ -1,11 +1,56 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type pg from "pg";
-import { getCallDetail, getCallHistoryPage } from "./responders.js";
+import { getCallDetail, getCallHistoryPage, getLeadQueue } from "./responders.js";
 
 function rows<T>(items: T[]): { rows: T[]; rowCount: number } {
   return { rows: items, rowCount: items.length };
 }
+
+describe("lead queue Zoho CRM IDs", () => {
+  it("preserves a long ID independently of the eight displayed fields", async () => {
+    const pool = {
+      query: async () =>
+        rows([
+          {
+            id: "contact-1",
+            display_name: "Jane",
+            phone_number: "+14155550100",
+            status: "ready",
+            mapped_fields_json: {
+              ...Object.fromEntries(Array.from({ length: 8 }, (_, index) => [`field_${index}`, "value"])),
+              lead_id: " 51445000042207511 "
+            }
+          }
+        ])
+    } as unknown as pg.Pool;
+
+    const [lead] = await getLeadQueue(pool, "campaign-1");
+
+    assert.equal(lead.zohoLeadId, "51445000042207511");
+    assert.equal(lead.fields.length, 8);
+    assert.ok(lead.fields.every((field) => field.label !== "lead_id"));
+  });
+
+  it("returns null for missing, blank, or non-string IDs", async () => {
+    const pool = {
+      query: async () =>
+        rows(
+          [undefined, null, "", "  ", 123, {}].map((leadId, index) => ({
+            id: `contact-${index}`,
+            display_name: "Jane",
+            phone_number: "+14155550100",
+            status: "ready",
+            mapped_fields_json: leadId === undefined ? {} : { lead_id: leadId }
+          }))
+        )
+    } as unknown as pg.Pool;
+
+    const leads = await getLeadQueue(pool, "campaign-1");
+
+    assert.ok(leads.every((lead) => lead.zohoLeadId === null));
+  });
+});
 
 describe("call-history lead names", () => {
   it("uses normalized-number lead matches in history search and preserves the manual fallback", async () => {

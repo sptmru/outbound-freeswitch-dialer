@@ -150,6 +150,7 @@
     "type": "object",
     "properties": {
       "id": { "type": "string" },
+      "zohoLeadId": { "type": ["string", "null"] },
       "name": { "type": "string" },
       "company": { "type": "string" },
       "phoneNumber": { "type": "string" },

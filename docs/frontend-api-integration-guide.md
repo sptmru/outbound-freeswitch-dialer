@@ -339,6 +339,8 @@ After login:
 
 Keep the selected `campaignId` in every related request. Do not silently reset to the first campaign after a mutation or refresh.
 
+Each `LeadSummary` may include `zohoLeadId: string | null`, extracted from the contact's imported `lead_id` independently of the eight-entry `fields` display limit. Preserve it as a string; never convert CRM IDs to JavaScript numbers. For a non-empty value, show a Zoho CRM link to `https://crm.zoho.com.au/crm/org7002688441/tab/Leads/{encoded ID}` with `target="_blank"` and `rel="noopener noreferrer"`. Hide the link when the property is absent, null, or blank (including when talking to an older API).
+
 ### 7.2 Availability
 
 ```http

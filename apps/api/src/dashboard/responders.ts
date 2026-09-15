@@ -120,7 +120,7 @@ export async function buildAdminOverviewResponse(
   };
 }
 
-async function getLeadQueue(
+export async function getLeadQueue(
   pool: pg.Pool,
   campaignId: string,
   retryPolicy?: ContactRetryPolicy
@@ -183,6 +183,10 @@ async function getLeadQueue(
 
   return result.rows.map((row) => ({
     id: row.id,
+    zohoLeadId:
+      typeof row.mapped_fields_json?.lead_id === "string"
+        ? row.mapped_fields_json.lead_id.trim() || null
+        : null,
     name: row.display_name ?? "Unknown contact",
     company: row.company ?? "",
     phoneNumber: row.phone_number,

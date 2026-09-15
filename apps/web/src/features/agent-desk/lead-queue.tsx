@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { CheckCircle2, Clock3, PhoneCall, Search } from "lucide-react";
+import { CheckCircle2, Clock3, ExternalLink, PhoneCall, Search } from "lucide-react";
 
 import { getDisplayCompany } from "../../lib/lead-formatters";
 import type { LeadSummary } from "../../types";
@@ -84,6 +84,7 @@ export function LeadQueue({
         </div>
         {visibleLeads.map((lead) => {
           const company = getDisplayCompany(lead.company);
+          const zohoLeadId = lead.zohoLeadId?.trim();
           return (
             <div className={`lead-table-row lead-${lead.status}`} key={lead.id} role="row">
               <span className="lead-avatar" aria-hidden="true">
@@ -93,6 +94,17 @@ export function LeadQueue({
                 <strong>{lead.name}</strong>
                 {activeQueue && company && <small>{company}</small>}
                 <span>{lead.phoneNumber}</span>
+                {zohoLeadId && (
+                  <a
+                    className="lead-crm-link"
+                    href={`https://crm.zoho.com.au/crm/org7002688441/tab/Leads/${encodeURIComponent(zohoLeadId)}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    aria-label={`Open ${lead.name} in Zoho CRM (opens in a new tab)`}
+                  >
+                    Zoho CRM <ExternalLink size={12} aria-hidden="true" />
+                  </a>
+                )}
               </div>
               <div className="lead-row-state" role="cell">
                 <b>{formatLeadStatus(lead)}</b>

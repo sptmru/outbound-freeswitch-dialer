@@ -69,6 +69,7 @@ Firewall and host-published-port changes were excluded by instruction. They are 
 
 ### 5. Agent Experience And Live Updates
 
+- Conditional Zoho CRM profile links in Next leads/Lead queue using imported `lead_id` strings, exposed separately from the limited list of display fields.
 - Agent Desk with campaign selection, next lead, optional campaign-controlled automatic transition to the next callable lead after campaign/lead call completion (never after manual dial), manual number validation, click-to-call, DTMF, hangup, call timer/state, action eligibility, and automatic outcomes.
 - Manual voicemail selection/drop with background job tray and failure/interruption visibility.
 - VM/beep/AVMD signals shown as advisory evidence, never as an automatic drop trigger.
