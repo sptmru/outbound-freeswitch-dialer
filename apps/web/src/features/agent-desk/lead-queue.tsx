@@ -84,7 +84,6 @@ export function LeadQueue({
         </div>
         {visibleLeads.map((lead) => {
           const company = getDisplayCompany(lead.company);
-          const zohoLeadId = lead.zohoLeadId?.trim();
           return (
             <div className={`lead-table-row lead-${lead.status}`} key={lead.id} role="row">
               <span className="lead-avatar" aria-hidden="true">
@@ -94,17 +93,7 @@ export function LeadQueue({
                 <strong>{lead.name}</strong>
                 {activeQueue && company && <small>{company}</small>}
                 <span>{lead.phoneNumber}</span>
-                {zohoLeadId && (
-                  <a
-                    className="lead-crm-link"
-                    href={`https://crm.zoho.com.au/crm/org7002688441/tab/Leads/${encodeURIComponent(zohoLeadId)}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    aria-label={`Open ${lead.name} in Zoho CRM (opens in a new tab)`}
-                  >
-                    Zoho CRM <ExternalLink size={12} aria-hidden="true" />
-                  </a>
-                )}
+                <ZohoCrmLink lead={lead} />
               </div>
               <div className="lead-row-state" role="cell">
                 <b>{formatLeadStatus(lead)}</b>
@@ -136,6 +125,23 @@ export function LeadQueue({
   );
 }
 
+function ZohoCrmLink({ lead }: { lead: LeadSummary }) {
+  const zohoLeadId = lead.zohoLeadId?.trim();
+  if (!zohoLeadId) return null;
+
+  return (
+    <a
+      className="lead-crm-link"
+      href={`https://crm.zoho.com.au/crm/org7002688441/tab/Leads/${encodeURIComponent(zohoLeadId)}`}
+      target="_blank"
+      rel="noopener noreferrer"
+      aria-label={`Open ${lead.name} in Zoho CRM (opens in a new tab)`}
+    >
+      Zoho CRM <ExternalLink size={12} aria-hidden="true" />
+    </a>
+  );
+}
+
 function getInitials(name: string): string {
   return (
     name
@@ -151,7 +157,7 @@ export function LeadContextPanel({ lead }: { lead?: LeadSummary }) {
   const company = getDisplayCompany(lead?.company);
   const visibleFields =
     lead?.fields
-      .filter(({ label }) => !["company", "name", "phone"].includes(label.toLowerCase()))
+      .filter(({ label }) => !["company", "name", "phone", "lead_id"].includes(label.toLowerCase()))
       .slice(0, 5) ?? [];
 
   return (
@@ -168,6 +174,12 @@ export function LeadContextPanel({ lead }: { lead?: LeadSummary }) {
         </div>
       )}
       <div className="lead-facts">
+        {lead?.zohoLeadId?.trim() && (
+          <div>
+            <span>CRM profile</span>
+            <ZohoCrmLink lead={lead} />
+          </div>
+        )}
         {visibleFields.map((field) => (
           <div key={field.label}>
             <span>{field.label}</span>
