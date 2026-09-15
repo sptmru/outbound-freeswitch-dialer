@@ -649,7 +649,7 @@ describe("dashboard route helpers", () => {
       selectedCampaignId,
       "contacts.csv",
       parseCsv(
-        "name,phone,team\nJane,+14155550100,A\nJane duplicate,+14155550100,B\nExisting,+14155550101,C"
+        "name,phone,team,lead_id\nJane,+14155550100,A,51445000042207511\nJane duplicate,+14155550100,B,51445000042207512\nExisting,+14155550101,C,"
       ),
       "US"
     );
@@ -664,6 +664,8 @@ describe("dashboard route helpers", () => {
     );
     const contactInsert = queries.find((query) => query.sql.includes("insert into contacts"));
     assert.equal(JSON.parse(String(contactInsert?.params[1])).length, 2);
+    assert.equal(JSON.parse(String(contactInsert?.params[1]))[0].mapped_fields.lead_id, "51445000042207511");
+    assert.equal(JSON.parse(String(contactInsert?.params[1]))[1].mapped_fields.lead_id, "");
     assert.match(contactInsert?.sql ?? "", /order by normalized_phone_number/);
     const failureInsert = queries.find((query) => query.sql.includes("insert into csv_import_failures"));
     const failures = JSON.parse(String(failureInsert?.params[1])) as Array<{ reason: string }>;

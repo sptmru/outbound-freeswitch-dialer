@@ -108,6 +108,7 @@ export interface AdminAuditResponse {
 
 export interface LeadSummary {
   id: string;
+  zohoLeadId?: string | null;
   name: string;
   company: string;
   phoneNumber: string;
