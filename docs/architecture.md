@@ -133,7 +133,7 @@ This design avoids maintaining per-user product snapshots in the SSE layer. Auth
 6. ESL events update leg state, call state, answer timestamps, recording/AVMD status, hangup cause, automatic outcome, contact status, and agent availability.
 7. The originate watchdog and reconnect reconciliation close missing calls rather than leaving durable state stuck.
 
-Contact selection uses `FOR UPDATE SKIP LOCKED`; database uniqueness also prevents two active claims for one agent/contact. Defaults allow three attempts with a 15-minute delay between retryable attempts.
+Agent Desk and next-contact selection use the same ordering: never-attempted contacts first, then oldest attempt, oldest creation time, and contact UUID ascending to break ties within CSV imports. The desk shows the first 25 contacts with callable contacts first. This is a preview rather than a reservation: another agent may claim a displayed contact before a call starts. Contact selection uses `FOR UPDATE SKIP LOCKED`; database uniqueness also prevents two active claims for one agent/contact. Defaults allow three attempts with a 15-minute delay between retryable attempts.
 
 ## Supervisor Call Flow
 
