@@ -175,7 +175,8 @@ export async function getLeadQueue(
           else 1
         end,
         contacts.last_attempted_at asc nulls first,
-        contacts.created_at asc
+        contacts.created_at asc,
+        contacts.id asc
       limit 25
     `,
     [campaignId, retryPolicy?.maxAttempts ?? 2_147_483_647, retryPolicy?.retryDelaySeconds ?? 0]

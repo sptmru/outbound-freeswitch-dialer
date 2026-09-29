@@ -64,7 +64,7 @@ async function getNextCallableContactForUpdate(
           or contacts.last_attempted_at <= now() - make_interval(secs => $3)
         )
         and suppression_entries.id is null
-      order by contacts.last_attempted_at asc nulls first, contacts.created_at asc
+      order by contacts.last_attempted_at asc nulls first, contacts.created_at asc, contacts.id asc
       limit 1
       for update of contacts skip locked
     `,
