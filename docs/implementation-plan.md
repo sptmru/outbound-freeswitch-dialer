@@ -86,7 +86,7 @@ Firewall and host-published-port changes were excluded by instruction. They are 
 - Paginated campaign contacts and CSV import failures, selected-campaign continuity from Agent Desk, row feedback, search, filters, and manual contact actions.
 - User create/edit/deactivate/reactivate/role/password lifecycle with preserved attribution and FreeSWITCH cleanup.
 - Suppression add/update/search/pagination/import/removal and durable change/blocked-dial events.
-- Paginated/filterable call history, detailed event timeline with explicit latest-100 truncation status, bounded streaming CSV export, and media playback with browser decode/error feedback.
+- Paginated/filterable call history, detailed event timeline with explicit latest-100 truncation status, bounded streaming CSV export, campaign recording ZIP download with an availability check, and media playback with browser decode/error feedback.
 - Stable per-section application URLs with browser back/forward support plus URL- and browser-persisted Agent Desk campaign selection.
 - Successful mutating admin requests recorded with actor/request/route/status/source metadata and bounded route parameters; paginated audit endpoint with actor/method/date filters.
 - Supervisor endpoint/session persistence, active-session metric, agent-visible state, and action/call/session/mode-enriched audit records.

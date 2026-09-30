@@ -462,6 +462,47 @@ describe("dashboard route helpers", () => {
       });
       assert.equal(response.statusCode, 401);
       assert.equal(queryCount, 0);
+      const check = await app.inject({
+        method: "HEAD",
+        url: `/admin/campaigns/${selectedCampaignId}/recordings.zip`,
+        headers: { authorization: "Bearer invalid" }
+      });
+      assert.equal(check.statusCode, 401);
+      assert.equal(queryCount, 0);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("denies agents access to both recording checks and downloads", async () => {
+    const app = Fastify();
+    const agent = userRow({ role: "agent" });
+    const routeConfig = {
+      JWT_EXPIRES_SECONDS: 3_600,
+      JWT_SECRET: "campaign-recording-export-test-secret"
+    } as AppConfig;
+    const pool = createQueryPool((sql) => {
+      if (sql.includes("from users")) {
+        return rows([{ ...agent, is_active: true, auth_version: 1 }]);
+      }
+      throw new Error(`An agent must not inspect recordings: ${sql}`);
+    });
+    registerDashboardRoutes(app, routeConfig, pool);
+    const token = signAuthToken(routeConfig, {
+      sub: agent.id,
+      email: agent.email,
+      role: "agent",
+      ver: 1
+    });
+    try {
+      for (const method of ["HEAD", "GET"] as const) {
+        const response = await app.inject({
+          method,
+          url: `/admin/campaigns/${selectedCampaignId}/recordings.zip`,
+          headers: { authorization: `Bearer ${token}` }
+        });
+        assert.equal(response.statusCode, 403);
+      }
     } finally {
       await app.close();
     }
@@ -509,6 +550,13 @@ describe("dashboard route helpers", () => {
       });
       assert.equal(response.statusCode, 404);
       assert.deepEqual(response.json(), { message: "Campaign not found" });
+      const check = await app.inject({
+        method: "HEAD",
+        url: `/admin/campaigns/${selectedCampaignId}/recordings.zip`,
+        headers: { authorization: `Bearer ${token}` }
+      });
+      assert.equal(check.statusCode, 404);
+      assert.equal(check.body, "");
       assert.equal(
         queries.some((sql) => sql.includes("from calls")),
         false
@@ -561,6 +609,14 @@ describe("dashboard route helpers", () => {
       assert.deepEqual(response.json(), {
         message: "No playable call recordings found for this campaign"
       });
+      const check = await app.inject({
+        method: "HEAD",
+        url: `/admin/campaigns/${selectedCampaignId}/recordings.zip`,
+        headers: { authorization: `Bearer ${token}` }
+      });
+      assert.equal(check.statusCode, 404);
+      assert.equal(check.headers["cache-control"], "private, no-store");
+      assert.equal(check.body, "");
     } finally {
       await app.close();
     }
@@ -620,6 +676,17 @@ describe("dashboard route helpers", () => {
     });
 
     try {
+      const check = await app.inject({
+        method: "HEAD",
+        url: `/admin/campaigns/${selectedCampaignId}/recordings.zip`,
+        headers: { authorization: `Bearer ${token}` }
+      });
+      assert.equal(check.statusCode, 200);
+      assert.equal(check.headers["x-recording-count"], "1");
+      assert.equal(check.headers["x-recording-skipped-count"], "0");
+      assert.equal(check.headers["cache-control"], "private, no-store");
+      assert.equal(check.body, "");
+      assert.equal(auditParams.length, 0);
       const response = await app.inject({
         method: "GET",
         url: `/admin/campaigns/${selectedCampaignId}/recordings.zip`,

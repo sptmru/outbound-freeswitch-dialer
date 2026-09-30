@@ -511,6 +511,26 @@ export function getCampaignRecordingsExportUrl(campaignId: string): string {
   return `${API_BASE_URL}/admin/campaigns/${encodeURIComponent(campaignId)}/recordings.zip`;
 }
 
+export async function checkCampaignRecordingsExport(campaignId: string, signal?: AbortSignal): Promise<void> {
+  const response = await fetch(getCampaignRecordingsExportUrl(campaignId), {
+    method: "HEAD",
+    credentials: "include",
+    cache: "no-store",
+    signal
+  });
+  if (!response.ok) {
+    const message =
+      response.status === 404
+        ? "No downloadable recordings found for this campaign."
+        : response.status === 401
+          ? "Your session has expired. Sign in again to download recordings."
+          : response.status === 403
+            ? "Only administrators can download campaign recordings."
+            : "Could not check campaign recordings. Please try again.";
+    throw new ApiError(message, response.status, null);
+  }
+}
+
 export async function uploadRecording(input: {
   file: File;
   name: string;

@@ -1,6 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { Activity, Download, History } from "lucide-react";
-import { downloadCallHistoryCsv, downloadCallPcap, fetchCallDetail, fetchCallHistory } from "../../api";
+import {
+  checkCampaignRecordingsExport,
+  downloadCallHistoryCsv,
+  downloadCallPcap,
+  fetchCallDetail,
+  fetchCallHistory,
+  getCampaignRecordingsExportUrl
+} from "../../api";
 import { PanelHeader } from "../../components/ui-primitives";
 import { formatCallLifecycleStatus } from "../../lib/call-formatters";
 import { getErrorMessage } from "../../lib/errors";
@@ -30,6 +37,8 @@ export function HistoryView({
   refreshVersion: number;
 }) {
   const detailRequestRef = useRef(0);
+  const recordingExportRef = useRef<AbortController | null>(null);
+  const [recordingExportPending, setRecordingExportPending] = useState(false);
   const [selectedCallId, setSelectedCallId] = useState<string | null>(null);
   const [technicalCallId, setTechnicalCallId] = useState<string | null>(null);
   const [detail, setDetail] = useState<CallDetailResponse | null>(null);
@@ -58,6 +67,7 @@ export function HistoryView({
   useEffect(
     () => () => {
       detailRequestRef.current += 1;
+      recordingExportRef.current?.abort();
     },
     []
   );
@@ -106,6 +116,32 @@ export function HistoryView({
     refreshVersion,
     voicemail
   ]);
+
+  async function exportRecordings() {
+    if (!campaignId || recordingExportRef.current) return;
+    const controller = new AbortController();
+    recordingExportRef.current = controller;
+    setRecordingExportPending(true);
+    setError(null);
+    try {
+      await checkCampaignRecordingsExport(campaignId, controller.signal);
+      if (controller.signal.aborted) return;
+      // Let the browser stream the archive to disk instead of buffering a Blob.
+      const link = document.createElement("a");
+      link.href = getCampaignRecordingsExportUrl(campaignId);
+      link.download = `campaign-${campaignId}-recordings.zip`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+    } catch (exportError) {
+      if (!controller.signal.aborted) {
+        setError(getErrorMessage(exportError, "Could not download campaign recordings"));
+      }
+    } finally {
+      recordingExportRef.current = null;
+      if (!controller.signal.aborted) setRecordingExportPending(false);
+    }
+  }
 
   async function exportHistory() {
     setError(null);
@@ -200,6 +236,7 @@ export function HistoryView({
           Campaign
           <select
             value={campaignId}
+            disabled={recordingExportPending}
             onChange={(event) => {
               setCampaignId(event.target.value);
               setPage(1);
@@ -334,6 +371,23 @@ export function HistoryView({
         >
           Export CSV
         </button>
+      </div>
+      <div className="history-recordings-export">
+        <button
+          className="secondary-action compact-action"
+          type="button"
+          disabled={!campaignId || recordingExportPending}
+          aria-describedby="history-recordings-export-hint"
+          onClick={() => void exportRecordings()}
+        >
+          <Download size={16} />
+          {recordingExportPending ? "Checking recordings…" : "Download campaign recordings"}
+        </button>
+        <small id="history-recordings-export-hint">
+          {campaignId
+            ? "Downloads all available recordings for this campaign as a ZIP. Other history filters do not apply."
+            : "Select a campaign to download its recordings."}
+        </small>
       </div>
       {error && (
         <p className="form-error" role="alert">

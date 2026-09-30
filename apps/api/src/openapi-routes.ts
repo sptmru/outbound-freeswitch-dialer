@@ -313,6 +313,17 @@ add("GET", "/admin/campaigns", "List campaigns", "Returns a searchable, paginate
   errors: adminErrors
 });
 add(
+  "HEAD",
+  "/admin/campaigns/:campaignId/recordings.zip",
+  "Check campaign recording export availability",
+  "Checks canonical recording files without creating an archive or an export-start audit event. Returns 200 with X-Recording-Count and X-Recording-Skipped-Count when downloadable files exist, or 404 for a missing campaign or no playable files. No response body; the subsequent GET rechecks availability.",
+  {
+    params: campaignParams,
+    success: emptyResponse,
+    errors: [...adminErrors, 404]
+  }
+);
+add(
   "GET",
   "/admin/campaigns/:campaignId/recordings.zip",
   "Export campaign call recordings",
