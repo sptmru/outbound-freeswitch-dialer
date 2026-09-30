@@ -11,7 +11,7 @@ import {
   sendFreeSwitchApiCommand
 } from "../esl.js";
 import { lockUserMediaAction } from "../user-media-lock.js";
-import { lockDefaultRecordingSelection } from "./recordings.js";
+import { lockCampaignVoicemail } from "./recordings.js";
 
 interface LockedCallableContact {
   id: string;
@@ -155,19 +155,6 @@ async function getCallableContactForUpdate(
     callRecordingEnabled: row.call_recording_enabled,
     earlyMediaAvmdEnabled: row.early_media_avmd_enabled
   };
-}
-
-async function getDefaultRecordingId(client: pg.Pool | pg.PoolClient): Promise<string | null> {
-  const result = await client.query<{ id: string }>(
-    `
-      select id
-      from recordings
-      where is_active = true
-      order by is_default desc, created_at desc
-      limit 1
-    `
-  );
-  return result.rows[0]?.id ?? null;
 }
 
 type CreateDialerCallFailureReason =
@@ -364,8 +351,7 @@ export async function createDialerCall(
       };
     }
 
-    await lockDefaultRecordingSelection(client);
-    const recordingId = await getDefaultRecordingId(client);
+    const recordingId = null;
     const call = await client.query<{ id: string }>(
       `
         insert into calls (
@@ -862,10 +848,9 @@ export async function dropVoicemailForCall(
   config: AppConfig,
   userId: string,
   callId: string,
-  recordingId?: string,
   sendApiCommand: typeof sendFreeSwitchApiCommand = sendFreeSwitchApiCommand
 ): Promise<{ ok: true } | { ok: false; statusCode: 404 | 409 | 502; message: string }> {
-  const initial = await getVoicemailDropCall(pool, userId, callId, recordingId);
+  const initial = await getVoicemailDropCall(pool, userId, callId);
   const row = initial.rows[0];
   if (!row) {
     return { ok: false, statusCode: 404, message: "Active call not found" };
@@ -876,24 +861,23 @@ export async function dropVoicemailForCall(
   if (row.ended_at || ["completed", "failed", "canceled"].includes(row.state)) {
     return { ok: false, statusCode: 404, message: "Active call not found" };
   }
-  if (recordingId && !row.selected_recording_id) {
-    return { ok: false, statusCode: 409, message: "Selected voicemail recording is not available" };
-  }
   if (!row.customer_leg_uuid) {
     return { ok: false, statusCode: 409, message: "Customer leg is not ready for voicemail drop" };
   }
   if (row.state !== "bridged" && row.state !== "voicemail_signal_detected") {
     return { ok: false, statusCode: 409, message: "Voicemail drop is available after the customer answers" };
   }
-  if (!row.runtime_file_path) {
-    return { ok: false, statusCode: 409, message: "No voicemail recording is assigned to this call" };
-  }
 
   const client = await pool.connect();
   let claimed: VoicemailDropCallRow | null = null;
   try {
     await client.query("begin");
-    const locked = await getVoicemailDropCall(client, userId, callId, recordingId, true);
+    if (!row.campaign_id) {
+      await client.query("rollback");
+      return { ok: false, statusCode: 409, message: "No voicemail is configured for this campaign" };
+    }
+    await lockCampaignVoicemail(client, row.campaign_id);
+    const locked = await getVoicemailDropCall(client, userId, callId, true);
     claimed = locked.rows[0] ?? null;
     if (!claimed) {
       await client.query("rollback");
@@ -906,17 +890,15 @@ export async function dropVoicemailForCall(
     if (
       claimed.ended_at ||
       (claimed.state !== "bridged" && claimed.state !== "voicemail_signal_detected") ||
-      !claimed.customer_leg_uuid ||
-      !claimed.runtime_file_path ||
-      (recordingId && !claimed.selected_recording_id)
+      !claimed.customer_leg_uuid
     ) {
       await client.query("rollback");
       return { ok: false, statusCode: 409, message: "The call is no longer available for voicemail drop" };
     }
 
-    if (!claimed.effective_recording_id) {
+    if (!claimed.effective_recording_id || !claimed.runtime_file_path) {
       await client.query("rollback");
-      return { ok: false, statusCode: 409, message: "The voicemail recording is no longer available" };
+      return { ok: false, statusCode: 409, message: "No voicemail is configured for this campaign" };
     }
     const lockedRecording = await client.query<{ runtime_file_path: string }>(
       `
@@ -939,7 +921,7 @@ export async function dropVoicemailForCall(
       `
         update calls
         set state = 'voicemail_drop_requested',
-            recording_id = coalesce($2, recording_id),
+            recording_id = $2,
             voicemail_drop_requested_at = coalesce(voicemail_drop_requested_at, now()),
             updated_at = now()
         where id = $1
@@ -965,14 +947,21 @@ export async function dropVoicemailForCall(
           raw_json
         )
         values ($1, $2, 'voicemail_drop_requested', 'voicemail_drop_requested', 'uuid_transfer', $3, $4, $5::jsonb)
-        on conflict do nothing
+        on conflict (call_id, event_type) where event_type in (
+          'voicemail_drop_requested', 'voicemail_playback_started', 'agent_released',
+          'voicemail_playback_completed', 'voicemail_playback_interrupted'
+        ) do update set raw_json = excluded.raw_json, created_at = now()
       `,
       [
         callId,
         claimed.agent_id,
         claimed.agent_leg_uuid,
         claimed.customer_leg_uuid,
-        JSON.stringify({ recordingId: effectiveRecordingId, recordingPath: claimed.runtime_file_path })
+        JSON.stringify({
+          campaignId: claimed.campaign_id,
+          recordingId: effectiveRecordingId,
+          recordingPath: claimed.runtime_file_path
+        })
       ]
     );
     await client.query("commit");
@@ -1023,7 +1012,8 @@ export async function dropVoicemailForCall(
       raw: {
         ambiguous: !explicitCommandRejection,
         message,
-        recordingPath: claimed.runtime_file_path
+        recordingPath: claimed.runtime_file_path,
+        recordingId: claimed.effective_recording_id
       }
     });
     return { ok: false, statusCode: 502, message: "The calling service could not start voicemail playback" };
@@ -1114,7 +1104,7 @@ interface VoicemailDropCallRow {
   ended_at: Date | null;
   outcome: CallOutcome | null;
   runtime_file_path: string | null;
-  selected_recording_id: string | null;
+  campaign_id: string | null;
   state: CallState;
 }
 
@@ -1122,7 +1112,6 @@ function getVoicemailDropCall(
   queryable: pg.Pool | pg.PoolClient,
   userId: string,
   callId: string,
-  recordingId?: string,
   lock = false
 ): Promise<pg.QueryResult<VoicemailDropCallRow>> {
   return queryable.query<VoicemailDropCallRow>(
@@ -1135,21 +1124,22 @@ function getVoicemailDropCall(
         calls.contact_id,
         agent_leg.freeswitch_uuid as agent_leg_uuid,
         customer_leg.freeswitch_uuid as customer_leg_uuid,
-        selected_recording.id as selected_recording_id,
-        coalesce(selected_recording.id, recordings.id) as effective_recording_id,
-        coalesce(selected_recording.runtime_file_path, recordings.runtime_file_path) as runtime_file_path
+        calls.campaign_id,
+        recordings.id as effective_recording_id,
+        recordings.runtime_file_path
       from calls
       join agents on agents.id = calls.agent_id
       left join call_legs agent_leg on agent_leg.call_id = calls.id and agent_leg.type = 'agent'
       left join call_legs customer_leg on customer_leg.call_id = calls.id and customer_leg.type = 'customer'
-      left join recordings on recordings.id = calls.recording_id and recordings.is_active = true
-      left join recordings selected_recording on selected_recording.id = $3 and selected_recording.is_active = true
+      left join campaigns on campaigns.id = calls.campaign_id
+      left join recordings on recordings.id = campaigns.voicemail_recording_id
+        and recordings.campaign_id = calls.campaign_id and recordings.is_active = true
       where calls.id = $1
         and agents.user_id = $2
       limit 1
       ${lock ? "for update of calls" : ""}
     `,
-    [callId, userId, recordingId ?? null]
+    [callId, userId]
   );
 }
 

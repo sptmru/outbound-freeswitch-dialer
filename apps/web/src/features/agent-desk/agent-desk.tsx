@@ -1,6 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 
-import { dropVoicemail, endCall, sendDtmf, startLeadCall, startManualCall, startNextCall } from "../../api";
+import {
+  fetchAgentDesk,
+  dropVoicemail,
+  endCall,
+  sendDtmf,
+  startLeadCall,
+  startManualCall,
+  startNextCall
+} from "../../api";
 import type { SoftphoneRuntime } from "../../softphone";
 import type { AgentDeskResponse, LeadSummary } from "../../types";
 import { ActiveCall } from "./active-call";
@@ -177,10 +185,10 @@ export function AgentDesk({
     );
   }
 
-  async function handleDropVoicemail(callId: string, recordingId?: string) {
+  async function handleDropVoicemail(callId: string) {
     await runCallControl(
       "voicemail",
-      () => dropVoicemail(callId, { campaignId: campaign?.id, recordingId }),
+      () => dropVoicemail(callId, { campaignId: campaign?.id }),
       "Could not drop voicemail"
     );
   }
@@ -208,6 +216,13 @@ export function AgentDesk({
       onDeskChanged(await action());
     } catch (error) {
       setEndCallError(error instanceof Error ? error.message : fallbackError);
+      if (kind === "voicemail") {
+        try {
+          onDeskChanged(await fetchAgentDesk(campaign?.id));
+        } catch {
+          /* Keep the action error; the normal live refresh will retry. */
+        }
+      }
     } finally {
       callControlPendingRef.current = null;
       setCallControlPending(null);

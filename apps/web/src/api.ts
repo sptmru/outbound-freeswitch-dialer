@@ -363,7 +363,7 @@ export async function fetchAdminCampaigns(
 }
 
 export async function fetchAdminRecordings(
-  filters: AdminLibraryFilters = {}
+  filters: AdminLibraryFilters & { campaignId?: string } = {}
 ): Promise<AdminRecordingListResponse> {
   const query = toQuery(filters);
   return apiFetch<AdminRecordingListResponse>(`/admin/recordings${query ? `?${query}` : ""}`);
@@ -511,14 +511,36 @@ export function getCampaignRecordingsExportUrl(campaignId: string): string {
   return `${API_BASE_URL}/admin/campaigns/${encodeURIComponent(campaignId)}/recordings.zip`;
 }
 
+export async function checkCampaignRecordingsExport(campaignId: string, signal?: AbortSignal): Promise<void> {
+  const response = await fetch(getCampaignRecordingsExportUrl(campaignId), {
+    method: "HEAD",
+    credentials: "include",
+    cache: "no-store",
+    signal
+  });
+  if (!response.ok) {
+    const message =
+      response.status === 404
+        ? "No downloadable recordings found for this campaign."
+        : response.status === 401
+          ? "Your session has expired. Sign in again to download recordings."
+          : response.status === 403
+            ? "Only administrators can download campaign recordings."
+            : "Could not check campaign recordings. Please try again.";
+    throw new ApiError(message, response.status, null);
+  }
+}
+
 export async function uploadRecording(input: {
   file: File;
   name: string;
-  makeDefault: boolean;
+  campaignId: string;
+  useForCampaign: boolean;
 }): Promise<CreateRecordingResponse> {
   const formData = new FormData();
   formData.set("name", input.name);
-  formData.set("makeDefault", String(input.makeDefault));
+  formData.set("campaignId", input.campaignId);
+  formData.set("useForCampaign", String(input.useForCampaign));
   formData.set("file", input.file);
 
   return apiFetch<CreateRecordingResponse>("/admin/recordings", {
@@ -527,15 +549,14 @@ export async function uploadRecording(input: {
   });
 }
 
-export async function setDefaultRecording(
-  recordingId: string
-): Promise<MutationResponse<AdminOverviewResponse["recordings"][number]>> {
-  return apiFetch<MutationResponse<AdminOverviewResponse["recordings"][number]>>(
-    `/admin/recordings/${recordingId}/default`,
-    {
-      method: "PATCH"
-    }
-  );
+export async function setCampaignVoicemail(
+  campaignId: string,
+  recordingId: string | null
+): Promise<{ campaignId: string; recordingId: string | null }> {
+  return apiFetch(`/admin/campaigns/${campaignId}/voicemail`, {
+    method: "PATCH",
+    body: JSON.stringify({ recordingId })
+  });
 }
 
 export async function deleteRecording(recordingId: string): Promise<DeleteResponse> {

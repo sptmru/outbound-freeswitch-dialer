@@ -676,6 +676,7 @@
                 "additionalProperties": false
               }
             },
+            "voicemailRecordingId": { "type": ["string", "null"] },
             "manualDialingEnabled": { "type": "boolean" },
             "callRecordingEnabled": { "type": "boolean" },
             "earlyMediaAvmdEnabled": { "type": "boolean" },
@@ -689,6 +690,7 @@
             "callable",
             "attempted",
             "outcomeDistribution",
+            "voicemailRecordingId",
             "manualDialingEnabled",
             "callRecordingEnabled",
             "earlyMediaAvmdEnabled",
@@ -704,11 +706,23 @@
           "properties": {
             "id": { "type": "string" },
             "name": { "type": "string" },
+            "campaignId": { "type": "string" },
+            "campaignName": { "type": "string" },
+            "isAssigned": { "type": "boolean" },
             "durationSeconds": { "type": "number" },
             "fileSizeBytes": { "type": "number" },
             "status": { "type": "string" }
           },
-          "required": ["id", "name", "durationSeconds", "fileSizeBytes", "status"],
+          "required": [
+            "id",
+            "name",
+            "campaignId",
+            "campaignName",
+            "isAssigned",
+            "durationSeconds",
+            "fileSizeBytes",
+            "status"
+          ],
           "additionalProperties": false
         }
       },
@@ -1198,6 +1212,7 @@
                 "additionalProperties": false
               }
             },
+            "voicemailRecordingId": { "type": ["string", "null"] },
             "manualDialingEnabled": { "type": "boolean" },
             "callRecordingEnabled": { "type": "boolean" },
             "earlyMediaAvmdEnabled": { "type": "boolean" },
@@ -1211,6 +1226,7 @@
             "callable",
             "attempted",
             "outcomeDistribution",
+            "voicemailRecordingId",
             "manualDialingEnabled",
             "callRecordingEnabled",
             "earlyMediaAvmdEnabled",
@@ -1239,11 +1255,23 @@
           "properties": {
             "id": { "type": "string" },
             "name": { "type": "string" },
+            "campaignId": { "type": "string" },
+            "campaignName": { "type": "string" },
+            "isAssigned": { "type": "boolean" },
             "durationSeconds": { "type": "number" },
             "fileSizeBytes": { "type": "number" },
             "status": { "type": "string" }
           },
-          "required": ["id", "name", "durationSeconds", "fileSizeBytes", "status"],
+          "required": [
+            "id",
+            "name",
+            "campaignId",
+            "campaignName",
+            "isAssigned",
+            "durationSeconds",
+            "fileSizeBytes",
+            "status"
+          ],
           "additionalProperties": false
         }
       },
@@ -1716,11 +1744,23 @@
         "properties": {
           "id": { "type": "string" },
           "name": { "type": "string" },
+          "campaignId": { "type": "string" },
+          "campaignName": { "type": "string" },
+          "isAssigned": { "type": "boolean" },
           "durationSeconds": { "type": "number" },
           "fileSizeBytes": { "type": "number" },
           "status": { "type": "string" }
         },
-        "required": ["id", "name", "durationSeconds", "fileSizeBytes", "status"],
+        "required": [
+          "id",
+          "name",
+          "campaignId",
+          "campaignName",
+          "isAssigned",
+          "durationSeconds",
+          "fileSizeBytes",
+          "status"
+        ],
         "additionalProperties": false
       }
     },
@@ -1777,6 +1817,7 @@
               "additionalProperties": false
             }
           },
+          "voicemailRecordingId": { "type": ["string", "null"] },
           "manualDialingEnabled": { "type": "boolean" },
           "callRecordingEnabled": { "type": "boolean" },
           "earlyMediaAvmdEnabled": { "type": "boolean" },
@@ -1790,6 +1831,7 @@
           "callable",
           "attempted",
           "outcomeDistribution",
+          "voicemailRecordingId",
           "manualDialingEnabled",
           "callRecordingEnabled",
           "earlyMediaAvmdEnabled",
@@ -2146,7 +2188,21 @@
   "DropVoicemailRequest": {
     "$id": "DropVoicemailRequest",
     "type": "object",
-    "properties": { "campaignId": { "type": "string" }, "recordingId": { "type": "string" } },
+    "properties": { "campaignId": { "type": "string" } },
+    "additionalProperties": false
+  },
+  "SetCampaignVoicemailRequest": {
+    "$id": "SetCampaignVoicemailRequest",
+    "type": "object",
+    "properties": { "recordingId": { "type": ["string", "null"] } },
+    "required": ["recordingId"],
+    "additionalProperties": false
+  },
+  "CampaignVoicemailResponse": {
+    "$id": "CampaignVoicemailResponse",
+    "type": "object",
+    "properties": { "campaignId": { "type": "string" }, "recordingId": { "type": ["string", "null"] } },
+    "required": ["campaignId", "recordingId"],
     "additionalProperties": false
   },
   "SendDtmfRequest": {

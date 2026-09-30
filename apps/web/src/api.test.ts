@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  checkCampaignRecordingsExport,
   downloadCallHistoryCsv,
   fetchAdminAudit,
   fetchAdminCampaigns,
@@ -83,6 +84,29 @@ describe("cookie-authenticated API client", () => {
     expect(getCampaignRecordingsExportUrl("campaign/id")).toBe(
       "/api/admin/campaigns/campaign%2Fid/recordings.zip"
     );
+  });
+
+  it("checks recording availability without fetching an archive body", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+    await checkCampaignRecordingsExport("campaign/id", controller.signal);
+    expect(fetchMock).toHaveBeenCalledWith("/api/admin/campaigns/campaign%2Fid/recordings.zip", {
+      method: "HEAD",
+      credentials: "include",
+      cache: "no-store",
+      signal: controller.signal
+    });
+  });
+
+  it.each([
+    [404, "No downloadable recordings found for this campaign."],
+    [401, "Your session has expired. Sign in again to download recordings."],
+    [403, "Only administrators can download campaign recordings."],
+    [500, "Could not check campaign recordings. Please try again."]
+  ])("reports bodyless recording preflight errors (%s)", async (status, message) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status }));
+    await expect(checkCampaignRecordingsExport("campaign-1")).rejects.toMatchObject({ status, message });
   });
 
   it("encodes admin audit filters without exposing session credentials", async () => {

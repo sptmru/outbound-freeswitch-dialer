@@ -88,7 +88,7 @@ import {
   getCampaignsPage,
   resetCampaignLeads
 } from "./campaigns.js";
-import { openCampaignRecordingExport } from "./campaign-recording-export.js";
+import { inspectCampaignRecordingExport, openCampaignRecordingExport } from "./campaign-recording-export.js";
 import {
   createDialerCall,
   createDialerCallFailureMessage,
@@ -123,7 +123,8 @@ import {
   RecordingProcessingError,
   restoreDeletedRecording,
   transcodeRecordingToCanonicalWav,
-  setDefaultRecording
+  setCampaignVoicemail,
+  RecordingAssignmentError
 } from "./recordings.js";
 import {
   buildAdminOverviewResponse,
@@ -219,10 +220,11 @@ const updateCallStatusSchema = z.object({
   outcome: z.enum(callOutcomes)
 }) satisfies z.ZodType<UpdateCallStatusRequest>;
 
-const dropVoicemailSchema = z.object({
-  campaignId: z.string().uuid().optional(),
-  recordingId: z.string().uuid().optional()
-}) satisfies z.ZodType<DropVoicemailRequest>;
+const dropVoicemailSchema = z
+  .object({
+    campaignId: z.string().uuid().optional()
+  })
+  .strict() satisfies z.ZodType<DropVoicemailRequest>;
 
 const sendDtmfSchema = z.object({
   digit: z.enum(["1", "2", "3", "4", "5", "6", "7", "8", "9", "*", "0", "#"]),
@@ -601,6 +603,29 @@ export function registerDashboardRoutes(
     return getCampaignsPage(pool, query, contactRetryPolicy);
   });
 
+  // Register before GET so Fastify does not create a HEAD handler that builds a ZIP.
+  app.head(
+    "/admin/campaigns/:campaignId/recordings.zip",
+    { config: { swagger: { exposeHeadRoute: true } } },
+    async (request, reply) => {
+      const user = await requireAdmin(request, reply, config, pool);
+      if (!user) return;
+      const { campaignId } = campaignParamsSchema.parse(request.params);
+      const checked = await inspectCampaignRecordingExport(
+        pool,
+        campaignId,
+        config.CALL_RECORDINGS_STORAGE_DIR
+      );
+      reply.header("Cache-Control", "private, no-store");
+      if (checked.status !== "ready") return reply.code(404).send();
+      return reply
+        .header("Content-Type", "application/zip")
+        .header("X-Recording-Count", checked.included.length)
+        .header("X-Recording-Skipped-Count", checked.skipped.length)
+        .send();
+    }
+  );
+
   app.get(
     "/admin/campaigns/:campaignId/recordings.zip",
     async (request, reply): Promise<FastifyReply | void> => {
@@ -651,7 +676,9 @@ export function registerDashboardRoutes(
     if (!user) {
       return;
     }
-    const query = adminLibraryQuerySchema.parse(request.query);
+    const query = adminLibraryQuerySchema
+      .extend({ campaignId: z.string().uuid().optional() })
+      .parse(request.query);
     return getRecordingsPage(pool, query);
   });
 
@@ -673,7 +700,7 @@ export function registerDashboardRoutes(
     return getCallHistoryPage(pool, query);
   });
 
-  app.get("/admin/calls/export.csv", async (request, reply): Promise<void> => {
+  app.get("/admin/calls/export.csv", async (request, reply): Promise<FastifyReply | void> => {
     const user = await requireAdmin(request, reply, config, pool);
     if (!user) {
       return;
@@ -692,7 +719,7 @@ export function registerDashboardRoutes(
         "Content-Disposition",
         `attachment; filename="call-history-${new Date().toISOString().slice(0, 10)}.csv"`
       );
-    reply.send(exportResult.stream);
+    return reply.send(exportResult.stream);
   });
 
   app.get("/admin/calls/:callId", async (request, reply): Promise<CallDetailResponse | void> => {
@@ -1156,13 +1183,7 @@ export function registerDashboardRoutes(
       const publicUser = toPublicUser(user);
       const params = z.object({ callId: z.string().uuid() }).parse(request.params);
       const input = dropVoicemailSchema.parse(request.body ?? {});
-      const dropped = await dropVoicemailForCall(
-        pool,
-        config,
-        publicUser.id,
-        params.callId,
-        input.recordingId
-      );
+      const dropped = await dropVoicemailForCall(pool, config, publicUser.id, params.callId);
       if (!dropped.ok) {
         return reply.code(dropped.statusCode).send({ message: dropped.message });
       }
@@ -1233,6 +1254,9 @@ export function registerDashboardRoutes(
           status: row.status,
           loaded: 0,
           callable: 0,
+          attempted: 0,
+          outcomeDistribution: [],
+          voicemailRecordingId: null,
           manualDialingEnabled: input.manualDialingEnabled,
           callRecordingEnabled: input.callRecordingEnabled,
           earlyMediaAvmdEnabled: input.earlyMediaAvmdEnabled,
@@ -1348,7 +1372,13 @@ export function registerDashboardRoutes(
     }
 
     const name = normalizeRecordingName(getMultipartFieldValue(file.fields.name), file.filename);
-    const makeDefault = parseBooleanField(getMultipartFieldValue(file.fields.makeDefault));
+    const campaignIdResult = z.string().uuid().safeParse(getMultipartFieldValue(file.fields.campaignId));
+    if (!campaignIdResult.success) {
+      file.file.resume();
+      return reply.code(400).send({ message: "Choose a campaign before uploading voicemail" });
+    }
+    const campaignId = campaignIdResult.data;
+    const useForCampaign = parseBooleanField(getMultipartFieldValue(file.fields.useForCampaign));
     const fileId = randomUUID();
     const storedFilename = `${fileId}.wav`;
     const storagePath = join(config.VOICEMAIL_RECORDINGS_STORAGE_DIR, storedFilename);
@@ -1371,11 +1401,16 @@ export function registerDashboardRoutes(
         runtimeFilePath: storagePath,
         durationSeconds: processed.durationSeconds,
         fileSizeBytes: processed.fileSizeBytes,
-        makeDefault
+        campaignId,
+        useForCampaign,
+        requestId: request.id
       });
       return reply.code(201).send({ item });
     } catch (error) {
       await unlink(storagePath).catch(() => undefined);
+      if (error instanceof RecordingAssignmentError) {
+        return reply.code(error.statusCode).send({ message: error.message });
+      }
       if (error instanceof RecordingProcessingError) {
         const status = error.code === "processor_unavailable" ? 503 : 400;
         return reply.code(status).send({ message: error.message });
@@ -1386,22 +1421,29 @@ export function registerDashboardRoutes(
     }
   });
 
-  app.patch(
-    "/admin/recordings/:recordingId/default",
-    async (request, reply): Promise<MutationResponse<AdminOverviewResponse["recordings"][number]> | void> => {
-      const user = await requireAdmin(request, reply, config, pool);
-      if (!user) {
-        return;
-      }
-
-      const params = recordingParamsSchema.parse(request.params);
-      const item = await setDefaultRecording(pool, params.recordingId);
-      if (!item) {
-        return reply.code(404).send({ message: "Recording not found" });
-      }
-      return { item };
+  app.patch("/admin/campaigns/:campaignId/voicemail", async (request, reply) => {
+    if (!(await requireAdmin(request, reply, config, pool))) return;
+    const { campaignId } = campaignParamsSchema.parse(request.params);
+    const { recordingId } = z
+      .object({ recordingId: z.string().uuid().nullable() })
+      .strict()
+      .parse(request.body);
+    try {
+      await setCampaignVoicemail(pool, campaignId, recordingId, request.id);
+      return { campaignId, recordingId };
+    } catch (error) {
+      if (error instanceof RecordingAssignmentError)
+        return reply.code(error.statusCode).send({ message: error.message });
+      throw error;
     }
-  );
+  });
+
+  app.patch("/admin/recordings/:recordingId/default", async (request, reply) => {
+    if (!(await requireAdmin(request, reply, config, pool))) return;
+    const message =
+      "Global voicemail defaults are no longer supported. Refresh and assign voicemail to a campaign.";
+    return reply.code(410).send({ message });
+  });
 
   app.get("/admin/recordings/:recordingId/audio", async (request, reply): Promise<void> => {
     const params = recordingParamsSchema.parse(request.params);
@@ -1467,6 +1509,11 @@ export function registerDashboardRoutes(
     const deleted = await deleteRecording(pool, params.recordingId);
     if (deleted.status === "not_found") {
       return reply.code(404).send({ message: "Recording not found" });
+    }
+    if (deleted.status === "assigned") {
+      return reply
+        .code(409)
+        .send({ message: "Replace or disable this campaign's voicemail before deleting the recording" });
     }
     if (deleted.status === "in_use") {
       return reply.code(409).send({ message: "Recording is assigned to an active call or voicemail job" });

@@ -7,6 +7,7 @@ import type { PublicUser } from "@outbound-dialer/shared";
 import multipart from "@fastify/multipart";
 import Fastify, { type FastifyRequest } from "fastify";
 import type pg from "pg";
+import { ZodError } from "zod";
 import type { AppConfig } from "../config.js";
 import { signAuthToken } from "../auth/tokens.js";
 import { SESSION_COOKIE_NAME } from "../security.js";
@@ -31,6 +32,89 @@ const config = {
 } as AppConfig;
 
 describe("dashboard route helpers", () => {
+  it("rejects agent recording overrides and retires global defaults", async () => {
+    const routeConfig = {
+      ...config,
+      JWT_SECRET: "voicemail-route-test-secret",
+      JWT_EXPIRES_SECONDS: 3600
+    } as AppConfig;
+    const pool = createQueryPool((sql) => {
+      if (sql.includes("from users"))
+        return rows([{ ...userRow({ role: "admin" }), is_active: true, auth_version: 1 }]);
+      throw new Error(`Unexpected query: ${sql}`);
+    });
+    const app = Fastify();
+    app.setErrorHandler((error, _request, reply) => {
+      if (error instanceof ZodError) return reply.code(400).send({ message: "Invalid request" });
+      return reply.send(error);
+    });
+    registerDashboardRoutes(app, routeConfig, pool);
+    const token = signAuthToken(routeConfig, {
+      sub: userRow().id,
+      email: userRow().email,
+      role: "admin",
+      ver: 1
+    });
+    const headers = { authorization: `Bearer ${token}` };
+    try {
+      const override = await app.inject({
+        method: "POST",
+        url: `/agent/calls/${selectedCampaignId}/drop-voicemail`,
+        headers,
+        payload: { recordingId: selectedCampaignId }
+      });
+      assert.equal(override.statusCode, 400, override.body);
+      const retired = await app.inject({
+        method: "PATCH",
+        url: `/admin/recordings/${selectedCampaignId}/default`,
+        headers
+      });
+      assert.equal(retired.statusCode, 410, retired.body);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("requires campaign ownership on uploads and admin permission on assignment", async () => {
+    let role: "admin" | "agent" = "admin";
+    const routeConfig = {
+      ...config,
+      JWT_SECRET: "voicemail-route-test-secret",
+      JWT_EXPIRES_SECONDS: 3600
+    } as AppConfig;
+    const pool = createQueryPool((sql) => {
+      if (sql.includes("from users"))
+        return rows([{ ...userRow({ role }), is_active: true, auth_version: 1 }]);
+      throw new Error(`Unexpected query: ${sql}`);
+    });
+    const app = Fastify();
+    await app.register(multipart);
+    registerDashboardRoutes(app, routeConfig, pool);
+    const token = signAuthToken(routeConfig, { sub: userRow().id, email: userRow().email, role, ver: 1 });
+    const headers = { authorization: `Bearer ${token}` };
+    try {
+      const upload = await app.inject({
+        method: "POST",
+        url: "/admin/recordings",
+        headers: { ...headers, "content-type": "multipart/form-data; boundary=vmfixture" },
+        payload:
+          '--vmfixture\r\nContent-Disposition: form-data; name="file"; filename="message.wav"\r\nContent-Type: audio/wav\r\n\r\nfixture\r\n--vmfixture--\r\n'
+      });
+      assert.equal(upload.statusCode, 400, upload.body);
+      assert.match(upload.json().message, /campaign/);
+      role = "agent";
+      const denied = await app.inject({
+        method: "PATCH",
+        url: `/admin/campaigns/${selectedCampaignId}/voicemail`,
+        headers,
+        payload: { recordingId: null }
+      });
+      assert.equal(denied.statusCode, 403, denied.body);
+    } finally {
+      await app.close();
+    }
+  });
+
   it("preserves a manual lead's Zoho ID for the agent queue", async () => {
     let savedFields: Record<string, string> = {};
     const contact = {
@@ -378,6 +462,47 @@ describe("dashboard route helpers", () => {
       });
       assert.equal(response.statusCode, 401);
       assert.equal(queryCount, 0);
+      const check = await app.inject({
+        method: "HEAD",
+        url: `/admin/campaigns/${selectedCampaignId}/recordings.zip`,
+        headers: { authorization: "Bearer invalid" }
+      });
+      assert.equal(check.statusCode, 401);
+      assert.equal(queryCount, 0);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("denies agents access to both recording checks and downloads", async () => {
+    const app = Fastify();
+    const agent = userRow({ role: "agent" });
+    const routeConfig = {
+      JWT_EXPIRES_SECONDS: 3_600,
+      JWT_SECRET: "campaign-recording-export-test-secret"
+    } as AppConfig;
+    const pool = createQueryPool((sql) => {
+      if (sql.includes("from users")) {
+        return rows([{ ...agent, is_active: true, auth_version: 1 }]);
+      }
+      throw new Error(`An agent must not inspect recordings: ${sql}`);
+    });
+    registerDashboardRoutes(app, routeConfig, pool);
+    const token = signAuthToken(routeConfig, {
+      sub: agent.id,
+      email: agent.email,
+      role: "agent",
+      ver: 1
+    });
+    try {
+      for (const method of ["HEAD", "GET"] as const) {
+        const response = await app.inject({
+          method,
+          url: `/admin/campaigns/${selectedCampaignId}/recordings.zip`,
+          headers: { authorization: `Bearer ${token}` }
+        });
+        assert.equal(response.statusCode, 403);
+      }
     } finally {
       await app.close();
     }
@@ -425,6 +550,13 @@ describe("dashboard route helpers", () => {
       });
       assert.equal(response.statusCode, 404);
       assert.deepEqual(response.json(), { message: "Campaign not found" });
+      const check = await app.inject({
+        method: "HEAD",
+        url: `/admin/campaigns/${selectedCampaignId}/recordings.zip`,
+        headers: { authorization: `Bearer ${token}` }
+      });
+      assert.equal(check.statusCode, 404);
+      assert.equal(check.body, "");
       assert.equal(
         queries.some((sql) => sql.includes("from calls")),
         false
@@ -477,6 +609,14 @@ describe("dashboard route helpers", () => {
       assert.deepEqual(response.json(), {
         message: "No playable call recordings found for this campaign"
       });
+      const check = await app.inject({
+        method: "HEAD",
+        url: `/admin/campaigns/${selectedCampaignId}/recordings.zip`,
+        headers: { authorization: `Bearer ${token}` }
+      });
+      assert.equal(check.statusCode, 404);
+      assert.equal(check.headers["cache-control"], "private, no-store");
+      assert.equal(check.body, "");
     } finally {
       await app.close();
     }
@@ -536,6 +676,17 @@ describe("dashboard route helpers", () => {
     });
 
     try {
+      const check = await app.inject({
+        method: "HEAD",
+        url: `/admin/campaigns/${selectedCampaignId}/recordings.zip`,
+        headers: { authorization: `Bearer ${token}` }
+      });
+      assert.equal(check.statusCode, 200);
+      assert.equal(check.headers["x-recording-count"], "1");
+      assert.equal(check.headers["x-recording-skipped-count"], "0");
+      assert.equal(check.headers["cache-control"], "private, no-store");
+      assert.equal(check.body, "");
+      assert.equal(auditParams.length, 0);
       const response = await app.inject({
         method: "GET",
         url: `/admin/campaigns/${selectedCampaignId}/recordings.zip`,
@@ -1603,6 +1754,83 @@ describe("dashboard route helpers", () => {
       cursor: { createdAt: cursorCreatedAt, id: cursorId }
     });
   });
+
+  for (const total of [0, 1, 1_001, 1_501]) {
+    it(`returns the call-history CSV over HTTP for ${total} matching rows`, async () => {
+      const routeConfig = {
+        ...config,
+        JWT_SECRET: "csv-export-test-secret",
+        JWT_EXPIRES_SECONDS: 3_600,
+        CALL_HISTORY_EXPORT_MAX_ROWS: 1_500
+      } as AppConfig;
+      let historyQueries = 0;
+      const pool = createQueryPool((sql, params) => {
+        if (sql.includes("from users")) {
+          return rows([{ ...userRow({ role: "admin" }), is_active: true, auth_version: 1 }]);
+        }
+        assert.match(sql, /from calls/);
+        assert.equal(params[1], selectedCampaignId);
+        const offset = historyQueries++ * 1_000;
+        return rows(
+          Array.from({ length: Math.min(1_000, total - offset) }, (_, index) => ({
+            id: `44444444-4444-4444-8444-${String(total - offset - index).padStart(12, "0")}`,
+            lead_name: `Lead ${offset + index + 1}`,
+            agent_name: "Alex",
+            phone_number: "+14155550100",
+            campaign_name: "Follow-up",
+            campaign_id: selectedCampaignId,
+            agent_user_id: userRow().id,
+            state: "completed",
+            outcome: "answered",
+            created_at: new Date("2026-07-10T08:00:00.000Z"),
+            duration_seconds: 60,
+            recording_available: true,
+            pcap_status: null,
+            pcap_available: false,
+            voicemail_signal_status: "none",
+            avmd_review_status: "reviewed",
+            total_count: String(total)
+          }))
+        );
+      });
+      const app = Fastify();
+      registerDashboardRoutes(app, routeConfig, pool);
+      const token = signAuthToken(routeConfig, {
+        sub: userRow().id,
+        email: userRow().email,
+        role: "admin",
+        ver: 1
+      });
+      try {
+        const response = await app.inject({
+          method: "GET",
+          url: `/admin/calls/export.csv?campaignId=${selectedCampaignId}`,
+          headers: { authorization: `Bearer ${token}` }
+        });
+        if (total > routeConfig.CALL_HISTORY_EXPORT_MAX_ROWS) {
+          assert.equal(response.statusCode, 413, response.body);
+          assert.match(response.json().message, /1501 rows.*1500-row limit/);
+          assert.equal(historyQueries, 1);
+          return;
+        }
+        assert.equal(response.statusCode, 200, response.body);
+        assert.equal(response.headers["content-type"], "text/csv; charset=utf-8");
+        assert.match(
+          String(response.headers["content-disposition"]),
+          /^attachment; filename="call-history-\d{4}-\d{2}-\d{2}\.csv"$/
+        );
+        assert.match(response.body, /^"created_at","lead","phone"/);
+        const lines = response.body.trimEnd().split("\n");
+        assert.equal(lines.length, total + 1);
+        for (let index = 1; index <= total; index++) {
+          assert.ok(lines[index]?.includes(`,"Lead ${index}",`));
+        }
+        assert.equal(historyQueries, Math.max(1, Math.ceil(total / 1_000)));
+      } finally {
+        await app.close();
+      }
+    });
+  }
 
   it("streams call-history export with a stable keyset order without holding a pool client", async () => {
     const commands: string[] = [];

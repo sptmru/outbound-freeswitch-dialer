@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-import type { FormEvent } from "react";
 import {
   Activity,
   CheckCircle2,
@@ -11,18 +10,14 @@ import {
   Trash2,
   Upload
 } from "lucide-react";
-import {
-  deleteRecording,
-  fetchAdminRecordings,
-  getRecordingAudioUrl,
-  setDefaultRecording,
-  uploadRecording
-} from "../../api";
+import { deleteRecording, fetchAdminRecordings, getRecordingAudioUrl, setCampaignVoicemail } from "../../api";
 import { AdminLibraryPagination } from "../../components/admin-library-pagination";
 import { Metric } from "../../components/ui-primitives";
 import { getErrorMessage } from "../../lib/errors";
 import { formatBytes, formatDuration } from "../../lib/formatters";
 import type { AdminOverviewResponse, AdminRecordingListResponse } from "../../types";
+
+import { VoicemailUpload } from "./voicemail-upload";
 
 export function Recordings({
   admin,
@@ -31,10 +26,7 @@ export function Recordings({
   admin: AdminOverviewResponse;
   onChanged: () => Promise<void>;
 }) {
-  const [file, setFile] = useState<File | null>(null);
-  const [name, setName] = useState("");
-  const [makeDefault, setMakeDefault] = useState(true);
-  const [pending, setPending] = useState(false);
+  const [campaignFilter, setCampaignFilter] = useState("");
   const [defaultPendingId, setDefaultPendingId] = useState<string | null>(null);
   const [deletePendingId, setDeletePendingId] = useState<string | null>(null);
   const [preview, setPreview] = useState<{ id: string; url: string } | null>(null);
@@ -51,23 +43,27 @@ export function Recordings({
     total: admin.recordings.length,
     totalPages: admin.recordings.length ? Math.ceil(admin.recordings.length / 25) : 0
   });
-  const defaultRecording =
-    admin.recordings.find((recording) => recording.status === "default") ?? admin.recordings[0];
-  const [selectedRecordingId, setSelectedRecordingId] = useState(defaultRecording?.id ?? "");
+  const firstRecording = admin.recordings[0];
+  const [selectedRecordingId, setSelectedRecordingId] = useState(firstRecording?.id ?? "");
   const [showUpload, setShowUpload] = useState(false);
 
   useEffect(() => {
     if (!admin.recordings.some((recording) => recording.id === selectedRecordingId)) {
-      setSelectedRecordingId(defaultRecording?.id ?? "");
+      setSelectedRecordingId(firstRecording?.id ?? "");
     }
-  }, [admin.recordings, defaultRecording?.id, selectedRecordingId]);
+  }, [admin.recordings, firstRecording?.id, selectedRecordingId]);
 
   useEffect(() => {
     let active = true;
     const timeout = window.setTimeout(() => {
       setLibraryPending(true);
       setLibraryError(null);
-      void fetchAdminRecordings({ q: query || undefined, page, pageSize: 25 })
+      void fetchAdminRecordings({
+        q: query || undefined,
+        campaignId: campaignFilter || undefined,
+        page,
+        pageSize: 25
+      })
         .then((next) => {
           if (active) setLibrary(next);
         })
@@ -82,7 +78,7 @@ export function Recordings({
       active = false;
       window.clearTimeout(timeout);
     };
-  }, [admin.recordings, page, query]);
+  }, [admin.recordings, page, query, campaignFilter]);
 
   useEffect(() => {
     if (!preview) {
@@ -91,43 +87,14 @@ export function Recordings({
     previewAudioRef.current?.play().catch(() => undefined);
   }, [preview]);
 
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const form = event.currentTarget;
-    if (!file) {
-      setError("Choose a WAV or MP3 file");
-      return;
-    }
-
-    setPending(true);
+  async function assignRecording(recording: AdminOverviewResponse["recordings"][number]) {
+    setDefaultPendingId(recording.id);
     setError(null);
     try {
-      await uploadRecording({
-        file,
-        name: name.trim() || file.name.replace(/\.[^.]+$/, ""),
-        makeDefault
-      });
-      setFile(null);
-      setName("");
-      setMakeDefault(true);
-      setShowUpload(false);
-      form.reset();
+      await setCampaignVoicemail(recording.campaignId, recording.isAssigned ? null : recording.id);
       await onChanged();
-    } catch (uploadError) {
-      setError(uploadError instanceof Error ? uploadError.message : "Unable to upload recording");
-    } finally {
-      setPending(false);
-    }
-  }
-
-  async function makeRecordingDefault(recordingId: string) {
-    setDefaultPendingId(recordingId);
-    setError(null);
-    try {
-      await setDefaultRecording(recordingId);
-      await onChanged();
-    } catch (defaultError) {
-      setError(defaultError instanceof Error ? defaultError.message : "Unable to set default recording");
+    } catch (error) {
+      setError(getErrorMessage(error, "Could not update campaign voicemail"));
     } finally {
       setDefaultPendingId(null);
     }
@@ -165,7 +132,7 @@ export function Recordings({
   }
 
   const selectedRecording =
-    admin.recordings.find((recording) => recording.id === selectedRecordingId) ?? defaultRecording;
+    admin.recordings.find((recording) => recording.id === selectedRecordingId) ?? firstRecording;
   const totalStorage = admin.recordings.reduce((total, recording) => total + recording.fileSizeBytes, 0);
 
   return (
@@ -173,8 +140,8 @@ export function Recordings({
       <div className="recording-stats">
         <Metric label="Active recordings" value={admin.recordings.length} icon={FileAudio} />
         <Metric
-          label="Default length"
-          value={defaultRecording?.durationSeconds ? `${defaultRecording.durationSeconds} sec` : "—"}
+          label="Selected length"
+          value={selectedRecording?.durationSeconds ? `${selectedRecording.durationSeconds} sec` : "—"}
           icon={Clock3}
         />
         <Metric label="Storage used" value={formatBytes(totalStorage)} icon={Activity} />
@@ -184,7 +151,7 @@ export function Recordings({
           <div className="recording-library-header">
             <div className="surface-heading">
               <h2>Recording library</h2>
-              <p>Versioned audio files available to agents</p>
+              <p>Campaign voicemail messages managed by administrators</p>
             </div>
             <button
               className="primary-action compact-action"
@@ -208,6 +175,23 @@ export function Recordings({
               placeholder="Search recording name"
               value={query}
             />
+          </label>
+          <label className="stack-form">
+            Filter by campaign
+            <select
+              value={campaignFilter}
+              onChange={(event) => {
+                setCampaignFilter(event.target.value);
+                setPage(1);
+              }}
+            >
+              <option value="">All campaigns</option>
+              {admin.campaigns.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
           </label>
           <div className="recording-table-head" aria-hidden="true">
             <span>Name</span>
@@ -234,7 +218,9 @@ export function Recordings({
                   type="button"
                 >
                   <strong>{recording.name}</strong>
-                  <small>{formatBytes(recording.fileSizeBytes)}</small>
+                  <small>
+                    {recording.campaignName} · {formatBytes(recording.fileSizeBytes)}
+                  </small>
                 </button>
                 <span>
                   {recording.durationSeconds ? formatDuration(recording.durationSeconds) : "Pending"}
@@ -271,45 +257,14 @@ export function Recordings({
                 <h2>Upload voicemail</h2>
                 <p>WAV or MP3 audio for agent handoffs</p>
               </div>
-              <form className="stack-form" onSubmit={submit}>
-                <label>
-                  Voicemail file
-                  <input
-                    accept=".wav,.mp3,audio/wav,audio/mpeg"
-                    onChange={(event) => {
-                      const nextFile = event.target.files?.[0] ?? null;
-                      setFile(nextFile);
-                      if (nextFile && !name.trim()) setName(nextFile.name.replace(/\.[^.]+$/, ""));
-                    }}
-                    required
-                    type="file"
-                  />
-                </label>
-                <label>
-                  Voicemail name
-                  <input
-                    onChange={(event) => setName(event.target.value)}
-                    placeholder="Main voicemail"
-                    value={name}
-                  />
-                </label>
-                <label className="checkbox-label">
-                  <input
-                    checked={makeDefault}
-                    onChange={(event) => setMakeDefault(event.target.checked)}
-                    type="checkbox"
-                  />
-                  Make default
-                </label>
-                {error && <p className="form-error">{error}</p>}
-                <button className="primary-action" disabled={pending || !file} type="submit">
-                  <Upload size={17} />
-                  {pending ? "Uploading" : "Upload voicemail"}
-                </button>
-                <button className="secondary-action" onClick={() => setShowUpload(false)} type="button">
-                  Cancel
-                </button>
-              </form>
+              <VoicemailUpload
+                campaigns={admin.campaigns}
+                onUploaded={async () => {
+                  await onChanged();
+                  setShowUpload(false);
+                }}
+                onCancel={() => setShowUpload(false)}
+              />
             </>
           ) : selectedRecording ? (
             <>
@@ -317,9 +272,9 @@ export function Recordings({
                 <span className="detail-eyebrow">Selected recording</span>
                 <h2>{selectedRecording.name}</h2>
                 <p>
-                  {selectedRecording.status === "default"
-                    ? "Default voicemail"
-                    : "Available for agent handoffs"}
+                  {selectedRecording.isAssigned
+                    ? `Voicemail for ${selectedRecording.campaignName}`
+                    : `Saved for ${selectedRecording.campaignName}`}
                 </p>
               </div>
               <div className="recording-player-card">
@@ -350,9 +305,9 @@ export function Recordings({
               <div className="recording-default-card">
                 <CheckCircle2 size={16} />
                 <span>
-                  {selectedRecording.status === "default"
-                    ? "Default for new calls"
-                    : "Ready to use in active calls"}
+                  {selectedRecording.isAssigned
+                    ? "Used for this campaign’s voicemail drops"
+                    : "Saved; not currently assigned"}
                 </span>
               </div>
               <div className="recording-meta-list">
@@ -377,17 +332,27 @@ export function Recordings({
                 <button
                   className="secondary-action"
                   disabled={
-                    selectedRecording.status === "default" || defaultPendingId === selectedRecording.id
+                    defaultPendingId === selectedRecording.id ||
+                    admin.campaigns.find((c) => c.id === selectedRecording.campaignId)?.status === "archived"
                   }
-                  onClick={() => void makeRecordingDefault(selectedRecording.id)}
+                  onClick={() => void assignRecording(selectedRecording)}
                   type="button"
                 >
                   <CheckCircle2 size={16} />
-                  {defaultPendingId === selectedRecording.id ? "Saving" : "Make default"}
+                  {defaultPendingId === selectedRecording.id
+                    ? "Saving"
+                    : selectedRecording.isAssigned
+                      ? "Disable campaign voicemail"
+                      : "Use for this campaign"}
                 </button>
                 <button
                   className="danger-action"
-                  disabled={deletePendingId === selectedRecording.id}
+                  disabled={selectedRecording.isAssigned || deletePendingId === selectedRecording.id}
+                  title={
+                    selectedRecording.isAssigned
+                      ? "Replace or disable campaign voicemail before deleting"
+                      : undefined
+                  }
                   onClick={() => void removeRecording(selectedRecording)}
                   type="button"
                 >
