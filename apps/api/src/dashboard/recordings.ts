@@ -11,6 +11,7 @@ export type RecordingLibraryFilters = {
   page: number;
   pageSize: number;
   q?: string;
+  campaignId?: string;
 };
 
 const execFileAsync = promisify(execFile);
@@ -168,6 +169,7 @@ export async function getRecordingsPage(
 ): Promise<AdminRecordingListResponse> {
   const result = await queryRecordingLibrary(pool, {
     q: filters.q,
+    campaignId: filters.campaignId,
     limit: filters.pageSize,
     offset: (filters.page - 1) * filters.pageSize
   });
@@ -182,26 +184,73 @@ export async function getRecordingsPage(
 
 async function queryRecordingLibrary(
   pool: pg.Pool,
-  filters: { q?: string; limit: number | null; offset: number }
+  filters: { q?: string; campaignId?: string; limit: number | null; offset: number }
 ): Promise<{ items: AdminOverviewResponse["recordings"]; total: number }> {
   const q = filters.q?.trim() || null;
   const result = await pool.query<RecordingRow & { total_count: string }>(
     `
-    select id, name, runtime_file_path, duration_seconds, file_size_bytes, is_default, is_active
-      , count(*) over() as total_count
+    select recordings.id, recordings.name, runtime_file_path, duration_seconds, file_size_bytes,
+      recordings.is_active, recordings.campaign_id, campaigns.name as campaign_name,
+      (campaigns.voicemail_recording_id = recordings.id) as is_assigned,
+      count(*) over() as total_count
     from recordings
-    where is_active = true
-      and ($1::text is null or name ilike '%' || $1 || '%')
-    order by is_default desc, created_at desc
+    join campaigns on campaigns.id = recordings.campaign_id
+    where recordings.is_active = true
+      and ($1::text is null or recordings.name ilike '%' || $1 || '%')
+      and ($4::uuid is null or recordings.campaign_id = $4)
+    order by is_assigned desc nulls last, recordings.created_at desc
     limit $2 offset $3
   `,
-    [q, filters.limit, filters.offset]
+    [q, filters.limit, filters.offset, filters.campaignId ?? null]
   );
 
   return {
     items: result.rows.map(mapRecordingRow),
     total: Number(result.rows[0]?.total_count ?? 0)
   };
+}
+
+export class RecordingAssignmentError extends Error {
+  constructor(
+    message: string,
+    readonly statusCode: 404 | 409
+  ) {
+    super(message);
+  }
+}
+
+// All assignment changes, deletion, and drop claims take this lock before row locks.
+// It is released before any filesystem or FreeSWITCH operation.
+export async function lockCampaignVoicemail(client: pg.PoolClient, campaignId: string): Promise<void> {
+  await client.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [
+    `outbound-dialer-campaign-voicemail:${campaignId}`
+  ]);
+}
+
+async function getAssignableCampaign(client: pg.PoolClient, campaignId: string) {
+  const result = await client.query<{ name: string; status: string; voicemail_recording_id: string | null }>(
+    "select name, status, voicemail_recording_id from campaigns where id = $1 for update",
+    [campaignId]
+  );
+  const campaign = result.rows[0];
+  if (!campaign) throw new RecordingAssignmentError("Campaign not found", 404);
+  if (campaign.status === "archived") throw new RecordingAssignmentError("Campaign is archived", 409);
+  return campaign;
+}
+
+async function auditAssignment(
+  client: pg.PoolClient,
+  requestId: string | undefined,
+  campaignId: string,
+  before: string | null,
+  after: string | null
+) {
+  if (!requestId) return;
+  await client.query(
+    `update admin_audit_events set metadata_json = metadata_json || $2::jsonb
+    where request_id = $1`,
+    [requestId, JSON.stringify({ campaignId, voicemailRecordingId: { from: before, to: after } })]
+  );
 }
 
 export async function createRecording(
@@ -212,39 +261,45 @@ export async function createRecording(
     runtimeFilePath: string;
     durationSeconds: number;
     fileSizeBytes: number;
-    makeDefault: boolean;
+    campaignId: string;
+    useForCampaign: boolean;
+    requestId?: string;
   }
 ): Promise<AdminOverviewResponse["recordings"][number]> {
   const client = await pool.connect();
   try {
     await client.query("begin");
-    await lockDefaultRecordingSelection(client);
-    const currentDefault = await client.query(
-      "select 1 from recordings where is_active = true and is_default = true limit 1"
-    );
-    const shouldMakeDefault = input.makeDefault || !currentDefault.rowCount;
-
-    if (shouldMakeDefault) {
-      await client.query("update recordings set is_default = false, updated_at = now()");
-    }
-
+    await lockCampaignVoicemail(client, input.campaignId);
+    const campaign = await getAssignableCampaign(client, input.campaignId);
     const result = await client.query<RecordingRow>(
-      `
-        insert into recordings (name, file_path, runtime_file_path, is_default, is_active, duration_seconds, file_size_bytes)
-        values ($1, $2, $3, $4, true, $5, $6)
-        returning id, name, runtime_file_path, duration_seconds, file_size_bytes, is_default, is_active
-      `,
+      `insert into recordings (name, file_path, runtime_file_path, campaign_id, is_active, duration_seconds, file_size_bytes)
+       values ($1, $2, $3, $4, true, $5, $6)
+       returning id, name, runtime_file_path, campaign_id, duration_seconds, file_size_bytes, is_active`,
       [
         input.name,
         input.filePath,
         input.runtimeFilePath,
-        shouldMakeDefault,
+        input.campaignId,
         input.durationSeconds,
         input.fileSizeBytes
       ]
     );
+    const row = result.rows[0];
+    if (input.useForCampaign) {
+      await client.query(
+        "update campaigns set voicemail_recording_id = $2, updated_at = now() where id = $1",
+        [input.campaignId, row.id]
+      );
+      await auditAssignment(
+        client,
+        input.requestId,
+        input.campaignId,
+        campaign.voicemail_recording_id,
+        row.id
+      );
+    }
     await client.query("commit");
-    return mapRecordingRow(result.rows[0]);
+    return mapRecordingRow({ ...row, campaign_name: campaign.name, is_assigned: input.useForCampaign });
   } catch (error) {
     await client.query("rollback");
     throw error;
@@ -253,35 +308,31 @@ export async function createRecording(
   }
 }
 
-export async function setDefaultRecording(
+export async function setCampaignVoicemail(
   pool: pg.Pool,
-  recordingId: string
-): Promise<AdminOverviewResponse["recordings"][number] | null> {
+  campaignId: string,
+  recordingId: string | null,
+  requestId?: string
+): Promise<void> {
   const client = await pool.connect();
   try {
     await client.query("begin");
-    await lockDefaultRecordingSelection(client);
-    const exists = await client.query<{ id: string }>(
-      "select id from recordings where id = $1 and is_active = true",
-      [recordingId]
-    );
-    if (!exists.rowCount) {
-      await client.query("rollback");
-      return null;
+    await lockCampaignVoicemail(client, campaignId);
+    const campaign = await getAssignableCampaign(client, campaignId);
+    if (recordingId !== null) {
+      const recording = await client.query(
+        "select id from recordings where id = $1 and campaign_id = $2 and is_active = true for key share",
+        [recordingId, campaignId]
+      );
+      if (!recording.rowCount)
+        throw new RecordingAssignmentError("Recording is not available for this campaign", 409);
     }
-
-    await client.query("update recordings set is_default = false, updated_at = now()");
-    const result = await client.query<RecordingRow>(
-      `
-        update recordings
-        set is_default = true, updated_at = now()
-        where id = $1
-        returning id, name, runtime_file_path, duration_seconds, file_size_bytes, is_default, is_active
-      `,
-      [recordingId]
-    );
+    await client.query("update campaigns set voicemail_recording_id = $2, updated_at = now() where id = $1", [
+      campaignId,
+      recordingId
+    ]);
+    await auditAssignment(client, requestId, campaignId, campaign.voicemail_recording_id, recordingId);
     await client.query("commit");
-    return mapRecordingRow(result.rows[0]);
   } catch (error) {
     await client.query("rollback");
     throw error;
@@ -291,66 +342,55 @@ export async function setDefaultRecording(
 }
 
 export type DeleteRecordingResult =
-  { status: "deleted"; filePath: string } | { status: "in_use" } | { status: "not_found" };
+  | { status: "deleted"; filePath: string }
+  | { status: "in_use" }
+  | { status: "assigned" }
+  | { status: "not_found" };
 
 export async function deleteRecording(pool: pg.Pool, recordingId: string): Promise<DeleteRecordingResult> {
   const client = await pool.connect();
   try {
     await client.query("begin");
-    await lockDefaultRecordingSelection(client);
-    const existing = await client.query<{ id: string; file_path: string; is_default: boolean }>(
-      "select id, file_path, is_default from recordings where id = $1 and is_active = true",
+    const owner = await client.query<{ campaign_id: string }>(
+      "select campaign_id from recordings where id = $1 and campaign_id is not null and is_active = true",
       [recordingId]
     );
-    const row = existing.rows[0];
-    if (!row) {
+    if (!owner.rows[0]) {
       await client.query("rollback");
       return { status: "not_found" };
     }
-
+    await lockCampaignVoicemail(client, owner.rows[0].campaign_id);
+    const existing = await client.query<{ file_path: string }>(
+      "select file_path from recordings where id = $1 and is_active = true for update",
+      [recordingId]
+    );
+    if (!existing.rows[0]) {
+      await client.query("rollback");
+      return { status: "not_found" };
+    }
+    const assigned = await client.query(
+      "select 1 from campaigns where id = $1 and voicemail_recording_id = $2",
+      [owner.rows[0].campaign_id, recordingId]
+    );
+    if (assigned.rowCount) {
+      await client.query("rollback");
+      return { status: "assigned" };
+    }
     const activeReference = await client.query(
-      `
-        select 1
-        from calls
-        where recording_id = $1
-          and ended_at is null
-          and state not in ('completed', 'failed', 'canceled')
-        limit 1
-      `,
+      `select 1 from calls where recording_id = $1 and ended_at is null
+       and state not in ('completed', 'failed', 'canceled') limit 1`,
       [recordingId]
     );
     if (activeReference.rowCount) {
       await client.query("rollback");
       return { status: "in_use" };
     }
-
     await client.query(
-      `
-        update recordings
-        set is_active = false, is_default = false, updated_at = now()
-        where id = $1
-      `,
+      "update recordings set is_active = false, is_default = false, updated_at = now() where id = $1",
       [recordingId]
     );
-
-    if (row.is_default) {
-      await client.query(
-        `
-          update recordings
-          set is_default = true, updated_at = now()
-          where id = (
-            select id
-            from recordings
-            where is_active = true
-            order by created_at desc
-            limit 1
-          )
-        `
-      );
-    }
-
     await client.query("commit");
-    return { status: "deleted", filePath: row.file_path };
+    return { status: "deleted", filePath: existing.rows[0].file_path };
   } catch (error) {
     await client.query("rollback");
     throw error;
@@ -360,49 +400,12 @@ export async function deleteRecording(pool: pg.Pool, recordingId: string): Promi
 }
 
 export async function restoreDeletedRecording(pool: pg.Pool, recordingId: string): Promise<void> {
-  const client = await pool.connect();
-  try {
-    await client.query("begin");
-    await lockDefaultRecordingSelection(client);
-    const restored = await client.query(
-      `
-        update recordings
-        set is_active = true,
-            updated_at = now()
-        where id = $1
-          and is_active = false
-        returning id
-      `,
-      [recordingId]
-    );
-    if (restored.rowCount) {
-      await client.query(
-        `
-          update recordings
-          set is_default = true,
-              updated_at = now()
-          where id = $1
-            and not exists (
-              select 1
-              from recordings current_default
-              where current_default.is_active = true
-                and current_default.is_default = true
-            )
-        `,
-        [recordingId]
-      );
-    }
-    await client.query("commit");
-  } catch (error) {
-    await client.query("rollback");
-    throw error;
-  } finally {
-    client.release();
-  }
-}
-
-export async function lockDefaultRecordingSelection(client: pg.PoolClient): Promise<void> {
-  await client.query("select pg_advisory_xact_lock(hashtext('outbound-dialer-default-recording'))");
+  // Restoring after an unlink failure must never restore a campaign assignment.
+  await pool.query(
+    `update recordings set is_active = true, updated_at = now()
+    where id = $1 and campaign_id is not null and is_active = false`,
+    [recordingId]
+  );
 }
 
 export async function getRecordingAudioFile(
@@ -410,22 +413,13 @@ export async function getRecordingAudioFile(
   recordingId: string
 ): Promise<{ filePath: string; filename: string } | null> {
   const result = await pool.query<{ file_path: string; name: string }>(
-    `
-      select file_path, name
-      from recordings
-      where id = $1 and is_active = true
-    `,
+    "select file_path, name from recordings where id = $1 and is_active = true and campaign_id is not null",
     [recordingId]
   );
   const row = result.rows[0];
-  if (!row) {
-    return null;
-  }
-
-  return {
-    filePath: row.file_path,
-    filename: sanitizeDownloadFilename(row.name, extname(row.file_path))
-  };
+  return row
+    ? { filePath: row.file_path, filename: sanitizeDownloadFilename(row.name, extname(row.file_path)) }
+    : null;
 }
 
 type RecordingRow = {
@@ -434,17 +428,22 @@ type RecordingRow = {
   runtime_file_path: string;
   duration_seconds: number;
   file_size_bytes: number;
-  is_default: boolean;
   is_active: boolean;
+  campaign_id: string;
+  campaign_name: string;
+  is_assigned: boolean | null;
 };
 
 function mapRecordingRow(row: RecordingRow): AdminOverviewResponse["recordings"][number] {
   return {
     id: row.id,
     name: row.name,
+    campaignId: row.campaign_id,
+    campaignName: row.campaign_name,
+    isAssigned: row.is_assigned === true,
     durationSeconds: row.duration_seconds,
     fileSizeBytes: row.file_size_bytes,
-    status: row.is_default ? "default" : row.is_active ? "ready" : "inactive"
+    status: row.is_assigned ? "assigned" : row.is_active ? "ready" : "inactive"
   };
 }
 

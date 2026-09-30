@@ -23,9 +23,11 @@ The page refreshes state from the server through live update signals and periodi
 ## Drop Voicemail
 
 1. Confirm the mailbox is ready.
-2. Check the selected recording or accept the configured default.
+2. The message is configured by the administrator for the call’s campaign; its name appears above the button. You cannot select another recording.
 3. Click **Drop voicemail** once.
 4. Wait for the UI to show playback started and the agent released.
+
+If the campaign has no configured voicemail, the button is unavailable; normal calls still work. An administrator can change or disable the message during a conversation until Drop is accepted. Switching the selected campaign in the desk does not change the active call’s message.
 
 After release, the customer leg remains in the background job list until playback completes, fails, or is interrupted. You may start another interactive call while it is tracked. Do not report a successful delivery until the job is terminal, and remember that even local completion does not prove the far-end mailbox stored the full message.
 

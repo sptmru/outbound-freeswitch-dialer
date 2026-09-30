@@ -418,6 +418,7 @@ describe("App Agent Desk empty states", () => {
       callable: 32,
       attempted: 48,
       outcomeDistribution: [],
+      voicemailRecordingId: null,
       manualDialingEnabled: true,
       callRecordingEnabled: false,
       earlyMediaAvmdEnabled: false,
@@ -655,6 +656,7 @@ describe("App Agent Desk empty states", () => {
         callable: 8,
         attempted: 2,
         outcomeDistribution: [],
+        voicemailRecordingId: null,
         manualDialingEnabled: true,
         callRecordingEnabled: false,
         earlyMediaAvmdEnabled: false,
@@ -668,6 +670,7 @@ describe("App Agent Desk empty states", () => {
         callable: 4,
         attempted: 1,
         outcomeDistribution: [],
+        voicemailRecordingId: null,
         manualDialingEnabled: true,
         callRecordingEnabled: false,
         earlyMediaAvmdEnabled: false,
@@ -1343,7 +1346,7 @@ describe("App Agent Desk empty states", () => {
     expect(within(screen.getByRole("table", { name: "Next leads" })).getAllByRole("cell")).toHaveLength(2);
   });
 
-  it("drops voicemail with the selected active-call recording", async () => {
+  it("drops the campaign voicemail without an agent recording selection", async () => {
     const activeDesk = deskResponse({
       activeCall: activeCallRow({
         id: "33333333-3333-4333-8333-333333333333",
@@ -1374,14 +1377,13 @@ describe("App Agent Desk empty states", () => {
 
     render(<App />);
 
-    const recordingSelect = await screen.findByDisplayValue("Default voicemail (default)");
-    fireEvent.change(recordingSelect, { target: { value: "55555555-5555-4555-8555-555555555555" } });
+    expect(await screen.findByText("Default voicemail")).toBeInTheDocument();
+    expect(screen.queryByText("Alternate voicemail")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /Drop voicemail/ }));
 
     await waitFor(() => {
       expect(apiMocks.dropVoicemail).toHaveBeenCalledWith("33333333-3333-4333-8333-333333333333", {
-        campaignId: "11111111-1111-4111-8111-111111111111",
-        recordingId: "55555555-5555-4555-8555-555555555555"
+        campaignId: "11111111-1111-4111-8111-111111111111"
       });
     });
   });
@@ -1735,6 +1737,7 @@ describe("App Agent Desk empty states", () => {
             callable: 8,
             attempted: 2,
             outcomeDistribution: [],
+            voicemailRecordingId: null,
             manualDialingEnabled: true,
             callRecordingEnabled: true,
             earlyMediaAvmdEnabled: true,
@@ -1776,6 +1779,7 @@ describe("App Agent Desk empty states", () => {
       callable: 3,
       attempted: 7,
       outcomeDistribution: [],
+      voicemailRecordingId: null,
       manualDialingEnabled: true,
       callRecordingEnabled: false,
       earlyMediaAvmdEnabled: false,

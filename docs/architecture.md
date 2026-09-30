@@ -158,8 +158,9 @@ bridged
        or failed/interrupted terminal outcome
 ```
 
-1. The API checks that the call/customer UUID/recording/action are eligible.
-2. A transaction conditionally moves the call to `voicemail_drop_requested`; a repeated/concurrent request cannot claim it twice.
+1. The API checks the call owner, customer UUID and action eligibility. It never accepts an agent-selected recording.
+2. Assignment, upload-and-assign, deletion and drop claims acquire the same campaign advisory transaction lock before row locks. The drop transaction rechecks the call and reads `campaigns.voicemail_recording_id` through `calls.campaign_id`; it requires an active recording owned by that campaign. It saves `calls.recording_id` and moves to `voicemail_drop_requested`. A repeated/concurrent request cannot claim it twice. No database transaction remains open during ESL commands.
+   Before the claim, Agent Desk shows the campaign's current assignment; after the claim the saved recording is immutable for that attempt. An explicit rejected command may allow another attempt using the latest assignment; an ambiguous command remains claimed for reconciliation. Failed-attempt events retain the attempted asset, and the request event is updated on an eligible retry.
 3. ESL transfers the customer channel into the application-owned voicemail dialplan.
 4. After the transfer succeeds, the API asks FreeSWITCH to kill only the agent leg and records `agent_released` only after confirmation or an already-absent-channel response. Originate watchdogs treat the missing agent leg as intentional in voicemail background states.
 5. The agent becomes available for a new interactive call while the original customer leg remains visible as a background job.

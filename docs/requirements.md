@@ -74,7 +74,9 @@ This document is the current product and operational contract. Items described a
 
 ## Voicemail Drop
 
-- Agents manually request a drop only when the call is eligible and select a recording or use the global default.
+- Agents manually request a drop only when the call is eligible. The API selects the currently assigned voicemail from the call's persisted campaign; agents cannot choose or override recordings.
+- Campaigns may have no voicemail. Assignment changes, including disabling voicemail, affect existing calls until a drop is transactionally claimed. A claimed drop keeps its recorded asset even after the campaign changes. There is no global/default fallback.
+- New voicemail uploads belong to exactly one campaign. Legacy unassigned assets are hidden from libraries and audio APIs and cannot be used for new drops.
 - The request is claimed transactionally and must be idempotent under repeated/concurrent clicks.
 - FreeSWITCH emits application-owned custom events for playback start, completion, and playback failure; customer-channel terminal events classify interruption/hangup.
 - The database lifecycle distinguishes `voicemail_drop_requested`, `voicemail_playback_started`, `agent_released`, and terminal completion/failure/interruption.
@@ -86,7 +88,8 @@ This document is the current product and operational contract. Items described a
 
 ## Voicemail And Call Recordings
 
-- Admins can upload WAV or MP3 voicemail audio, choose a default, preview, and deactivate/delete a recording.
+- Admins can upload WAV or MP3 voicemail audio to a required campaign, preview it, and assign one owned recording or disable voicemail. Multiple saved recordings per campaign are supported; ownership cannot be reassigned.
+- Upload-and-assign commits only after successful audio processing. Assignment, deletion and drop claims serialize per campaign. Assigned recordings must be replaced/disabled before deletion, and recordings referenced by unfinished calls/jobs cannot be deleted.
 - Uploads are decoded and transcoded before activation to mono, 8 kHz, signed 16-bit PCM WAV with loudness normalization.
 - Audio with no valid stream, unavailable processing, malformed content, or duration over five minutes is rejected.
 - Call recording remains campaign-controlled and is started on the customer leg through FreeSWITCH.

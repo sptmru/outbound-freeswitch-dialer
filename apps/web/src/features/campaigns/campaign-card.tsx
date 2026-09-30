@@ -12,17 +12,28 @@ import {
   Users,
   XCircle
 } from "lucide-react";
-import { getCampaignRecordingsExportUrl, resetCampaignLeads, updateCampaign } from "../../api";
+import {
+  getCampaignRecordingsExportUrl,
+  resetCampaignLeads,
+  updateCampaign,
+  setCampaignVoicemail
+} from "../../api";
 import { Metric, StatusBadge } from "../../components/ui-primitives";
 import type { AdminOverviewResponse } from "../../types";
 
+import { VoicemailUpload } from "../recordings/voicemail-upload";
+
 export function CampaignCard({
   campaign,
+  recordings,
   onChanged
 }: {
   campaign: AdminOverviewResponse["campaigns"][number];
+  recordings: AdminOverviewResponse["recordings"];
   onChanged: () => Promise<void>;
 }) {
+  const [showVoicemailUpload, setShowVoicemailUpload] = useState(false);
+  const [voicemailPending, setVoicemailPending] = useState(false);
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(campaign.name);
   const [status, setStatus] = useState(campaign.status);
@@ -51,6 +62,19 @@ export function CampaignCard({
     campaign.name,
     campaign.status
   ]);
+
+  async function assignVoicemail(recordingId: string) {
+    setVoicemailPending(true);
+    setError(null);
+    try {
+      await setCampaignVoicemail(campaign.id, recordingId || null);
+      await onChanged();
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "Could not update campaign voicemail");
+    } finally {
+      setVoicemailPending(false);
+    }
+  }
 
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -223,6 +247,48 @@ export function CampaignCard({
           {campaign.autoAdvanceToNextLeadEnabled && <StatusBadge label="Auto next lead" tone="good" />}
         </div>
       )}
+      <div className="stack-form">
+        <label>
+          Campaign voicemail
+          <select
+            aria-label={`Voicemail for ${campaign.name}`}
+            value={campaign.voicemailRecordingId ?? ""}
+            disabled={voicemailPending || campaign.status === "archived"}
+            onChange={(event) => void assignVoicemail(event.target.value)}
+          >
+            <option value="">No voicemail</option>
+            {recordings
+              .filter((recording) => recording.campaignId === campaign.id)
+              .map((recording) => (
+                <option key={recording.id} value={recording.id}>
+                  {recording.name}
+                </option>
+              ))}
+          </select>
+        </label>
+        <small>Changes apply until a voicemail drop starts.</small>
+        {!showVoicemailUpload && (
+          <button
+            className="secondary-action compact-action"
+            type="button"
+            disabled={campaign.status === "archived"}
+            onClick={() => setShowVoicemailUpload(true)}
+          >
+            Upload voicemail for this campaign
+          </button>
+        )}
+        {showVoicemailUpload && (
+          <VoicemailUpload
+            campaigns={[campaign]}
+            initialCampaignId={campaign.id}
+            onCancel={() => setShowVoicemailUpload(false)}
+            onUploaded={async () => {
+              await onChanged();
+              setShowVoicemailUpload(false);
+            }}
+          />
+        )}
+      </div>
       <div className="stat-row campaign-stat-row">
         <Metric label="Loaded" value={campaign.loaded} icon={Users} />
         <Metric label="Callable" value={campaign.callable} icon={PhoneCall} />

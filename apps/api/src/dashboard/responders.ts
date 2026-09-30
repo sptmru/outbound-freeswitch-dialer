@@ -25,26 +25,16 @@ export async function buildAgentDeskResponse(
   selectedCampaignId?: string,
   retryPolicy?: ContactRetryPolicy
 ): Promise<AgentDeskResponse> {
-  const [
-    campaign,
-    availableCampaigns,
-    availability,
-    activeCall,
-    metrics,
-    recordings,
-    recentCalls,
-    voicemailJobs
-  ] = await Promise.all([
-    getAgentCampaign(pool, selectedCampaignId, { userId: user.id, ...retryPolicy }),
-    getAgentCampaigns(pool, retryPolicy),
-    getAgentAvailability(pool, user.id),
-    getActiveCall(pool, user.id),
-    getAgentMetrics(pool, user.id),
-    getRecordings(pool),
-    getAgentRecentCalls(pool, user.id),
-    getAgentVoicemailJobs(pool, user.id)
-  ]);
-  const agentRecordings = recordings.map(({ id, name, status }) => ({ id, name, status }));
+  const [campaign, availableCampaigns, availability, activeCall, metrics, recentCalls, voicemailJobs] =
+    await Promise.all([
+      getAgentCampaign(pool, selectedCampaignId, { userId: user.id, ...retryPolicy }),
+      getAgentCampaigns(pool, retryPolicy),
+      getAgentAvailability(pool, user.id),
+      getActiveCall(pool, user.id),
+      getAgentMetrics(pool, user.id),
+      getAgentRecentCalls(pool, user.id),
+      getAgentVoicemailJobs(pool, user.id)
+    ]);
   if (!campaign) {
     return {
       user,
@@ -60,7 +50,7 @@ export async function buildAgentDeskResponse(
       recentCalls,
       voicemailJobs,
       leads: [],
-      recordings: agentRecordings,
+      recordings: [],
       activeCall
     };
   }
@@ -90,7 +80,7 @@ export async function buildAgentDeskResponse(
     recentCalls,
     voicemailJobs,
     leads,
-    recordings: agentRecordings,
+    recordings: [],
     activeCall
   };
 }
@@ -225,7 +215,7 @@ async function getActiveCall(pool: pg.Pool, userId: string): Promise<AgentDeskRe
         contacts.display_name as contact_name,
         calls.started_at,
         calls.voicemail_signal_status,
-        calls.recording_id,
+        recordings.id as recording_id,
         calls.call_recording_enabled,
         calls.call_recording_status,
         recordings.name as recording_name,
@@ -234,7 +224,12 @@ async function getActiveCall(pool: pg.Pool, userId: string): Promise<AgentDeskRe
       from calls
       join agents on agents.id = calls.agent_id
       left join contacts on contacts.id = calls.contact_id
-      left join recordings on recordings.id = calls.recording_id
+      left join campaigns on campaigns.id = calls.campaign_id
+      left join recordings on recordings.id = case
+        when calls.state in ('voicemail_drop_requested', 'voicemail_playback_started', 'agent_released', 'voicemail_playback_completed')
+          then calls.recording_id
+        else campaigns.voicemail_recording_id end
+        and recordings.campaign_id = calls.campaign_id and recordings.is_active = true
       left join call_legs customer_leg on customer_leg.call_id = calls.id and customer_leg.type = 'customer'
       left join lateral (
         select case max(
@@ -278,10 +273,15 @@ async function getActiveCall(pool: pg.Pool, userId: string): Promise<AgentDeskRe
     status: mapCallStatus(row.state),
     voicemailSignal: mapVoicemailSignal(row.voicemail_signal_status),
     recordingId: row.recording_id,
-    recordingName: row.recording_name ?? "No default recording",
+    recordingName: row.recording_name ?? "No voicemail configured for this campaign",
     callRecordingEnabled: row.call_recording_enabled,
     callRecordingStatus: row.call_recording_enabled ? (row.call_recording_status ?? "pending") : "disabled",
-    actions: getActiveCallActions(row.state, row.customer_leg_uuid),
+    actions: {
+      ...getActiveCallActions(row.state, row.customer_leg_uuid),
+      dropVoicemail: row.recording_id
+        ? getActiveCallActions(row.state, row.customer_leg_uuid).dropVoicemail
+        : { allowed: false, reason: "No voicemail configured for this campaign" }
+    },
     supervisor: {
       active: row.supervisor_mode !== null,
       mode: row.supervisor_mode

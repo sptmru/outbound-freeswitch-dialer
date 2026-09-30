@@ -145,3 +145,155 @@ const adminOverview = {
   recordingFiles: 0,
   pcapFiles: 0
 };
+
+test("refreshes campaign voicemail during a call and drops without a recording override", async ({
+  page
+}) => {
+  await page.addInitScript(() => {
+    class FixtureEvents extends EventTarget {
+      constructor() {
+        super();
+        window.addEventListener("vm-test-refresh", () =>
+          this.dispatchEvent(
+            new MessageEvent("refresh", {
+              data: JSON.stringify({ source: "campaigns", occurredAt: new Date().toISOString() })
+            })
+          )
+        );
+      }
+      close() {}
+    }
+    Object.defineProperty(window, "EventSource", { value: FixtureEvents, configurable: true });
+  });
+  let assignment: string | null = "Campaign message A";
+  let body: unknown;
+  const desk = () => ({
+    ...activeDesk,
+    recordings: [],
+    activeCall: {
+      ...activeDesk.activeCall,
+      recordingId: assignment ? activeDesk.activeCall.recordingId : null,
+      recordingName: assignment ?? "No voicemail configured for this campaign",
+      actions: {
+        ...activeDesk.activeCall.actions,
+        dropVoicemail: {
+          allowed: Boolean(assignment),
+          reason: assignment ? null : "No voicemail configured for this campaign"
+        }
+      }
+    }
+  });
+  await page.route("**/api/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === "/api/auth/me") return route.fulfill({ json: { user: adminUser } });
+    if (path === "/api/agent/desk") return route.fulfill({ json: desk() });
+    if (path.endsWith("/drop-voicemail")) {
+      body = route.request().postDataJSON();
+      return route.fulfill({ json: { ...desk(), activeCall: null } });
+    }
+    if (path === "/api/admin/overview") return route.fulfill({ json: adminOverview });
+    if (path === "/api/admin/csv-imports")
+      return route.fulfill({ json: { imports: [], page: 1, pageSize: 20, total: 0, totalPages: 0 } });
+    return route.fulfill({ status: 404, json: { message: "Unused fixture route" } });
+  });
+  await page.goto(`/desk?campaignId=${campaignId}`);
+  await expect(page.getByText("Campaign message A", { exact: true })).toBeVisible();
+  await expect(page.getByRole("option", { name: "Campaign message A" })).toHaveCount(0);
+  assignment = null;
+  await page.evaluate(() => window.dispatchEvent(new Event("vm-test-refresh")));
+  await expect(page.getByRole("button", { name: "Drop voicemail" })).toBeDisabled();
+  assignment = "Campaign message B";
+  await page.evaluate(() => window.dispatchEvent(new Event("vm-test-refresh")));
+  await expect(page.getByText("Campaign message B", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Drop voicemail" }).click();
+  await expect.poll(() => body).toEqual({ campaignId });
+});
+
+test("uploads voicemail from the campaign card and disables its assignment", async ({ page }, testInfo) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(window, "EventSource", {
+      configurable: true,
+      value: class {
+        addEventListener() {}
+        close() {}
+      }
+    });
+  });
+  const recordingId = "44444444-4444-4444-8444-444444444444";
+  const campaign = {
+    ...activeDesk.campaign,
+    callable: 4,
+    loaded: 4,
+    attempted: 0,
+    outcomeDistribution: [],
+    autoAdvanceToNextLeadEnabled: false,
+    voicemailRecordingId: null as string | null
+  };
+  const recordings: Array<{
+    id: string;
+    name: string;
+    campaignId: string;
+    campaignName: string;
+    isAssigned: boolean;
+    durationSeconds: number;
+    fileSizeBytes: number;
+    status: string;
+  }> = [];
+  let uploadedBody = "";
+  let assignmentBody: unknown;
+  await page.route("**/api/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === "/api/auth/me") return route.fulfill({ json: { user: adminUser } });
+    if (path === "/api/agent/desk")
+      return route.fulfill({ json: { ...activeDesk, activeCall: null, recordings: [] } });
+    if (path === "/api/admin/overview")
+      return route.fulfill({ json: { ...adminOverview, campaigns: [campaign], recordings } });
+    if (path === "/api/admin/campaigns")
+      return route.fulfill({ json: { items: [campaign], page: 1, pageSize: 25, total: 1, totalPages: 1 } });
+    if (path === "/api/admin/csv-imports")
+      return route.fulfill({ json: { imports: [], page: 1, pageSize: 20, total: 0, totalPages: 0 } });
+    if (path.endsWith("/contacts"))
+      return route.fulfill({ json: { contacts: [], page: 1, pageSize: 25, total: 0, totalPages: 0 } });
+    if (path === "/api/admin/recordings" && route.request().method() === "POST") {
+      uploadedBody = route.request().postData() ?? "";
+      recordings.push({
+        id: recordingId,
+        name: "message",
+        campaignId,
+        campaignName: campaign.name,
+        isAssigned: true,
+        durationSeconds: 3,
+        fileSizeBytes: 100,
+        status: "assigned"
+      });
+      campaign.voicemailRecordingId = recordingId;
+      return route.fulfill({ status: 201, json: { item: recordings[0] } });
+    }
+    if (path === `/api/admin/campaigns/${campaignId}/voicemail`) {
+      assignmentBody = route.request().postDataJSON();
+      campaign.voicemailRecordingId = null;
+      recordings[0].isAssigned = false;
+      return route.fulfill({ json: { campaignId, recordingId: null } });
+    }
+    return route.fulfill({ status: 404, json: { message: "Unused fixture route" } });
+  });
+  await page.goto(`/campaigns?campaignId=${campaignId}`);
+  await page.getByRole("button", { name: "Upload voicemail for this campaign" }).click();
+  const form = page
+    .getByRole("article")
+    .filter({ has: page.getByRole("heading", { name: "Selected campaign", exact: true }) });
+  await expect(form.getByRole("combobox", { name: "Campaign", exact: true })).toHaveValue(campaignId);
+  await expect(form.getByRole("combobox", { name: "Campaign", exact: true })).toBeDisabled();
+  await form
+    .getByLabel("Voicemail file")
+    .setInputFiles({ name: "message.wav", mimeType: "audio/wav", buffer: Buffer.from("fixture-audio") });
+  await form.getByRole("button", { name: "Upload voicemail", exact: true }).click();
+  const select = page.getByRole("combobox", { name: "Voicemail for Selected campaign" });
+  await expect(select).toHaveValue(recordingId);
+  expect(uploadedBody).toContain(`name="campaignId"\r\n\r\n${campaignId}`);
+  expect(uploadedBody.indexOf('name="campaignId"')).toBeLessThan(uploadedBody.indexOf('name="file"'));
+  await page.screenshot({ path: testInfo.outputPath("campaign-voicemail.png"), fullPage: true });
+  await select.selectOption("");
+  await expect.poll(() => assignmentBody).toEqual({ recordingId: null });
+  await expect(select).toHaveValue("");
+});

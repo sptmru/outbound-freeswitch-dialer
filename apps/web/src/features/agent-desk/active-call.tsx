@@ -26,18 +26,13 @@ export function ActiveCall({
   onAvailabilityChangeFailed: () => void;
   onAvailabilityChangeStarted: (status: "available" | "paused") => void;
   onDeskChanged: (desk: AgentDeskResponse) => void;
-  onDropVoicemail: (callId: string, recordingId?: string) => Promise<void>;
+  onDropVoicemail: (callId: string) => Promise<void>;
   onHangUp: (callId: string, browserEventTrusted: boolean) => Promise<void>;
   onSendDtmf: (callId: string, digit: string) => Promise<void>;
   softphone: SoftphoneRuntime;
 }) {
   const activeCall = desk.activeCall as ActiveCallUi | null;
   const displayedDurationSeconds = useActiveCallDuration(activeCall);
-  const defaultRecordingId = activeCall?.recordingId ?? desk.recordings[0]?.id ?? "";
-  const [selectedRecordingId, setSelectedRecordingId] = useState(defaultRecordingId);
-  useEffect(() => {
-    setSelectedRecordingId(defaultRecordingId);
-  }, [activeCall?.id, defaultRecordingId]);
 
   if (!activeCall) {
     return (
@@ -54,8 +49,7 @@ export function ActiveCall({
 
   const durationLabel = formatCallLifecycleStatus(activeCall.state, activeCall.outcome ?? null);
   const voicemailSignal = formatVoicemailSignal(activeCall.voicemailSignal);
-  const selectedRecording = desk.recordings.find((recording) => recording.id === selectedRecordingId);
-  const dropRecordingId = selectedRecording?.id ?? activeCall.recordingId ?? undefined;
+
   const unavailableAction = {
     allowed: false,
     reason: "Call controls are unavailable. Refresh the Agent Desk before continuing."
@@ -181,28 +175,14 @@ export function ActiveCall({
         </div>
         <div>
           <span>Recording</span>
-          <label className="compact-select">
-            <select
-              disabled={controlPending !== null || desk.recordings.length === 0}
-              onChange={(event) => setSelectedRecordingId(event.target.value)}
-              value={selectedRecordingId}
-            >
-              {desk.recordings.map((recording) => (
-                <option key={recording.id} value={recording.id}>
-                  {recording.name}
-                  {recording.status === "default" ? " (default)" : ""}
-                </option>
-              ))}
-            </select>
-          </label>
-          {!desk.recordings.length && <strong>No voicemail recordings</strong>}
+          <strong>{activeCall.recordingName}</strong>
         </div>
       </div>
       <div className="call-actions call-actions-stacked">
         <button
           className="primary-action voicemail-primary-action"
-          disabled={controlPending !== null || !dropRecordingId || !dropEligibility.allowed}
-          onClick={() => onDropVoicemail(activeCall.id, dropRecordingId)}
+          disabled={controlPending !== null || !activeCall.recordingId || !dropEligibility.allowed}
+          onClick={() => onDropVoicemail(activeCall.id)}
           title={
             !dropEligibility.allowed
               ? (dropEligibility.reason ?? "Voicemail drop is not available yet")

@@ -14,6 +14,7 @@ const campaign: AdminOverviewResponse["campaigns"][number] = {
   callable: 0,
   attempted: 0,
   outcomeDistribution: [],
+  voicemailRecordingId: null,
   manualDialingEnabled: true,
   callRecordingEnabled: false,
   earlyMediaAvmdEnabled: false,

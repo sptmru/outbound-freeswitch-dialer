@@ -122,8 +122,8 @@ const deskRefreshSources = new Set([
 const adminRefreshSources: Record<Exclude<View, "desk">, ReadonlySet<string>> = {
   live: new Set(["calls", "call_events", "call_supervisor_sessions"]),
   analytics: new Set(["agents", "calls", "call_events", "campaigns", "contacts"]),
-  campaigns: new Set(["campaigns", "contacts", "csv_imports", "csv_import_failures"]),
-  recordings: new Set(["recordings"]),
+  campaigns: new Set(["campaigns", "recordings", "contacts", "csv_imports", "csv_import_failures"]),
+  recordings: new Set(["recordings", "campaigns"]),
   history: new Set(["agents", "calls", "call_events", "call_pcaps", "campaigns"]),
   suppression: new Set(["suppression_entries", "suppression_events"]),
   settings: new Set(["agents", "calls", "call_events", "campaigns", "users"])
