@@ -132,6 +132,7 @@ This document is the current product and operational contract. Items described a
 - Date-filtered call metrics and current contact-queue snapshots are labeled separately. Current callable/suppressed/exhausted counts must not be presented as historical values for the selected call period.
 - Admin call history is paginated and filterable by text, campaign, agent, outcome, date range, voicemail drop/signal, and recording availability. Manual calls show a matching named lead when the normalized destination exists in any campaign; matches from the call's campaign take precedence, otherwise the most recently added named lead is used. Calls without a named match remain labeled **Manual dial**.
 - Call detail includes lifecycle events and technical identifiers needed for diagnosis. The technical timeline is bounded to the latest 100 events and reports the total and whether older events were omitted.
+- Call History offers **Download campaign recordings** after selecting one campaign. It exports all retained playable recordings in that campaign, independently of pagination and other history filters, and reports availability/access errors before starting the download.
 - CSV export applies the same filters, refuses exports above `CALL_HISTORY_EXPORT_MAX_ROWS` (50,000 by default), and streams accepted rows in bounded pages.
 - Outcomes are derived from backend call events. Agents do not select a mandatory post-call disposition in this version.
 

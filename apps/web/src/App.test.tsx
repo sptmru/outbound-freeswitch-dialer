@@ -11,6 +11,7 @@ import type {
 } from "./types";
 
 const apiMocks = vi.hoisted(() => ({
+  checkCampaignRecordingsExport: vi.fn(),
   dropVoicemail: vi.fn(),
   endCall: vi.fn(),
   fetchAdminAnalytics: vi.fn(),
@@ -63,6 +64,7 @@ vi.mock("./api", async () => {
   const actual = await vi.importActual<typeof import("./api")>("./api");
   return {
     ...actual,
+    checkCampaignRecordingsExport: apiMocks.checkCampaignRecordingsExport,
     dropVoicemail: apiMocks.dropVoicemail,
     endCall: apiMocks.endCall,
     fetchAdminAnalytics: apiMocks.fetchAdminAnalytics,
@@ -166,6 +168,7 @@ describe("App Agent Desk empty states", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    apiMocks.checkCampaignRecordingsExport.mockResolvedValue(undefined);
     window.history.replaceState({}, "", "/");
     window.localStorage.removeItem("outbound_dialer_selected_campaign_id");
     apiMocks.fetchMe.mockResolvedValue({ user: userRow() });
@@ -1819,6 +1822,117 @@ describe("App Agent Desk empty states", () => {
     expect(await screen.findByText("7 leads reset.")).toBeInTheDocument();
   });
 
+  it("downloads all recordings for the selected history campaign independently of other filters", async () => {
+    const admin = userRow({ role: "admin" });
+    apiMocks.fetchMe.mockResolvedValue({ user: admin });
+    apiMocks.fetchAgentDesk.mockResolvedValue(deskResponse({ user: admin }));
+    apiMocks.fetchAdminOverview.mockResolvedValue(
+      adminResponse({
+        campaigns: [
+          historyCampaign(),
+          historyCampaign({ id: "22222222-2222-4222-8222-222222222222", name: "Other campaign" })
+        ]
+      })
+    );
+    const downloads: HTMLAnchorElement[] = [];
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
+      downloads.push(this);
+    });
+    let finishCheck!: () => void;
+    apiMocks.checkCampaignRecordingsExport.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finishCheck = resolve;
+        })
+    );
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Call history" }));
+    const button = screen.getByRole("button", { name: "Download campaign recordings" });
+    expect(button).toBeDisabled();
+    expect(screen.getByText("Select a campaign to download its recordings.")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Campaign"), { target: { value: historyCampaign().id } });
+    fireEvent.change(screen.getByLabelText("History from date"), { target: { value: "2026-09-01" } });
+    fireEvent.change(screen.getByLabelText("Search call history"), {
+      target: { value: "No matching calls" }
+    });
+    expect(button).toBeEnabled();
+    expect(screen.getByText(/Other history filters do not apply/)).toBeInTheDocument();
+    fireEvent.click(button);
+    expect(screen.getByRole("button", { name: "Checking recordings…" })).toBeDisabled();
+    expect(screen.getByLabelText("Campaign")).toBeDisabled();
+    expect(downloads).toHaveLength(0);
+    await act(async () => finishCheck());
+    expect(apiMocks.checkCampaignRecordingsExport).toHaveBeenCalledWith(
+      historyCampaign().id,
+      expect.any(AbortSignal)
+    );
+    expect(downloads).toHaveLength(1);
+    expect(downloads[0]).toHaveAttribute(
+      "href",
+      `/api/admin/campaigns/${historyCampaign().id}/recordings.zip`
+    );
+    expect(downloads[0]).toHaveAttribute("download", `campaign-${historyCampaign().id}-recordings.zip`);
+    expect(downloads[0]?.isConnected).toBe(false);
+    fireEvent.change(screen.getByLabelText("Campaign"), {
+      target: { value: "22222222-2222-4222-8222-222222222222" }
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Download campaign recordings" }));
+    await waitFor(() => expect(downloads).toHaveLength(2));
+    expect(downloads[1]).toHaveAttribute(
+      "href",
+      "/api/admin/campaigns/22222222-2222-4222-8222-222222222222/recordings.zip"
+    );
+    fireEvent.change(screen.getByLabelText("Campaign"), { target: { value: "" } });
+    expect(screen.getByRole("button", { name: "Download campaign recordings" })).toBeDisabled();
+  });
+
+  it("shows recording export errors in history and allows retry", async () => {
+    const admin = userRow({ role: "admin" });
+    apiMocks.fetchMe.mockResolvedValue({ user: admin });
+    apiMocks.fetchAgentDesk.mockResolvedValue(deskResponse({ user: admin }));
+    apiMocks.fetchAdminOverview.mockResolvedValue(adminResponse({ campaigns: [historyCampaign()] }));
+    apiMocks.checkCampaignRecordingsExport.mockRejectedValueOnce(
+      new Error("No downloadable recordings found for this campaign.")
+    );
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Call history" }));
+    fireEvent.change(screen.getByLabelText("Campaign"), { target: { value: historyCampaign().id } });
+    fireEvent.click(screen.getByRole("button", { name: "Download campaign recordings" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "No downloadable recordings found for this campaign."
+    );
+    expect(click).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Download campaign recordings" }));
+    await waitFor(() => expect(click).toHaveBeenCalledOnce());
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("cancels the recording check when leaving history", async () => {
+    const admin = userRow({ role: "admin" });
+    apiMocks.fetchMe.mockResolvedValue({ user: admin });
+    apiMocks.fetchAgentDesk.mockResolvedValue(deskResponse({ user: admin }));
+    apiMocks.fetchAdminOverview.mockResolvedValue(adminResponse({ campaigns: [historyCampaign()] }));
+    let finishCheck!: () => void;
+    apiMocks.checkCampaignRecordingsExport.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finishCheck = resolve;
+        })
+    );
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Call history" }));
+    fireEvent.change(screen.getByLabelText("Campaign"), { target: { value: historyCampaign().id } });
+    fireEvent.click(screen.getByRole("button", { name: "Download campaign recordings" }));
+    const signal = apiMocks.checkCampaignRecordingsExport.mock.calls[0]?.[1] as AbortSignal;
+    fireEvent.click(screen.getByRole("button", { name: "Campaigns" }));
+    expect(signal.aborted).toBe(true);
+    await act(async () => finishCheck());
+    expect(click).not.toHaveBeenCalled();
+  });
+
   it("does not offer AVMD classification without a playable recording", async () => {
     const admin = userRow({ role: "admin" });
     const call = callHistoryRow({ avmdReviewStatus: "needs_review", recordingAvailable: false });
@@ -2169,6 +2283,26 @@ function activeCallRow(
     },
     supervisor: { active: false, mode: null },
     timeline: [],
+    ...overrides
+  };
+}
+
+function historyCampaign(
+  overrides: Partial<AdminOverviewResponse["campaigns"][number]> = {}
+): AdminOverviewResponse["campaigns"][number] {
+  return {
+    id: "11111111-1111-4111-8111-111111111111",
+    name: "Selected campaign",
+    status: "archived",
+    loaded: 10,
+    callable: 0,
+    attempted: 10,
+    outcomeDistribution: [],
+    voicemailRecordingId: null,
+    manualDialingEnabled: false,
+    callRecordingEnabled: false,
+    earlyMediaAvmdEnabled: false,
+    autoAdvanceToNextLeadEnabled: false,
     ...overrides
   };
 }

@@ -88,7 +88,7 @@ import {
   getCampaignsPage,
   resetCampaignLeads
 } from "./campaigns.js";
-import { openCampaignRecordingExport } from "./campaign-recording-export.js";
+import { inspectCampaignRecordingExport, openCampaignRecordingExport } from "./campaign-recording-export.js";
 import {
   createDialerCall,
   createDialerCallFailureMessage,
@@ -602,6 +602,29 @@ export function registerDashboardRoutes(
     const query = adminLibraryQuerySchema.parse(request.query);
     return getCampaignsPage(pool, query, contactRetryPolicy);
   });
+
+  // Register before GET so Fastify does not create a HEAD handler that builds a ZIP.
+  app.head(
+    "/admin/campaigns/:campaignId/recordings.zip",
+    { config: { swagger: { exposeHeadRoute: true } } },
+    async (request, reply) => {
+      const user = await requireAdmin(request, reply, config, pool);
+      if (!user) return;
+      const { campaignId } = campaignParamsSchema.parse(request.params);
+      const checked = await inspectCampaignRecordingExport(
+        pool,
+        campaignId,
+        config.CALL_RECORDINGS_STORAGE_DIR
+      );
+      reply.header("Cache-Control", "private, no-store");
+      if (checked.status !== "ready") return reply.code(404).send();
+      return reply
+        .header("Content-Type", "application/zip")
+        .header("X-Recording-Count", checked.included.length)
+        .header("X-Recording-Skipped-Count", checked.skipped.length)
+        .send();
+    }
+  );
 
   app.get(
     "/admin/campaigns/:campaignId/recordings.zip",

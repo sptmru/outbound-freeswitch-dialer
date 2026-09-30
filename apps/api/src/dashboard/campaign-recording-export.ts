@@ -46,6 +46,28 @@ export async function openCampaignRecordingExport(
   campaignId: string,
   storageDir: string
 ): Promise<CampaignRecordingExport> {
+  const checked = await inspectCampaignRecordingExport(pool, campaignId, storageDir);
+  if (checked.status !== "ready") return checked;
+
+  const { stream, abort } = createRecordingArchive(checked.included, checked.skipped);
+  return {
+    status: "ready",
+    filename: `campaign-${campaignId}-recordings.zip`,
+    includedCount: checked.included.length,
+    skippedCount: checked.skipped.length,
+    stream,
+    abort
+  };
+}
+
+export async function inspectCampaignRecordingExport(
+  pool: pg.Pool,
+  campaignId: string,
+  storageDir: string
+): Promise<
+  | { status: "campaign_not_found" | "no_recordings" }
+  | { status: "ready"; included: ExportableRecording[]; skipped: SkippedRecording[] }
+> {
   const campaign = await pool.query<{ id: string }>("select id from campaigns where id = $1 limit 1", [
     campaignId
   ]);
@@ -87,15 +109,7 @@ export async function openCampaignRecordingExport(
     return { status: "no_recordings" };
   }
 
-  const { stream, abort } = createRecordingArchive(checked.included, checked.skipped);
-  return {
-    status: "ready",
-    filename: `campaign-${campaignId}-recordings.zip`,
-    includedCount: checked.included.length,
-    skippedCount: checked.skipped.length,
-    stream,
-    abort
-  };
+  return { status: "ready", ...checked };
 }
 
 async function filterExportableRecordings(
