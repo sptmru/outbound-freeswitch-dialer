@@ -700,7 +700,7 @@ export function registerDashboardRoutes(
     return getCallHistoryPage(pool, query);
   });
 
-  app.get("/admin/calls/export.csv", async (request, reply): Promise<void> => {
+  app.get("/admin/calls/export.csv", async (request, reply): Promise<FastifyReply | void> => {
     const user = await requireAdmin(request, reply, config, pool);
     if (!user) {
       return;
@@ -719,7 +719,7 @@ export function registerDashboardRoutes(
         "Content-Disposition",
         `attachment; filename="call-history-${new Date().toISOString().slice(0, 10)}.csv"`
       );
-    reply.send(exportResult.stream);
+    return reply.send(exportResult.stream);
   });
 
   app.get("/admin/calls/:callId", async (request, reply): Promise<CallDetailResponse | void> => {

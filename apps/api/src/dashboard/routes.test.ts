@@ -1755,6 +1755,83 @@ describe("dashboard route helpers", () => {
     });
   });
 
+  for (const total of [0, 1, 1_001, 1_501]) {
+    it(`returns the call-history CSV over HTTP for ${total} matching rows`, async () => {
+      const routeConfig = {
+        ...config,
+        JWT_SECRET: "csv-export-test-secret",
+        JWT_EXPIRES_SECONDS: 3_600,
+        CALL_HISTORY_EXPORT_MAX_ROWS: 1_500
+      } as AppConfig;
+      let historyQueries = 0;
+      const pool = createQueryPool((sql, params) => {
+        if (sql.includes("from users")) {
+          return rows([{ ...userRow({ role: "admin" }), is_active: true, auth_version: 1 }]);
+        }
+        assert.match(sql, /from calls/);
+        assert.equal(params[1], selectedCampaignId);
+        const offset = historyQueries++ * 1_000;
+        return rows(
+          Array.from({ length: Math.min(1_000, total - offset) }, (_, index) => ({
+            id: `44444444-4444-4444-8444-${String(total - offset - index).padStart(12, "0")}`,
+            lead_name: `Lead ${offset + index + 1}`,
+            agent_name: "Alex",
+            phone_number: "+14155550100",
+            campaign_name: "Follow-up",
+            campaign_id: selectedCampaignId,
+            agent_user_id: userRow().id,
+            state: "completed",
+            outcome: "answered",
+            created_at: new Date("2026-07-10T08:00:00.000Z"),
+            duration_seconds: 60,
+            recording_available: true,
+            pcap_status: null,
+            pcap_available: false,
+            voicemail_signal_status: "none",
+            avmd_review_status: "reviewed",
+            total_count: String(total)
+          }))
+        );
+      });
+      const app = Fastify();
+      registerDashboardRoutes(app, routeConfig, pool);
+      const token = signAuthToken(routeConfig, {
+        sub: userRow().id,
+        email: userRow().email,
+        role: "admin",
+        ver: 1
+      });
+      try {
+        const response = await app.inject({
+          method: "GET",
+          url: `/admin/calls/export.csv?campaignId=${selectedCampaignId}`,
+          headers: { authorization: `Bearer ${token}` }
+        });
+        if (total > routeConfig.CALL_HISTORY_EXPORT_MAX_ROWS) {
+          assert.equal(response.statusCode, 413, response.body);
+          assert.match(response.json().message, /1501 rows.*1500-row limit/);
+          assert.equal(historyQueries, 1);
+          return;
+        }
+        assert.equal(response.statusCode, 200, response.body);
+        assert.equal(response.headers["content-type"], "text/csv; charset=utf-8");
+        assert.match(
+          String(response.headers["content-disposition"]),
+          /^attachment; filename="call-history-\d{4}-\d{2}-\d{2}\.csv"$/
+        );
+        assert.match(response.body, /^"created_at","lead","phone"/);
+        const lines = response.body.trimEnd().split("\n");
+        assert.equal(lines.length, total + 1);
+        for (let index = 1; index <= total; index++) {
+          assert.ok(lines[index]?.includes(`,"Lead ${index}",`));
+        }
+        assert.equal(historyQueries, Math.max(1, Math.ceil(total / 1_000)));
+      } finally {
+        await app.close();
+      }
+    });
+  }
+
   it("streams call-history export with a stable keyset order without holding a pool client", async () => {
     const commands: string[] = [];
     const pool = {
