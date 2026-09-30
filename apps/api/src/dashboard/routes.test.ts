@@ -7,6 +7,7 @@ import type { PublicUser } from "@outbound-dialer/shared";
 import multipart from "@fastify/multipart";
 import Fastify, { type FastifyRequest } from "fastify";
 import type pg from "pg";
+import { ZodError } from "zod";
 import type { AppConfig } from "../config.js";
 import { signAuthToken } from "../auth/tokens.js";
 import { SESSION_COOKIE_NAME } from "../security.js";
@@ -31,6 +32,89 @@ const config = {
 } as AppConfig;
 
 describe("dashboard route helpers", () => {
+  it("rejects agent recording overrides and retires global defaults", async () => {
+    const routeConfig = {
+      ...config,
+      JWT_SECRET: "voicemail-route-test-secret",
+      JWT_EXPIRES_SECONDS: 3600
+    } as AppConfig;
+    const pool = createQueryPool((sql) => {
+      if (sql.includes("from users"))
+        return rows([{ ...userRow({ role: "admin" }), is_active: true, auth_version: 1 }]);
+      throw new Error(`Unexpected query: ${sql}`);
+    });
+    const app = Fastify();
+    app.setErrorHandler((error, _request, reply) => {
+      if (error instanceof ZodError) return reply.code(400).send({ message: "Invalid request" });
+      return reply.send(error);
+    });
+    registerDashboardRoutes(app, routeConfig, pool);
+    const token = signAuthToken(routeConfig, {
+      sub: userRow().id,
+      email: userRow().email,
+      role: "admin",
+      ver: 1
+    });
+    const headers = { authorization: `Bearer ${token}` };
+    try {
+      const override = await app.inject({
+        method: "POST",
+        url: `/agent/calls/${selectedCampaignId}/drop-voicemail`,
+        headers,
+        payload: { recordingId: selectedCampaignId }
+      });
+      assert.equal(override.statusCode, 400, override.body);
+      const retired = await app.inject({
+        method: "PATCH",
+        url: `/admin/recordings/${selectedCampaignId}/default`,
+        headers
+      });
+      assert.equal(retired.statusCode, 410, retired.body);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("requires campaign ownership on uploads and admin permission on assignment", async () => {
+    let role: "admin" | "agent" = "admin";
+    const routeConfig = {
+      ...config,
+      JWT_SECRET: "voicemail-route-test-secret",
+      JWT_EXPIRES_SECONDS: 3600
+    } as AppConfig;
+    const pool = createQueryPool((sql) => {
+      if (sql.includes("from users"))
+        return rows([{ ...userRow({ role }), is_active: true, auth_version: 1 }]);
+      throw new Error(`Unexpected query: ${sql}`);
+    });
+    const app = Fastify();
+    await app.register(multipart);
+    registerDashboardRoutes(app, routeConfig, pool);
+    const token = signAuthToken(routeConfig, { sub: userRow().id, email: userRow().email, role, ver: 1 });
+    const headers = { authorization: `Bearer ${token}` };
+    try {
+      const upload = await app.inject({
+        method: "POST",
+        url: "/admin/recordings",
+        headers: { ...headers, "content-type": "multipart/form-data; boundary=vmfixture" },
+        payload:
+          '--vmfixture\r\nContent-Disposition: form-data; name="file"; filename="message.wav"\r\nContent-Type: audio/wav\r\n\r\nfixture\r\n--vmfixture--\r\n'
+      });
+      assert.equal(upload.statusCode, 400, upload.body);
+      assert.match(upload.json().message, /campaign/);
+      role = "agent";
+      const denied = await app.inject({
+        method: "PATCH",
+        url: `/admin/campaigns/${selectedCampaignId}/voicemail`,
+        headers,
+        payload: { recordingId: null }
+      });
+      assert.equal(denied.statusCode, 403, denied.body);
+    } finally {
+      await app.close();
+    }
+  });
+
   it("preserves a manual lead's Zoho ID for the agent queue", async () => {
     let savedFields: Record<string, string> = {};
     const contact = {

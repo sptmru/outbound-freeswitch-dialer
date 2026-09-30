@@ -328,9 +328,12 @@ add(
   "GET",
   "/admin/recordings",
   "List voicemail recordings",
-  "Returns a searchable, paginated voicemail recording library.",
+  "Returns assigned-to-campaign voicemail assets; excludes legacy unassigned recordings.",
   {
-    querystring: libraryQuery,
+    querystring: {
+      ...libraryQuery,
+      properties: { ...(libraryQuery.properties as object), campaignId: optionalUuid("Campaign filter") }
+    },
     success: ref("AdminRecordingListResponse"),
     errors: adminErrors
   }
@@ -773,13 +776,30 @@ add(
   }
 );
 
+add(
+  "PATCH",
+  "/admin/campaigns/:campaignId/voicemail",
+  "Assign campaign voicemail",
+  "Assigns an owned active recording, or disables voicemail. Affects calls until their drop is claimed.",
+  {
+    params: campaignParams,
+    body: object({ recordingId: { anyOf: [uuid("Owned recording"), { type: "null" }] } }),
+    success: object({
+      campaignId: uuid("Campaign"),
+      recordingId: { anyOf: [uuid("Assigned recording"), { type: "null" }] }
+    }),
+    errors: [...adminErrors, 404, 409]
+  }
+);
+
 const recordingUpload = object(
   {
     file: { type: "string", format: "binary", description: "WAV or MP3 recording file" },
     name: { type: "string", maxLength: 160, description: "Display name; defaults to the filename" },
-    makeDefault: { type: "boolean", default: false, description: "Make this the default voicemail recording" }
+    campaignId: uuid("Campaign owning this recording; send before the file part"),
+    useForCampaign: { type: "boolean", default: false, description: "Assign this voicemail to its campaign" }
   },
-  ["file"]
+  ["file", "campaignId"]
 );
 add(
   "POST",
@@ -791,18 +811,19 @@ add(
     consumes: ["multipart/form-data"],
     success: ref("CreateRecordingResponse"),
     successStatus: 201,
-    errors: [...adminErrors, 413, 503]
+    errors: [...adminErrors, 404, 409, 413, 503]
   }
 );
 add(
   "PATCH",
   "/admin/recordings/:recordingId/default",
-  "Set default recording",
-  "Makes a voicemail recording the default for new drops.",
+  "Retired global default",
+  "Returns 410; assign voicemail through the campaign instead.",
   {
     params: recordingParams,
-    success: object({ item: ref("RecordingSummary") }),
-    errors: [...adminErrors, 404]
+    success: error,
+    successStatus: 410,
+    errors: adminErrors
   }
 );
 add(

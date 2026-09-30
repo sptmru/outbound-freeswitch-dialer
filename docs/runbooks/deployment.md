@@ -189,3 +189,13 @@ These checks are target-environment evidence. The existence of deploy/rollback s
 
 For stepped Agent Desk capacity, soak, and the separately approved live-call phase, follow
 [load-testing.md](load-testing.md). Do not use read-only HTTP load as evidence of SIP/RTP capacity.
+
+## Campaign Voicemail Upgrade (024)
+
+Migration `024_campaign_voicemail.sql` adds recording ownership and an optional campaign assignment, including a composite foreign key preventing cross-campaign assignment. It leaves existing rows/files and historical call references intact. Legacy recordings have `campaign_id = NULL`; the new application hides them from libraries/media APIs and never uses them for new drop requests. New campaigns and existing campaigns start without voicemail. Admins must upload and assign a campaign-owned message after release.
+
+Use the existing deployment path and active-call drain (including background voicemail); do not bypass it for this upgrade. Update API and web together and refresh open browser tabs. Old agent clients sending `recordingId` receive 400; the retired `/admin/recordings/:recordingId/default` route returns 410. Metadata fields (`campaignId`, `useForCampaign`, `name`) precede the file in multipart uploads. `PATCH /admin/campaigns/:campaignId/voicemail` takes `{ "recordingId": "<owned recording UUID>" }` or `{ "recordingId": null }`.
+
+Schema rollback is not required, but an old application release restores global/default selection semantics and may expose legacy or other-campaign recordings. It is not a behavior-preserving rollback; coordinate the rollback and keep voicemail unused until campaign-aware code is restored.
+
+Local verification: `npm run test:voicemail:db` creates and removes a dedicated PostgreSQL 16 fixture with no network or published ports and only a temporary Unix socket under `/tmp`. It does not read `.env` or use `DATABASE_URL`. It needs Docker and the `postgres:16-alpine` image. Tests cover current-call changes, cross-campaign rejection, legacy hiding, duplicate requests, deletion races and explicit versus ambiguous command failures. ESL commands are stubbed: these checks do not prove real audio delivery. After approved deployment, verify a controlled call and the complete message in the far-end mailbox.

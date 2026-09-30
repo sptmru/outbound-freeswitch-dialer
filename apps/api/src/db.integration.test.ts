@@ -6,7 +6,7 @@ import type { AppConfig } from "./config.js";
 import { finalizeCallTransaction, repairFinalizedCallTransaction } from "./call-finalization.js";
 import { runCallRecordingFinalization } from "./call-recording-finalizer.js";
 import { endDialerCall } from "./dashboard/calls.js";
-import { createRecording, deleteRecording, setDefaultRecording } from "./dashboard/recordings.js";
+import { createRecording, deleteRecording, setCampaignVoicemail } from "./dashboard/recordings.js";
 import { importContactsFromCsv, importSuppressionFromCsv, parseCsv } from "./dashboard/csv.js";
 import { getCallHistoryPage, getCallHistoryPageBounds } from "./dashboard/responders.js";
 import { runMigrations } from "./db.js";
@@ -61,13 +61,19 @@ describe("PostgreSQL migration integration", { skip: !databaseUrl }, () => {
         notificationClient.release();
       }
 
+      const recordingCampaignId = (
+        await pool.query<{ id: string }>(
+          "insert into campaigns (name) values ('Voicemail integration') returning id"
+        )
+      ).rows[0].id;
       const firstRecording = await createRecording(pool, {
         name: "Integration default one",
         filePath: "/tmp/integration-default-one.wav",
         runtimeFilePath: "/tmp/integration-default-one.wav",
         durationSeconds: 1,
         fileSizeBytes: 44,
-        makeDefault: false
+        campaignId: recordingCampaignId,
+        useForCampaign: false
       });
       const secondRecording = await createRecording(pool, {
         name: "Integration default two",
@@ -75,9 +81,10 @@ describe("PostgreSQL migration integration", { skip: !databaseUrl }, () => {
         runtimeFilePath: "/tmp/integration-default-two.wav",
         durationSeconds: 1,
         fileSizeBytes: 44,
-        makeDefault: false
+        campaignId: recordingCampaignId,
+        useForCampaign: false
       });
-      assert.equal(firstRecording.status, "default");
+      assert.equal(firstRecording.status, "ready");
       assert.equal(secondRecording.status, "ready");
       const recordingReferenceCall = await pool.query<{ id: string }>(
         `
@@ -94,22 +101,18 @@ describe("PostgreSQL migration integration", { skip: !databaseUrl }, () => {
       );
       assert.deepEqual(await deleteRecording(pool, secondRecording.id), { status: "in_use" });
       await pool.query("delete from calls where id = $1", [recordingReferenceCall.rows[0]?.id]);
-      assert.equal((await setDefaultRecording(pool, secondRecording.id))?.status, "default");
+      await setCampaignVoicemail(pool, recordingCampaignId, secondRecording.id);
+      assert.deepEqual(await deleteRecording(pool, secondRecording.id), { status: "assigned" });
+      await setCampaignVoicemail(pool, recordingCampaignId, null);
       assert.deepEqual(await deleteRecording(pool, secondRecording.id), {
         status: "deleted",
         filePath: "/tmp/integration-default-two.wav"
       });
-      assert.equal(
-        (
-          await pool.query<{ is_default: boolean }>("select is_default from recordings where id = $1", [
-            firstRecording.id
-          ])
-        ).rows[0]?.is_default,
-        true
-      );
       await pool.query("delete from recordings where id = any($1::uuid[])", [
         [firstRecording.id, secondRecording.id]
       ]);
+
+      await pool.query("delete from campaigns where id = $1", [recordingCampaignId]);
 
       const call = await pool.query<{ id: string }>(
         `

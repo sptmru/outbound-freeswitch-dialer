@@ -326,6 +326,7 @@ export interface AdminOverviewResponse {
     callable: number;
     attempted: number;
     outcomeDistribution: Array<{ outcome: string; count: number }>;
+    voicemailRecordingId: string | null;
     manualDialingEnabled: boolean;
     callRecordingEnabled: boolean;
     earlyMediaAvmdEnabled: boolean;
@@ -334,6 +335,9 @@ export interface AdminOverviewResponse {
   recordings: Array<{
     id: string;
     name: string;
+    campaignId: string;
+    campaignName: string;
+    isAssigned: boolean;
     durationSeconds: number;
     fileSizeBytes: number;
     status: string;
@@ -865,7 +869,15 @@ export interface ManualCallStatusResponse {
 
 export interface DropVoicemailRequest {
   campaignId?: string;
-  recordingId?: string;
+}
+
+export interface SetCampaignVoicemailRequest {
+  recordingId: string | null;
+}
+
+export interface CampaignVoicemailResponse {
+  campaignId: string;
+  recordingId: string | null;
 }
 
 export interface SendDtmfRequest {

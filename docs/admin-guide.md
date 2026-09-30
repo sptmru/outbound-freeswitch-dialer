@@ -32,9 +32,11 @@
 
 ## Voicemail Recordings
 
-- Upload one WAV or MP3 from **Recordings**. The API probes and transcodes it to mono 8 kHz signed 16-bit PCM WAV with loudness normalization; malformed/no-audio/over-five-minute input is rejected.
-- Preview the canonical file, check duration/size, and keep one appropriate global default.
-- Deactivation/removal preserves database references used by historical calls. Do not change the active library during a live voicemail test without recording the context.
+- Create the campaign first. Upload one WAV or MP3 from **Recordings**, selecting its campaign, or use **Upload voicemail for this campaign** on the campaign card. The API probes and transcodes it to mono 8 kHz signed 16-bit PCM WAV with loudness normalization; malformed/no-audio/over-five-minute input is rejected.
+- Preview the canonical file and check duration/size. **Use for this campaign** assigns it after a successful upload; unchecking this saves it without changing the campaign's current message.
+- Use **Campaign voicemail** to select one of that campaign's recordings or **No voicemail**. Updates apply to current conversations until Drop is accepted. Already-started drops keep their original message. Agents cannot select a message.
+- The library shows each recording's campaign and supports campaign filtering. Legacy unassigned recordings are hidden and unavailable through audio APIs; upload a new copy into the intended campaign if needed.
+- Replace or disable the assigned message before deleting it. An unfinished call/voicemail job protects its file from deletion. Removing an unused file preserves historical database references. Archived campaigns retain their recordings and cannot accept new uploads or assignment changes.
 - Playback in the browser uses short-lived media tickets. If a long-open player expires, retry playback to obtain a new ticket.
 
 ## Users And Sessions

@@ -71,7 +71,7 @@ Firewall and host-published-port changes were excluded by instruction. They are 
 
 - Conditional Zoho CRM profile links in Next leads/Lead queue and Lead context using `lead_id` strings from CSV import or the optional Zoho Lead ID field in Add lead, exposed separately from the limited list of display fields.
 - Agent Desk with campaign selection, next lead, optional campaign-controlled automatic transition to the next callable lead after campaign/lead call completion (never after manual dial), manual number validation, click-to-call, DTMF, hangup, call timer/state, action eligibility, and automatic outcomes.
-- Manual voicemail selection/drop with background job tray and failure/interruption visibility.
+- Admin-owned campaign voicemail assignment and one-button manual drop, with changes applying until the drop claim, plus background job tray and failure/interruption visibility.
 - VM/beep/AVMD signals shown as advisory evidence, never as an automatic drop trigger.
 - Admin access to Agent Desk without starting SIP/microphone outside the desk view, with active-call navigation/history/deep links forced back to the desk so the browser phone remains registered.
 - Admin **Live calls** view with receive-only default, microphone-on-demand coach/join controls, explicit join confirmation, one-session/Agent-Desk mutual exclusion, and an agent-visible monitoring banner.

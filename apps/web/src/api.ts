@@ -363,7 +363,7 @@ export async function fetchAdminCampaigns(
 }
 
 export async function fetchAdminRecordings(
-  filters: AdminLibraryFilters = {}
+  filters: AdminLibraryFilters & { campaignId?: string } = {}
 ): Promise<AdminRecordingListResponse> {
   const query = toQuery(filters);
   return apiFetch<AdminRecordingListResponse>(`/admin/recordings${query ? `?${query}` : ""}`);
@@ -514,11 +514,13 @@ export function getCampaignRecordingsExportUrl(campaignId: string): string {
 export async function uploadRecording(input: {
   file: File;
   name: string;
-  makeDefault: boolean;
+  campaignId: string;
+  useForCampaign: boolean;
 }): Promise<CreateRecordingResponse> {
   const formData = new FormData();
   formData.set("name", input.name);
-  formData.set("makeDefault", String(input.makeDefault));
+  formData.set("campaignId", input.campaignId);
+  formData.set("useForCampaign", String(input.useForCampaign));
   formData.set("file", input.file);
 
   return apiFetch<CreateRecordingResponse>("/admin/recordings", {
@@ -527,15 +529,14 @@ export async function uploadRecording(input: {
   });
 }
 
-export async function setDefaultRecording(
-  recordingId: string
-): Promise<MutationResponse<AdminOverviewResponse["recordings"][number]>> {
-  return apiFetch<MutationResponse<AdminOverviewResponse["recordings"][number]>>(
-    `/admin/recordings/${recordingId}/default`,
-    {
-      method: "PATCH"
-    }
-  );
+export async function setCampaignVoicemail(
+  campaignId: string,
+  recordingId: string | null
+): Promise<{ campaignId: string; recordingId: string | null }> {
+  return apiFetch(`/admin/campaigns/${campaignId}/voicemail`, {
+    method: "PATCH",
+    body: JSON.stringify({ recordingId })
+  });
 }
 
 export async function deleteRecording(recordingId: string): Promise<DeleteResponse> {

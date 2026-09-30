@@ -103,7 +103,12 @@ export function Campaigns({
       </article>
       <div className="operations-grid">
         {library.items.map((campaign) => (
-          <CampaignCard campaign={campaign} key={campaign.id} onChanged={onChanged} />
+          <CampaignCard
+            campaign={campaign}
+            recordings={admin.recordings}
+            key={campaign.id}
+            onChanged={onChanged}
+          />
         ))}
         {!library.items.length && <p className="empty-state">No campaigns match this search.</p>}
       </div>
