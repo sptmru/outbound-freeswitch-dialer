@@ -16,6 +16,7 @@ const freeswitchJitterBufferSetting = z.string().refine((value) => {
   );
 }, "FREESWITCH_TRUNK_JITTER_BUFFER_MSEC must be off or target:max:drift in milliseconds");
 
+// environment variable schema
 const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   API_HOST: z.string().default("0.0.0.0"),
