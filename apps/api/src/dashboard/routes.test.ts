@@ -33,110 +33,6 @@ const config = {
 } as AppConfig;
 
 describe("dashboard route helpers", () => {
-  it("logs rejected starts for all calling routes with the decision-time registration snapshot", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "call-start-audit-"));
-    const routeConfig = {
-      ...config,
-      JWT_SECRET: "call-start-audit-fixture",
-      JWT_EXPIRES_SECONDS: 3600,
-      FREESWITCH_GENERATED_CONFIG_DIR: directory,
-      FREESWITCH_DOMAIN: "dialer.local",
-      FREESWITCH_ESL_ENABLED: false
-    } as AppConfig;
-    const agentId = "33333333-3333-4333-8333-333333333333";
-    const lastRegisteredAt = new Date("2026-10-18T22:55:34Z");
-    const lastUnregisteredAt = new Date("2026-10-18T22:55:59Z");
-    const logs: Array<Record<string, unknown>> = [];
-    const pool = createTransactionalPool({
-      poolHandler: (sql) => {
-        if (sql.includes("from users")) return rows([{ ...userRow(), is_active: true, auth_version: 1 }]);
-        if (sql.includes("from campaigns")) return rows([campaignRow()]);
-        if (sql.includes("from agents"))
-          return rows([
-            {
-              id: agentId,
-              sip_username: "agent1000",
-              display_name: "Agent Example",
-              sip_password_encrypted: encryptSecret(routeConfig, "private-sip-fixture")
-            }
-          ]);
-        return rows([]);
-      },
-      clientHandler: (sql) => {
-        if (sql.includes("select is_active")) return rows([{ is_active: true }]);
-        if (sql.includes("select registered,"))
-          return rows([
-            {
-              registered: false,
-              availability_status: "available",
-              caller_id: "private-caller-id",
-              last_registered_at: lastRegisteredAt,
-              last_unregistered_at: lastUnregisteredAt
-            }
-          ]);
-        return rows([]);
-      }
-    });
-    const app = Fastify({
-      logger: {
-        stream: {
-          write: (line: string) => {
-            logs.push(JSON.parse(line));
-          }
-        }
-      }
-    });
-    registerDashboardRoutes(app, routeConfig, pool);
-    const token = signAuthToken(routeConfig, {
-      sub: userRow().id,
-      email: userRow().email,
-      role: "agent",
-      ver: 1
-    });
-    try {
-      for (const url of [
-        "/agent/manual-dial/start",
-        "/agent/call-next",
-        `/agent/leads/${selectedCampaignId}/call`
-      ]) {
-        const response = await app.inject({
-          method: "POST",
-          url,
-          headers: { authorization: `Bearer ${token}` },
-          payload: {
-            campaignId: selectedCampaignId,
-            ...(url.includes("manual-dial") ? { phoneNumber: "+14155550100" } : {})
-          }
-        });
-        assert.equal(response.statusCode, 409, response.body);
-        assert.equal(response.json().message, "The browser phone must be connected before starting a call");
-      }
-      const rejected = logs.filter((entry) => entry.event === "call_start_rejected");
-      assert.equal(rejected.length, 3);
-      for (const entry of rejected) {
-        assert.equal(entry.reason, "agent_not_registered");
-        assert.equal(entry.actorUserId, userRow().id);
-        assert.equal(entry.agentId, agentId);
-        assert.equal(entry.requestId, entry.reqId);
-        assert.deepEqual(entry.agentRegistration, {
-          registered: false,
-          availabilityStatus: "available",
-          lastRegisteredAt: lastRegisteredAt.toISOString(),
-          lastUnregisteredAt: lastUnregisteredAt.toISOString()
-        });
-      }
-      assert.deepEqual(
-        rejected.map((entry) => entry.route),
-        ["/agent/manual-dial/start", "/agent/call-next", "/agent/leads/:contactId/call"]
-      );
-      assert.doesNotMatch(JSON.stringify(rejected), /private-|14155550100|authorization|cookie|password/i);
-      assert.ok(!JSON.stringify(rejected).includes(token));
-    } finally {
-      await app.close();
-      await rm(directory, { recursive: true, force: true });
-    }
-  });
-
   it("rejects agent recording overrides and retires global defaults", async () => {
     const routeConfig = {
       ...config,
@@ -2067,6 +1963,109 @@ describe("dashboard route helpers", () => {
     assert.equal(result.softphone.status, "offline");
     assert.ok(!serialized.includes("campaign_demo_solar_followup"));
     assert.ok(!serialized.includes("+1 415 555 0148"));
+  });
+  it("logs rejected starts for all calling routes with the decision-time registration snapshot", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "call-start-audit-"));
+    const routeConfig = {
+      ...config,
+      JWT_SECRET: "call-start-audit-fixture",
+      JWT_EXPIRES_SECONDS: 3600,
+      FREESWITCH_GENERATED_CONFIG_DIR: directory,
+      FREESWITCH_DOMAIN: "dialer.local",
+      FREESWITCH_ESL_ENABLED: false
+    } as AppConfig;
+    const agentId = "33333333-3333-4333-8333-333333333333";
+    const lastRegisteredAt = new Date("2026-10-18T22:55:34Z");
+    const lastUnregisteredAt = new Date("2026-10-18T22:55:59Z");
+    const logs: Array<Record<string, unknown>> = [];
+    const pool = createTransactionalPool({
+      poolHandler: (sql) => {
+        if (sql.includes("from users")) return rows([{ ...userRow(), is_active: true, auth_version: 1 }]);
+        if (sql.includes("from campaigns")) return rows([campaignRow()]);
+        if (sql.includes("from agents"))
+          return rows([
+            {
+              id: agentId,
+              sip_username: "agent1000",
+              display_name: "Agent Example",
+              sip_password_encrypted: encryptSecret(routeConfig, "private-sip-fixture")
+            }
+          ]);
+        return rows([]);
+      },
+      clientHandler: (sql) => {
+        if (sql.includes("select is_active")) return rows([{ is_active: true }]);
+        if (sql.includes("select registered,"))
+          return rows([
+            {
+              registered: false,
+              availability_status: "available",
+              caller_id: "private-caller-id",
+              last_registered_at: lastRegisteredAt,
+              last_unregistered_at: lastUnregisteredAt
+            }
+          ]);
+        return rows([]);
+      }
+    });
+    const app = Fastify({
+      logger: {
+        stream: {
+          write: (line: string) => {
+            logs.push(JSON.parse(line));
+          }
+        }
+      }
+    });
+    registerDashboardRoutes(app, routeConfig, pool);
+    const token = signAuthToken(routeConfig, {
+      sub: userRow().id,
+      email: userRow().email,
+      role: "agent",
+      ver: 1
+    });
+    try {
+      for (const url of [
+        "/agent/manual-dial/start",
+        "/agent/call-next",
+        `/agent/leads/${selectedCampaignId}/call`
+      ]) {
+        const response = await app.inject({
+          method: "POST",
+          url,
+          headers: { authorization: `Bearer ${token}` },
+          payload: {
+            campaignId: selectedCampaignId,
+            ...(url.includes("manual-dial") ? { phoneNumber: "+14155550100" } : {})
+          }
+        });
+        assert.equal(response.statusCode, 409, response.body);
+        assert.equal(response.json().message, "The browser phone must be connected before starting a call");
+      }
+      const rejected = logs.filter((entry) => entry.event === "call_start_rejected");
+      assert.equal(rejected.length, 3);
+      for (const entry of rejected) {
+        assert.equal(entry.reason, "agent_not_registered");
+        assert.equal(entry.actorUserId, userRow().id);
+        assert.equal(entry.agentId, agentId);
+        assert.equal(entry.requestId, entry.reqId);
+        assert.deepEqual(entry.agentRegistration, {
+          registered: false,
+          availabilityStatus: "available",
+          lastRegisteredAt: lastRegisteredAt.toISOString(),
+          lastUnregisteredAt: lastUnregisteredAt.toISOString()
+        });
+      }
+      assert.deepEqual(
+        rejected.map((entry) => entry.route),
+        ["/agent/manual-dial/start", "/agent/call-next", "/agent/leads/:contactId/call"]
+      );
+      assert.doesNotMatch(JSON.stringify(rejected), /private-|14155550100|authorization|cookie|password/i);
+      assert.ok(!JSON.stringify(rejected).includes(token));
+    } finally {
+      await app.close();
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 });
 
