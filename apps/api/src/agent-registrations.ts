@@ -28,7 +28,7 @@ export function startAgentRegistrationReconciler(
     }
     running = true;
     try {
-      const changedAgents = await reconcileAgentRegistrations(config, pool);
+      const changedAgents = await reconcileAgentRegistrations(config, pool, sendFreeSwitchApiCommand, logger);
       if (changedAgents > 0) {
         logger.info({ changedAgents }, "FreeSWITCH agent registration state reconciled");
       }
@@ -52,7 +52,8 @@ export function startAgentRegistrationReconciler(
 export async function reconcileAgentRegistrations(
   config: AppConfig,
   pool: pg.Pool,
-  sendApiCommand: FreeSwitchApiCommandSender = sendFreeSwitchApiCommand
+  sendApiCommand: FreeSwitchApiCommandSender = sendFreeSwitchApiCommand,
+  logger?: Pick<Logger, "info">
 ): Promise<number> {
   try {
     const response = await sendApiCommand(config, `sofia status profile ${AGENT_SIP_PROFILE} reg`);
@@ -69,7 +70,14 @@ export async function reconcileAgentRegistrations(
     );
     const databaseUsernames = databaseRegistrations.rows.map((row) => row.sip_username);
     const driftCount = symmetricDifferenceSize(databaseUsernames, registeredAgentUsernames);
-    const result = await pool.query(
+    const result = await pool.query<{
+      id: string;
+      user_id: string;
+      sip_username: string;
+      registered: boolean;
+      last_registered_at: Date | null;
+      last_unregistered_at: Date | null;
+    }>(
       `
         update agents
         set registered = sip_username = any($1::text[]),
@@ -109,10 +117,26 @@ export async function reconcileAgentRegistrations(
                  and calls.state not in ('completed', 'failed', 'canceled')
              )
            )
+        returning id, user_id, sip_username, registered, last_registered_at, last_unregistered_at
       `,
       [registeredAgentUsernames]
     );
     const changedAgents = result.rowCount ?? 0;
+    for (const agent of result.rows) {
+      logger?.info(
+        {
+          event: "agent_registration_updated",
+          source: "reconciliation",
+          agentId: agent.id,
+          userId: agent.user_id,
+          sipUsername: agent.sip_username,
+          registered: agent.registered,
+          lastRegisteredAt: agent.last_registered_at,
+          lastUnregisteredAt: agent.last_unregistered_at
+        },
+        "Agent registration updated"
+      );
+    }
     await pool.query(
       `
         update admin_supervisor_endpoints

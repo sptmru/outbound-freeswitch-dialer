@@ -918,6 +918,53 @@ describe("FreeSWITCH event helpers", () => {
     assert.deepEqual(queries[0]?.params, ["agent1000", false]);
   });
 
+  it("logs persisted registration events with identifiers and no raw SIP credentials", async () => {
+    for (const eventSubclass of ["sofia::register", "sofia::unregister", "sofia::expire"]) {
+      const entries: unknown[] = [];
+      const pool = createQueryPool(() =>
+        rows([
+          {
+            id: "agent-1",
+            user_id: "user-1",
+            last_registered_at: null,
+            last_unregistered_at: null
+          }
+        ])
+      );
+      await __testing.persistFreeSwitchEvent(
+        config,
+        pool,
+        {
+          body: "private SIP payload",
+          headers: {
+            "event-name": "CUSTOM",
+            "event-subclass": eventSubclass,
+            "from-host": "dialer.local",
+            "from-user": "agent1000",
+            "profile-name": "internal-webrtc",
+            authorization: "secret SIP authorization",
+            "sip-password": "secret SIP password"
+          }
+        },
+        { info: (entry) => entries.push(entry) }
+      );
+      assert.equal(entries.length, 1);
+      assert.deepEqual(entries[0], {
+        event: "agent_registration_updated",
+        source: "sofia_event",
+        eventSubclass,
+        freeSwitchEventAt: null,
+        agentId: "agent-1",
+        userId: "user-1",
+        sipUsername: "agent1000",
+        registered: eventSubclass === "sofia::register",
+        lastRegisteredAt: null,
+        lastUnregisteredAt: null
+      });
+      assert.doesNotMatch(JSON.stringify(entries), /secret|private SIP payload/);
+    }
+  });
+
   it("maps dedicated voicemail playback custom events without treating them as AMD", () => {
     const frame = {
       body: "",

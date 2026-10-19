@@ -187,21 +187,37 @@ export async function sendFreeSwitchBgapiCommand(
   return sendFreeSwitchCommand(config, `api bgapi ${command}`);
 }
 
-async function sendFreeSwitchCommand(config: AppConfig, command: string): Promise<EslCommandResponse> {
+async function sendFreeSwitchCommand(
+  config: AppConfig,
+  command: string,
+  timeoutMilliseconds = 5_000
+): Promise<EslCommandResponse> {
   return new Promise((resolve, reject) => {
     const socket = net.createConnection({
       host: config.FREESWITCH_ESL_HOST,
       port: config.FREESWITCH_ESL_PORT,
-      timeout: 5000
+      timeout: timeoutMilliseconds
     });
     let stage: "auth" | "connect" | "command" = "auth";
     let buffer = "";
     let authSent = false;
+    let settled = false;
 
-    const cleanup = () => {
+    const finish = (result: { error: Error } | { response: EslCommandResponse }) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(deadline);
       socket.removeAllListeners();
       socket.destroy();
+      if ("error" in result) reject(result.error);
+      else resolve(result.response);
     };
+    // A socket inactivity timeout disappears after a clean close and can be
+    // postponed by partial data. Bound the entire command, including auth.
+    const deadline = setTimeout(
+      () => finish({ error: new Error("ESL command timed out") }),
+      timeoutMilliseconds
+    );
 
     socket.on("data", (chunk) => {
       buffer += chunk.toString("utf8");
@@ -230,24 +246,26 @@ async function sendFreeSwitchCommand(config: AppConfig, command: string): Promis
         if (!parsed) {
           return;
         }
-        cleanup();
         if (parsed.body.startsWith("-ERR") || parsed.headers["reply-text"]?.startsWith("-ERR")) {
-          reject(new Error(parsed.body || parsed.headers["reply-text"] || "FreeSWITCH command failed"));
+          finish({
+            error: new Error(parsed.body || parsed.headers["reply-text"] || "FreeSWITCH command failed")
+          });
           return;
         }
-        resolve(parsed);
+        finish({ response: parsed });
       }
     });
 
     socket.on("timeout", () => {
-      cleanup();
-      reject(new Error("ESL command timed out"));
+      finish({ error: new Error("ESL command timed out") });
     });
 
     socket.on("error", (error) => {
-      cleanup();
-      reject(error);
+      finish({ error });
     });
+    const onClosed = () => finish({ error: new Error("ESL connection closed before command response") });
+    socket.on("end", onClosed);
+    socket.on("close", onClosed);
   });
 }
 
@@ -317,6 +335,7 @@ function parseHeaders(value: string): Record<string, string> {
 }
 
 export const __testing = {
+  sendFreeSwitchCommand,
   buildAgentBridgeOriginateCommand,
   buildSupervisorEavesdropOriginateCommand,
   buildCustomerDialString,

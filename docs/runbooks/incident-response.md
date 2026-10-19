@@ -39,6 +39,15 @@ Do not manually mark a voicemail job successful because its customer UUID is mis
 - Confirm `/agent/events` returns credentialed SSE, heartbeats continue, PostgreSQL listener is subscribed, and HTTP fallback refresh still works.
 - A blocked SSE connection should reduce freshness, not authorize or mutate state; REST remains authoritative.
 
+### Call start rejected with HTTP 409
+
+- Search API logs for `event=call_start_rejected` and correlate `requestId` with the HTTP completion. The record includes the route, `actorUserId`, `agentId`, `campaignId`, `contactId`, and the exact `reason`. A rejected start has no call ID and does not appear in Call History.
+- `agentRegistration` captures `registered`, `availabilityStatus`, `lastRegisteredAt`, and `lastUnregisteredAt` from the locked agent row used to decide the rejection. It is null when a gate rejects before that row is read. IDs that have not yet been resolved are also null; for example, a lead's campaign may not be resolved before an agent registration rejection. HTTP response messages and status codes remain unchanged.
+- For `agent_not_registered`, compare this snapshot with `agent_registration_updated` logs for the same `agentId` or `sipUsername`. `source=sofia_event` records persisted `sofia::register`, `sofia::unregister`, and `sofia::expire` events (including registration renewals); `source=reconciliation` records rows corrected from the live FreeSWITCH registration table. These logs use an explicit field allowlist and exclude passwords, authentication headers, cookies, raw SIP frames, and destination numbers.
+- Check both `telephony_observability_state.registration_reconciled_at` in PostgreSQL and the metrics snapshot freshness timestamp. A fresh Prometheus scrape can still contain stale application gauges. Use a direct read-only `sofia status profile internal-webrtc reg` check when freshness is uncertain; do not infer current registration from stale zeros.
+- One-shot ESL requests have a five-second total deadline, including authentication, and reject on premature connection closure or inactivity. Failed requests release the reconciliation/metrics overlap guards so a later scheduled run can retry. This does not automatically retry an originate or another uncertain call-control command: inspect its UUIDs and events before a manual retry.
+- Preserve browser SIP/WebRTC diagnostics and custom-client request context when the registration history cannot distinguish an actual WSS disconnect from stale database state. The structured logs only cover requests and registration changes after this version is deployed; they do not reconstruct older missing response bodies.
+
 ### Media or voicemail
 
 - Compare browser WebRTC and provider/customer RTP separately.
