@@ -128,7 +128,7 @@ export function startFreeSwitchEventListener(config: AppConfig, pool: pg.Pool, l
       );
     },
     process: async (frame) => {
-      await persistFreeSwitchEvent(config, pool, frame);
+      await persistFreeSwitchEvent(config, pool, frame, logger);
       recordFreeSwitchEventProcessed(frame.headers["event-name"]);
     }
   });
@@ -325,7 +325,12 @@ function isTransientPersistenceError(error: unknown): boolean {
   );
 }
 
-async function persistFreeSwitchEvent(config: AppConfig, pool: pg.Pool, frame: EslFrame): Promise<void> {
+async function persistFreeSwitchEvent(
+  config: AppConfig,
+  pool: pg.Pool,
+  frame: EslFrame,
+  logger?: Pick<Logger, "info">
+): Promise<void> {
   const eventName = frame.headers["event-name"];
   if (eventName === "BACKGROUND_JOB") {
     const jobUuid = frame.headers["job-uuid"]?.trim();
@@ -336,7 +341,7 @@ async function persistFreeSwitchEvent(config: AppConfig, pool: pg.Pool, frame: E
     return;
   }
   if (eventName === "CUSTOM" && isAgentRegistrationEvent(frame)) {
-    await persistAgentRegistrationEvent(config, pool, frame);
+    await persistAgentRegistrationEvent(config, pool, frame, logger);
     return;
   }
   if (eventName === "CUSTOM" && isVoicemailPlaybackEvent(frame)) {
@@ -1547,14 +1552,20 @@ async function persistVoicemailDetectionEvent(pool: pg.Pool, frame: EslFrame): P
 async function persistAgentRegistrationEvent(
   config: AppConfig,
   pool: pg.Pool,
-  frame: EslFrame
+  frame: EslFrame,
+  logger?: Pick<Logger, "info">
 ): Promise<void> {
   const registrationEvent = mapAgentRegistrationEvent(config, frame);
   if (!registrationEvent) {
     return;
   }
 
-  await pool.query(
+  const result = await pool.query<{
+    id: string;
+    user_id: string;
+    last_registered_at: Date | null;
+    last_unregistered_at: Date | null;
+  }>(
     `
       update agents
       set registered = $2,
@@ -1576,9 +1587,27 @@ async function persistAgentRegistrationEvent(
           end,
           updated_at = now()
       where sip_username = $1
+      returning id, user_id, last_registered_at, last_unregistered_at
     `,
     [registrationEvent.sipUsername, registrationEvent.registered]
   );
+  for (const agent of result.rows) {
+    logger?.info(
+      {
+        event: "agent_registration_updated",
+        source: "sofia_event",
+        eventSubclass: registrationEvent.eventSubclass,
+        freeSwitchEventAt: parseFreeSwitchEventTimestamp(frame.headers),
+        agentId: agent.id,
+        userId: agent.user_id,
+        sipUsername: registrationEvent.sipUsername,
+        registered: registrationEvent.registered,
+        lastRegisteredAt: agent.last_registered_at,
+        lastUnregisteredAt: agent.last_unregistered_at
+      },
+      "Agent registration updated"
+    );
+  }
 }
 
 async function persistBackgroundJobEvent(config: AppConfig, pool: pg.Pool, frame: EslFrame): Promise<void> {

@@ -92,6 +92,7 @@ import { inspectCampaignRecordingExport, openCampaignRecordingExport } from "./c
 import {
   createDialerCall,
   createDialerCallFailureMessage,
+  type CallStartRejection,
   dropVoicemailForCall,
   endDialerCall,
   inferAgentEndOutcome,
@@ -181,6 +182,33 @@ const endCallSchema = z.object({
   campaignId: z.string().uuid().optional(),
   clientContext: callEndClientContextSchema.optional()
 }) satisfies z.ZodType<EndCallRequest>;
+
+function logCallStartRejection(
+  request: FastifyRequest,
+  user: PublicUser,
+  context: {
+    reason: CallStartRejection["reason"] | "no_campaign" | "manual_dialing_disabled";
+    agentId?: string;
+    campaignId?: string | null;
+    contactId?: string;
+    agentRegistration?: CallStartRejection["agentRegistration"];
+  }
+): void {
+  request.log.info(
+    {
+      event: "call_start_rejected",
+      requestId: request.id,
+      route: request.routeOptions.url,
+      actorUserId: user.id,
+      agentId: context.agentId ?? null,
+      campaignId: context.campaignId ?? null,
+      contactId: context.contactId ?? null,
+      reason: context.reason,
+      agentRegistration: context.agentRegistration ?? null
+    },
+    "Call start rejected"
+  );
+}
 
 function buildCallEndRequestContext(
   request: FastifyRequest,
@@ -1037,9 +1065,14 @@ export function registerDashboardRoutes(
 
     const campaign = await getAgentCampaignForDialerAction(pool, input.campaignId, contactRetryPolicy);
     if (!campaign) {
+      logCallStartRejection(request, publicUser, { reason: "no_campaign", campaignId: input.campaignId });
       return reply.code(409).send({ message: "No campaign is available" });
     }
     if (!campaign.manual_dialing_enabled) {
+      logCallStartRejection(request, publicUser, {
+        reason: "manual_dialing_disabled",
+        campaignId: campaign.id
+      });
       return reply.code(409).send({ message: "Manual dialing is disabled for this campaign" });
     }
 
@@ -1055,7 +1088,13 @@ export function registerDashboardRoutes(
       manualDial: true,
       callRecordingEnabled: campaign.call_recording_enabled,
       earlyMediaAvmdEnabled: campaign.early_media_avmd_enabled,
-      eventType: "manual_dial_started"
+      eventType: "manual_dial_started",
+      onRejected: (rejection) =>
+        logCallStartRejection(request, publicUser, {
+          ...rejection,
+          agentId: agent.id,
+          campaignId: campaign.id
+        })
     });
     if (!created.ok) {
       return reply.code(409).send({ message: createDialerCallFailureMessage(created.reason) });
@@ -1074,6 +1113,7 @@ export function registerDashboardRoutes(
     const publicUser = toPublicUser(user);
     const campaign = await getAgentCampaignForDialerAction(pool, input.campaignId, contactRetryPolicy);
     if (!campaign) {
+      logCallStartRejection(request, publicUser, { reason: "no_campaign", campaignId: input.campaignId });
       return reply.code(409).send({ message: "No campaign is available" });
     }
 
@@ -1087,7 +1127,13 @@ export function registerDashboardRoutes(
       manualDial: false,
       callRecordingEnabled: campaign.call_recording_enabled,
       earlyMediaAvmdEnabled: campaign.early_media_avmd_enabled,
-      eventType: "call_next_started"
+      eventType: "call_next_started",
+      onRejected: (rejection) =>
+        logCallStartRejection(request, publicUser, {
+          ...rejection,
+          agentId: agent.id,
+          campaignId: campaign.id
+        })
     });
     if (!created.ok) {
       return reply.code(409).send({ message: createDialerCallFailureMessage(created.reason) });
@@ -1117,7 +1163,13 @@ export function registerDashboardRoutes(
       earlyMediaAvmdEnabled: false,
       confirmCompletedLead: input.confirmCompletedLead === true,
       confirmRetryWait: input.confirmRetryWait === true,
-      eventType: "lead_call_started"
+      eventType: "lead_call_started",
+      onRejected: (rejection) =>
+        logCallStartRejection(request, publicUser, {
+          ...rejection,
+          agentId: agent.id,
+          contactId: params.contactId
+        })
     });
     if (!created.ok) {
       return reply.code(409).send({ message: createDialerCallFailureMessage(created.reason) });

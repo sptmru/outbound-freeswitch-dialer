@@ -170,6 +170,16 @@ type CreateDialerCallFailureReason =
 type CreateDialerCallResult =
   { ok: true; callId: string; campaignId: string } | { ok: false; reason: CreateDialerCallFailureReason };
 
+export interface CallStartRejection {
+  reason: CreateDialerCallFailureReason;
+  agentRegistration: {
+    registered: boolean;
+    availabilityStatus: string;
+    lastRegisteredAt: Date | null;
+    lastUnregisteredAt: Date | null;
+  } | null;
+}
+
 interface DialerCallContext {
   callRecordingEnabled: boolean;
   earlyMediaAvmdEnabled: boolean;
@@ -196,6 +206,7 @@ export async function createDialerCall(
     confirmCompletedLead?: boolean;
     confirmRetryWait?: boolean;
     eventType: string;
+    onRejected?: (rejection: CallStartRejection) => void;
   }
 ): Promise<CreateDialerCallResult> {
   const client = await pool.connect();
@@ -203,6 +214,11 @@ export async function createDialerCall(
   let callContext: DialerCallContext;
   let committedContext: DialerCallContext | null = null;
   let effectiveCallerId: string | null = null;
+  let agentRegistration: CallStartRejection["agentRegistration"] = null;
+  const rejectCallStart = (reason: CreateDialerCallFailureReason): CreateDialerCallResult => {
+    input.onRejected?.({ reason, agentRegistration });
+    return { ok: false, reason };
+  };
   try {
     await client.query("begin");
 
@@ -223,7 +239,7 @@ export async function createDialerCall(
     );
     if (callStartGate.rows[0]?.paused) {
       await client.query("rollback");
-      return { ok: false, reason: "maintenance" };
+      return rejectCallStart("maintenance");
     }
 
     if (input.actorUserId) {
@@ -233,7 +249,7 @@ export async function createDialerCall(
       ]);
       if (!actor.rows[0]?.is_active) {
         await client.query("rollback");
-        return { ok: false, reason: "session_revoked" };
+        return rejectCallStart("session_revoked");
       }
       const activeSupervisorSession = await client.query(
         `select 1
@@ -245,7 +261,7 @@ export async function createDialerCall(
       );
       if (activeSupervisorSession.rowCount) {
         await client.query("rollback");
-        return { ok: false, reason: "supervisor_session" };
+        return rejectCallStart("supervisor_session");
       }
     }
 
@@ -264,17 +280,28 @@ export async function createDialerCall(
       availability_status: "available" | "paused" | "wrap_up";
       caller_id: string | null;
       registered: boolean;
-    }>("select registered, availability_status, caller_id from agents where id = $1 for update", [
-      input.agentId
-    ]);
+      last_registered_at: Date | null;
+      last_unregistered_at: Date | null;
+    }>(
+      "select registered, availability_status, caller_id, last_registered_at, last_unregistered_at from agents where id = $1 for update",
+      [input.agentId]
+    );
     const agentState = agent.rows[0];
+    if (agentState) {
+      agentRegistration = {
+        registered: agentState.registered,
+        availabilityStatus: agentState.availability_status,
+        lastRegisteredAt: agentState.last_registered_at ?? null,
+        lastUnregisteredAt: agentState.last_unregistered_at ?? null
+      };
+    }
     if (!agentState?.registered) {
       await client.query("rollback");
-      return { ok: false, reason: "agent_not_registered" };
+      return rejectCallStart("agent_not_registered");
     }
     if (agentState.availability_status === "paused") {
       await client.query("rollback");
-      return { ok: false, reason: "agent_paused" };
+      return rejectCallStart("agent_paused");
     }
     effectiveCallerId = resolveOutboundCallerId(agentState.caller_id, config.SIP_TRUNK_CALLER_ID);
     const activeCall = await client.query<{ id: string }>(
@@ -291,7 +318,7 @@ export async function createDialerCall(
     );
     if (activeCall.rowCount) {
       await client.query("rollback");
-      return { ok: false, reason: "active_call" };
+      return rejectCallStart("active_call");
     }
 
     if (input.contactId === "next") {
@@ -304,7 +331,7 @@ export async function createDialerCall(
       });
       if (!contact) {
         await client.query("rollback");
-        return { ok: false, reason: "no_callable_contacts" };
+        return rejectCallStart("no_callable_contacts");
       }
       callContext = {
         callRecordingEnabled: contact.callRecordingEnabled,
@@ -327,7 +354,7 @@ export async function createDialerCall(
       );
       if (!contact) {
         await client.query("rollback");
-        return { ok: false, reason: "lead_not_callable" };
+        return rejectCallStart("lead_not_callable");
       }
       callContext = {
         callRecordingEnabled: contact.callRecordingEnabled,
@@ -453,7 +480,7 @@ export async function createDialerCall(
     await client.query("rollback");
     const uniqueConflict = mapCreateDialerCallUniqueViolation(error);
     if (uniqueConflict) {
-      return { ok: false, reason: uniqueConflict };
+      return rejectCallStart(uniqueConflict);
     }
     throw error;
   } finally {

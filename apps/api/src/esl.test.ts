@@ -1,7 +1,103 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import net from "node:net";
+import { describe, it, type TestContext } from "node:test";
 import type { AppConfig } from "./config.js";
-import { __testing } from "./esl.js";
+import { __testing, sendFreeSwitchApiCommand } from "./esl.js";
+
+async function eslFixture(t: TestContext, onCommand: (socket: net.Socket) => void): Promise<AppConfig> {
+  const sockets = new Set<net.Socket>();
+  const server = net.createServer((socket) => {
+    sockets.add(socket);
+    socket.on("close", () => sockets.delete(socket));
+    socket.on("error", () => undefined);
+    let buffer = "";
+    socket.write("Content-Type: auth/request\n\n");
+    socket.on("data", (chunk) => {
+      buffer += chunk.toString();
+      let end: number;
+      while ((end = buffer.indexOf("\n\n")) !== -1) {
+        const frame = buffer.slice(0, end);
+        buffer = buffer.slice(end + 2);
+        if (frame.startsWith("auth ")) {
+          socket.write("Content-Type: command/reply\nReply-Text: +OK accepted\n\n");
+        } else if (frame === "connect") {
+          socket.write("Content-Type: command/reply\nReply-Text: +OK connected\n\n");
+        } else {
+          onCommand(socket);
+        }
+      }
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(async () => {
+    for (const socket of sockets) socket.destroy();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+  return {
+    FREESWITCH_ESL_HOST: "127.0.0.1",
+    FREESWITCH_ESL_PORT: (server.address() as net.AddressInfo).port,
+    FREESWITCH_ESL_PASSWORD: "fixture-only"
+  } as AppConfig;
+}
+
+describe("ESL command transport", () => {
+  it("rejects promptly when the peer closes before a response", { timeout: 2_000 }, async (t) => {
+    const fixture = await eslFixture(t, (socket) => socket.end());
+    await assert.rejects(
+      sendFreeSwitchApiCommand(fixture, "status"),
+      /ESL connection closed before command response/
+    );
+  });
+
+  it("rejects a truncated response on peer close", { timeout: 2_000 }, async (t) => {
+    const fixture = await eslFixture(t, (socket) =>
+      socket.end("Content-Type: api/response\nContent-Length: 10\n\n+OK")
+    );
+    await assert.rejects(
+      sendFreeSwitchApiCommand(fixture, "status"),
+      /ESL connection closed before command response/
+    );
+  });
+
+  it("accepts a complete response followed immediately by close", async (t) => {
+    const fixture = await eslFixture(t, (socket) =>
+      socket.end("Content-Type: api/response\nContent-Length: 4\n\n+OK\n")
+    );
+    assert.equal((await sendFreeSwitchApiCommand(fixture, "status")).body, "+OK\n");
+  });
+
+  it("preserves FreeSWITCH error responses", async (t) => {
+    const fixture = await eslFixture(t, (socket) =>
+      socket.end("Content-Type: api/response\nContent-Length: 11\n\n-ERR denied")
+    );
+    await assert.rejects(sendFreeSwitchApiCommand(fixture, "status"), /-ERR denied/);
+  });
+
+  it("times out an open silent connection", { timeout: 2_000 }, async (t) => {
+    const fixture = await eslFixture(t, () => undefined);
+    await assert.rejects(
+      __testing.sendFreeSwitchCommand(fixture, "api status", 100),
+      /ESL command timed out/
+    );
+  });
+
+  it("bounds total time even while partial data keeps arriving", { timeout: 2_000 }, async (t) => {
+    let chunks = 0;
+    const fixture = await eslFixture(t, (socket) => {
+      const timer = setInterval(() => {
+        chunks += 1;
+        socket.write("x");
+      }, 20);
+      socket.on("close", () => clearInterval(timer));
+      t.after(() => clearInterval(timer));
+    });
+    await assert.rejects(
+      __testing.sendFreeSwitchCommand(fixture, "api status", 250),
+      /ESL command timed out/
+    );
+    assert.ok(chunks >= 2);
+  });
+});
 
 const config = {
   FREESWITCH_DOMAIN: "dialer.local",
