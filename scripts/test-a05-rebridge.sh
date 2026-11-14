@@ -24,6 +24,7 @@ mkdir "$RUN_DIR/socket"
 chmod 777 "$RUN_DIR/socket"
 "$NODE_BIN" "$ROOT_DIR/scripts/a05-rebridge-probe.mjs" render "$RUN_DIR"
 sha256sum "$ROOT_DIR"/scripts/a05-*.mjs "$ROOT_DIR"/scripts/a04-*.mjs "$0" \
+  "$ROOT_DIR/tests/fixtures/inbound/sip.mjs" \
   "$ROOT_DIR/scripts/a02-ingress-probe.mjs" \
   "$ROOT_DIR/infra/freeswitch/prototypes/a02/freeswitch.xml.tpl" > "$RUN_DIR/source-sha256.txt"
 docker run -d --name "$NET_CONTAINER" --network none --memory 32m --pids-limit 8 \

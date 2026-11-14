@@ -29,7 +29,9 @@
     "test:prototype:durable-ingress": "bash scripts/test-a03-ingress.sh",
     "test:prototype:desk-binding": "bash scripts/test-a04-binding.sh",
     "test:prototype:rebridge": "bash scripts/test-a05-rebridge.sh",
-    "test:prototype:budgets": "bash scripts/test-a06-budgets.sh"
+    "test:prototype:budgets": "bash scripts/test-a06-budgets.sh",
+    "test:inbound:db": "node scripts/run-inbound-db.mjs",
+    "test:inbound:db:isolated": "bash scripts/test-inbound-db.sh"
   },
   "engines": {
     "node": ">=22"

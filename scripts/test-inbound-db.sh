@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# Creates its own database. No .env, published ports, application DB or external calls.
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT_DIR"
+PG_IMAGE="postgres@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73"
+RUN_DIR="$(mktemp -d /tmp/outbound-inbound-db.XXXXXXXX)"
+PG_CONTAINER="outbound-inbound-db-$(basename "$RUN_DIR")"
+created=false
+cleanup() {
+  result=$?
+  trap - EXIT
+  if [[ "$created" == true ]]; then
+    docker logs "$PG_CONTAINER" > "$RUN_DIR/postgres.log" 2>&1 || true
+    if ! docker rm -fv "$PG_CONTAINER" > "$RUN_DIR/container-cleanup.txt" 2>&1; then result=1; fi
+  fi
+  echo "A07 DB artifacts: $RUN_DIR"
+  exit "$result"
+}
+trap cleanup EXIT
+mkdir "$RUN_DIR/socket"
+chmod 777 "$RUN_DIR/socket"
+git rev-parse HEAD > "$RUN_DIR/base-revision.txt"
+sha256sum tests/fixtures/inbound/* apps/api/src/inbound-harness.integration.test.ts scripts/*inbound-db* > "$RUN_DIR/source-sha256.txt"
+docker image inspect "$PG_IMAGE" --format '{{.Id}} {{json .RepoDigests}}' > "$RUN_DIR/image.txt"
+docker run -d --name "$PG_CONTAINER" --network none --memory 512m --cpus 2 --pids-limit 128 \
+  --mount "type=bind,src=$RUN_DIR/socket,dst=/db-socket" \
+  -e POSTGRES_HOST_AUTH_METHOD=trust -e POSTGRES_DB=inbound_test "$PG_IMAGE" \
+  -c unix_socket_directories=/var/run/postgresql,/db-socket -c listen_addresses= > "$RUN_DIR/pg-id.txt"
+created=true
+ready=false
+for ((i=0;i<100;i++)); do
+  if docker exec "$PG_CONTAINER" sh -c 'test "$(cat /proc/1/comm)" = postgres && pg_isready -h /db-socket -U postgres -d inbound_test' >/dev/null 2>&1; then ready=true; break; fi
+  sleep 0.1
+done
+if [[ "$ready" != true ]]; then echo 'Isolated inbound PostgreSQL not ready' >&2; exit 1; fi
+docker inspect "$PG_CONTAINER" --format '{{.HostConfig.NetworkMode}} {{json .HostConfig.PortBindings}}' > "$RUN_DIR/isolation.txt"
+export TEST_DATABASE_URL="postgresql://postgres@localhost/inbound_test?host=$RUN_DIR/socket"
+unset DATABASE_URL
+export INBOUND_TEST_ARTIFACTS="$RUN_DIR"
+timeout 120 npm run test:inbound:db > "$RUN_DIR/result.txt" 2>&1 || { cat "$RUN_DIR/result.txt"; exit 1; }
+cat "$RUN_DIR/result.txt"

@@ -12,7 +12,7 @@
     "openapi:check": "node ../../scripts/generate-openapi-schemas.mjs --check",
     "openapi:generate": "node ../../scripts/generate-openapi-schemas.mjs",
     "start": "node dist/server.js",
-    "test": "npm --workspace @outbound-dialer/shared run build && tsc -p tsconfig.test.json && node --test dist-test/*.test.js dist-test/dashboard/*.test.js",
+    "test": "npm --workspace @outbound-dialer/shared run build && tsc -p tsconfig.test.json && node ../../scripts/run-api-tests.mjs dist-test",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {

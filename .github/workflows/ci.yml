@@ -27,6 +27,7 @@ jobs:
           --health-retries 10
     env:
       TEST_DATABASE_URL: postgres://outbound_dialer:integration-test-password@127.0.0.1:5432/outbound_dialer_test
+      INBOUND_TEST_ARTIFACTS: test-results/inbound-db
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -34,6 +35,8 @@ jobs:
           node-version: 22.13.0
           cache: npm
       - run: npm ci
+      - name: Required inbound DB harness (no skips)
+        run: npm run test:inbound:db
       - run: npm run quality
       - run: npm audit --omit=dev --audit-level=high
       - name: Validate Compose model
@@ -43,6 +46,12 @@ jobs:
           APP_ENV_FILE="$PWD/.env" docker compose --env-file .env -f infra/docker/docker-compose.yml config --quiet
       - name: Validate hardened proxy runtime
         run: bash scripts/test-proxy-runtime.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: inbound-db-evidence
+          path: test-results/inbound-db/
+          if-no-files-found: warn
 
   browser:
     runs-on: ubuntu-latest
@@ -56,6 +65,14 @@ jobs:
       - run: npm run build
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: browser-evidence
+          path: |
+            test-results/
+            playwright-report/
+          if-no-files-found: warn
 
   deploy-client:
     if: >-

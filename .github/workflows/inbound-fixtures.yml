@@ -1,0 +1,62 @@
+name: Isolated inbound fixtures
+
+# Explicitly requested local fixtures only. No target/provider/deployment secrets.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  local-sip-rtp:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.13.0
+          cache: npm
+      - run: npm ci
+      - name: Fetch pinned local lab dependencies
+        run: |
+          docker pull safarov/freeswitch@sha256:b31c743f4c911a19687c61e3214968f2a24f93f9d3d667cc26284192e158ffc6
+          docker pull postgres@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73
+      - name: Local UDP SIP/RTP and executor failure fixtures (no browser/provider)
+        run: sudo env "PATH=$PATH" timeout 600 npm run test:prototype:rebridge
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: local-sip-rtp-evidence
+          path: |
+            /tmp/outbound-a05.*/report.json
+            /tmp/outbound-a05.*/*.log
+            /tmp/outbound-a05.*/images.txt
+            /tmp/outbound-a05.*/source-sha256.txt
+            /tmp/outbound-a05.*/base-revision.txt
+            /tmp/outbound-a05.*/isolation.txt
+            /tmp/outbound-a05.*/*.wav
+          if-no-files-found: warn
+
+  db-saturation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.13.0
+          cache: npm
+      - run: npm ci
+      - run: docker pull postgres@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73
+      - name: Bounded DB saturation with simulated ESL (not inbound load acceptance)
+        run: timeout 120 npm run test:prototype:budgets
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: db-saturation-evidence
+          path: |
+            /tmp/outbound-a06.*/*.json
+            /tmp/outbound-a06.*/*.txt
+            /tmp/outbound-a06.*/*.log
+          if-no-files-found: warn

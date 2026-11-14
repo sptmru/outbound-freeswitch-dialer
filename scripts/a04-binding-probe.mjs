@@ -6,7 +6,7 @@ import { pathToFileURL } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import pg from "pg";
 import { openEsl } from "./a02-ingress-probe.mjs";
-import { sipClient } from "./a04-sip-client.mjs";
+import { localSipClient as sipClient } from "../tests/fixtures/inbound/sip.mjs";
 import { schema, takeover, verify, heartbeat, reserve, accepts, OCCUPIED } from "./a04-binding.mjs";
 
 export async function render(directory, identities = []) {

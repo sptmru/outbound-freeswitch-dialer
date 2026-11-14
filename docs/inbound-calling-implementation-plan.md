@@ -960,9 +960,13 @@ npm run test:load:desk
 npm run test:load:sip-rtp
 ```
 
-Add discoverable DB/concurrency and inbound/transfer load commands where current scripts
-lack coverage. `test:inbound:db` and `test:load:inbound` are suggested names, **not existing
-scripts**. Document fixtures, setup, dependencies, cleanup, and invocation in runbooks.
+A07 adds `npm run test:inbound:db` (required explicit test DB) and
+`npm run test:inbound:db:isolated` (disposable network-isolated PostgreSQL), reusable
+process checkpoints, simulated ESL ledger/event replay and local SIP fixture reuse.
+See [the A07 harness runbook](runbooks/inbound-test-harness.md) for dependencies,
+discovery, cleanup, CI evidence and proof boundaries. These self-checks exercise test
+infrastructure, not product admission. `test:load:inbound` remains proposed for I03,
+**not an existing script**.
 
 Integrate unit/contract tests into quality; real PostgreSQL integration/bounded races
 into a CI job with PostgreSQL; browser/FS into appropriate jobs. Run heavier load/soak
