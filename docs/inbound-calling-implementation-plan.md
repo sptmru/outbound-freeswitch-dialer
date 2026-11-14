@@ -427,6 +427,12 @@ it does not automatically create another transfer offer.
 
 ## 6. Inbound Path and States
 
+A02 has an opt-in [isolated ingress prototype and evidence report](inbound-ingress-prototype.md).
+It exercises a loopback trust/DID gate, correlation-header rejection, bounded refusal,
+and answered waiting audio on the pinned FreeSWITCH base image. Provider trust, DID
+delivery, billing and forwarding caller ID remain open; this prototype does not enable
+product ingress or implement durable admission.
+
 1. Validate trusted SIP source and DID in the repo-owned dialplan.
 2. Set internal correlation; do not trust arbitrary SIP headers as product variables.
 3. Idempotently register by ingress UUID with queue/deadline. Handle initial ingestion
