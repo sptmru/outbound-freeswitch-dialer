@@ -11,7 +11,14 @@ try {
 const commands = [
   ["npm", ["--workspace", "@outbound-dialer/shared", "run", "build"]],
   ["node", ["node_modules/typescript/bin/tsc", "-p", "apps/api/tsconfig.test.json"]],
-  ["node", ["--test", "apps/api/dist-test/inbound-harness.integration.test.js"]]
+  [
+    "node",
+    [
+      "--test",
+      "apps/api/dist-test/inbound-harness.integration.test.js",
+      "apps/api/dist-test/inbound-schema.integration.test.js"
+    ]
+  ]
 ];
 for (const [command, args] of commands) {
   const code = await new Promise((resolve, reject) => {

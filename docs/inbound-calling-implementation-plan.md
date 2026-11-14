@@ -163,6 +163,10 @@ Retain per-call/per-agent ignore and expiry exclusions across distribution attem
 Represent ingress evidence independently of an already existing `calls` row (section
 6.1); creating only a foreign-keyed child row cannot close the pre-insert recovery gap.
 
+B01 now supplies the additive routing/configuration schema and internal validation.
+See [the B01 schema contract and verification](inbound-routing-schema.md). Runtime
+inbound routing and call-side schema extensions remain separate tasks.
+
 ## 5. Race Prevention: Mandatory Invariants
 
 1. At most one interactive slot per agent, including reservations before SIP creation.

@@ -14,14 +14,14 @@ cleanup() {
     docker logs "$PG_CONTAINER" > "$RUN_DIR/postgres.log" 2>&1 || true
     if ! docker rm -fv "$PG_CONTAINER" > "$RUN_DIR/container-cleanup.txt" 2>&1; then result=1; fi
   fi
-  echo "A07 DB artifacts: $RUN_DIR"
+  echo "Inbound DB artifacts: $RUN_DIR"
   exit "$result"
 }
 trap cleanup EXIT
 mkdir "$RUN_DIR/socket"
 chmod 777 "$RUN_DIR/socket"
 git rev-parse HEAD > "$RUN_DIR/base-revision.txt"
-sha256sum tests/fixtures/inbound/* apps/api/src/inbound-harness.integration.test.ts scripts/*inbound-db* > "$RUN_DIR/source-sha256.txt"
+sha256sum tests/fixtures/inbound/* apps/api/src/inbound*.ts apps/api/src/dashboard/recordings.ts apps/api/src/dashboard/phone.ts apps/api/db/migrations/*.sql scripts/*inbound-db* > "$RUN_DIR/source-sha256.txt"
 docker image inspect "$PG_IMAGE" --format '{{.Id}} {{json .RepoDigests}}' > "$RUN_DIR/image.txt"
 docker run -d --name "$PG_CONTAINER" --network none --memory 512m --cpus 2 --pids-limit 128 \
   --mount "type=bind,src=$RUN_DIR/socket,dst=/db-socket" \

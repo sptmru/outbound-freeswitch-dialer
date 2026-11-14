@@ -4,7 +4,8 @@ export function harnessSelfCheck(env?: Record<string, string | undefined>): Prom
   scenarios: unknown[];
   cleanup?: { schemaRemoved: boolean; workersExited: boolean };
 }>;
-import type { Pool } from "pg";
+import type { Pool, PoolConfig } from "pg";
+export function databaseConfig(value: string, schema?: string): PoolConfig;
 import type { ChildProcess } from "node:child_process";
 export interface FixtureWorker {
   child: ChildProcess;

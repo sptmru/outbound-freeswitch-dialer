@@ -381,7 +381,12 @@ export async function deleteRecording(pool: pg.Pool, recordingId: string): Promi
        and state not in ('completed', 'failed', 'canceled') limit 1`,
       [recordingId]
     );
-    if (activeReference.rowCount) {
+    const inboundReference = await client.query(
+      `select 1 from inbound_flow_versions where first_audio_id = $1 or second_audio_id = $1
+       union all select 1 from inbound_queues where waiting_audio_id = $1 limit 1`,
+      [recordingId]
+    );
+    if (activeReference.rowCount || inboundReference.rowCount) {
       await client.query("rollback");
       return { status: "in_use" };
     }
