@@ -650,6 +650,12 @@ activate a provider DID.
 
 ### 9.1. Controlling Desk Session and SIP Endpoint
 
+A04's isolated [Desk/SIP binding prototype and selected protocol](inbound-desk-binding-prototype.md)
+uses per-generation SIP identities, authoritative contact verification and fenced
+controller updates. It proves local FS + DB endpoint selection/takeover with UDP SIP
+clients; it does not implement product Desk sessions or prove browser/provider media.
+Product integration remains B02/D01/E04, with actual browser acceptance in I02.3.
+
 Bind the controlling Desk session/revision to a server-verified SIP registration and
 specific routable endpoint, with a binding generation. A shared agent SIP username or
 the agent-level `registered` flag is insufficient. Phase A must choose and validate

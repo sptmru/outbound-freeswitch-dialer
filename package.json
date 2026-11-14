@@ -26,7 +26,8 @@
     "test:load:tokens": "node scripts/collect-load-agent-tokens.mjs",
     "typecheck": "npm --workspace @outbound-dialer/shared run build && npm --workspace @outbound-dialer/api run typecheck && npm --workspace @outbound-dialer/web run typecheck",
     "test:voicemail:db": "bash scripts/test-campaign-voicemail.sh",
-    "test:prototype:durable-ingress": "bash scripts/test-a03-ingress.sh"
+    "test:prototype:durable-ingress": "bash scripts/test-a03-ingress.sh",
+    "test:prototype:desk-binding": "bash scripts/test-a04-binding.sh"
   },
   "engines": {
     "node": ">=22"
