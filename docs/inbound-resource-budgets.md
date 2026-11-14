@@ -291,3 +291,37 @@ Validation commands:
 No browser journey, real SIP/RTP, provider, full load/soak or deployment check was
 run. A06 introduces only an executable specification and a disposable prototype;
 its passing checks cannot establish the future feature's runtime acceptance.
+
+### A07 follow-up: reproducible storage and worker failures
+
+The later A07 runs exposed a local Docker-volume storage bottleneck: SQLSTATE
+`55P03` at the admission advisory lock while other control sessions remained in
+`COMMIT`, waiting on `WalSync` / `WALWrite`. Previously the parent hid the worker
+error behind a generic checkpoint timeout. The runner now reports worker errors
+immediately with lane/sequence/stage, preserves logs/exit status, and captures PG
+activity/WAL timing on failure. Original failed measurements remain evidence.
+
+The default connection/executor isolation fixture uses a 256 MiB PGDATA tmpfs,
+bounded by the same 512 MiB/2 CPU container. `fsync` and `synchronous_commit` stay
+on, all numeric budgets/rates/assertions stay unchanged. The report records storage
+mode, actual source revision, PG settings and WAL statistics. This fixture measures
+SQL/pool/executor isolation with simulated ESL on memory-backed test storage;
+it does not establish production disk latency, durability or crash/restart recovery.
+I03 must repeat the workload on the intended storage. No application settings change.
+
+`A06_PG_STORAGE=volume npm run test:prototype:budgets` retains disk-backed diagnostics
+with the same budgets and no fallback/retry. Invalid modes fail before allocation.
+Each mode saves `storage.txt`, `isolation.txt`, source hashes, report, stdout/stderr,
+PostgreSQL logs and container-removal output. The isolated CI jobs now run for PRs,
+in addition to manual dispatch; deployment behavior stays unchanged.
+
+Follow-up local evidence (Node 22.13.0, PG 17.11, unchanged 2 CPU/512 MiB):
+`/tmp/outbound-a06.1o1IDuuX` retains the first early worker/PG activity diagnosis;
+`/tmp/outbound-a06.Ec3xtksc` retains the disk-backed control failure with SQLSTATE
+`55P03`, `WalSync` / `WALWrite` commit waits and WAL timing. The memory-backed
+reference passed at `/tmp/outbound-a06.jbLm9VeZ`: 960 distinct control writes,
+16 unique commands, zero remaining execution locks/uncertainty/backlog, four
+workers exiting zero; maximum lane p95 15.335 ms and p99 39.683 ms against the
+unchanged 100/250 ms budgets. Reports include source hashes and container removal.
+These are separate storage measurements; the passing reference does not replace
+or reclassify the volume failures. Hosted CI evidence belongs to the A07 handoff.

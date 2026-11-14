@@ -2,6 +2,7 @@ name: Isolated inbound fixtures
 
 # Explicitly requested local fixtures only. No target/provider/deployment secrets.
 on:
+  pull_request:
   workflow_dispatch:
 
 permissions:

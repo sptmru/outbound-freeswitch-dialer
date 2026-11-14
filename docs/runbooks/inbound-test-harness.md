@@ -113,11 +113,30 @@ Use these clients only inside the existing A04/A05 network-none namespace runner
   strict DB command and quality, and uploads `test-results/inbound-db/` on success
   or failure. Browser CI builds the web app, installs Chromium, runs Playwright,
   retains traces/screenshots on failure and uploads its HTML report/test results.
-- `.github/workflows/inbound-fixtures.yml` is manual-only. Its local-SIP/RTP job
+- `.github/workflows/inbound-fixtures.yml` runs on pull requests and supports manual
+  dispatch once available on the default branch. Its local-SIP/RTP job
   installs Node/npm dependencies, fetches pinned FS/PG images and runs A05 in
   isolated namespaces. Its separate bounded-saturation job runs A06 with pinned
   PG. Both have finite job/command deadlines and always upload sanitized evidence.
   Neither job receives provider/deployment credentials or changes deployment jobs.
+
+The saturation job uses a bounded 256 MiB tmpfs for disposable PGDATA, within the
+existing 512 MiB/2 CPU container limit. PostgreSQL keeps `fsync=on` and
+`synchronous_commit=on`; every A06 SQL/lock/pool/latency budget is unchanged. This
+isolates connection/executor scheduling from the host Docker-volume WAL flush
+latency. It proves resource isolation against simulated ESL, not durable storage
+performance or database-restart survival. I03 must measure the target storage.
+For storage diagnostics, use `A06_PG_STORAGE=volume npm run test:prototype:budgets`;
+that mode keeps the same budgets and fails on slow storage. It never falls back to
+tmpfs or retries a failed measurement. `storage.txt`, `isolation.txt` and the JSON
+report identify the selected storage mode and PostgreSQL settings.
+
+Worker SQL failures carry SQLSTATE, lane/sequence/stage and stack to the parent
+before pool cleanup. Failed/aborted workers fail the current checkpoint promptly;
+the report retains bounded stderr, exit status, PostgreSQL activity and WAL timing
+even when cleanup has to kill other workers. The shell prints failed-run output
+and records owned-container removal. `tests/a06-worker-monitor.test.mjs` covers
+early errors, abrupt exits, normal completion and invalid storage selection.
 
 The DB report contains seed, eight scenario snapshots, checkpoint transcript,
 status/error and schema/process cleanup assertions. Reports omit connection URLs.
@@ -202,3 +221,28 @@ has not been established. No A06 budgets, retries or production code were change
 and no later run is substituted for either failure. Diagnose the saturation fixture
 and execute the declared CI jobs before closing the A07.3 gate. Hosted CI requires
 publishing the branch, which is outside this run's authorization.
+
+## A07 follow-up — local verification and CI submission
+
+The owner subsequently merged the harness into `dev` as
+`1a56154b5c4562b6d30a175dc02ce77ab2761008` and approved a follow-up PR into `dev`.
+Branch `fix/a07-saturation-ci` diagnoses the saturation failure, preserves worker
+errors and enables isolated jobs on PRs. No target/provider or deployment work is
+part of this follow-up.
+
+Local controlled comparison identified the Docker-volume WAL flush bottleneck:
+the admission worker failed with `55P03` while control sessions waited in COMMIT
+on `WalSync` / `WALWrite`. The volume diagnostic still fails with unchanged
+budgets (`/tmp/outbound-a06.Ec3xtksc`); the bounded tmpfs reference passes with
+`fsync=on`, `synchronous_commit=on`, p95 ≤15.335 ms / p99 ≤39.683 ms and no leaks
+(`/tmp/outbound-a06.jbLm9VeZ`). See the [A06 follow-up](../inbound-resource-budgets.md#a07-follow-up-reproducible-storage-and-worker-failures)
+for the interpretation and target-storage acceptance boundary.
+
+Local Node 22 quality passed: 262 API tests plus the explicit optional-DB skip,
+135 web tests, 76 operations tests, static checks and workspace builds
+(`/tmp/a07-followup-quality.log`). The dedicated isolated A07 DB runner separately
+exercises all eight DB scenarios (`/tmp/a07-followup-db.log`). Hosted runs and
+artifact links are recorded in the A07 issue/PR; local results alone do not close
+the A07.3 gate. A read-only check of the existing dependency audit also found high
+Vite/Zod advisories; that separate product-dependency scope is not waived by the
+fixture changes.

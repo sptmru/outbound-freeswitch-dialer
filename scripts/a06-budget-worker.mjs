@@ -126,17 +126,22 @@ try {
           const start = performance.now();
           const db = await pool.connect();
           acquisitions.push(performance.now() - start);
+          let stage = "begin";
           try {
             await db.query("BEGIN");
+            stage = "admission-lock";
             // Model shared admission contention. Other lanes use independent durable rows.
             if (lane === "admission") await db.query("SELECT pg_advisory_xact_lock(72205,1)");
+            stage = "insert";
             await db.query("INSERT INTO control_progress(replica,lane,sequence) VALUES($1,$2,$3)", [
               replica,
               lane,
               i
             ]);
+            stage = "commit";
             await db.query("COMMIT");
           } catch (error) {
+            error.context = { lane, sequence: i, stage };
             await db.query("ROLLBACK");
             throw error;
           } finally {
@@ -149,6 +154,12 @@ try {
     );
     process.send({ type: "load-done", stats });
   }
+} catch (error) {
+  process.send({
+    type: "failed",
+    error: { message: error.message, code: error.code, context: error.context, stack: error.stack }
+  });
+  throw error;
 } finally {
   await Promise.all(pools.map((pool) => pool.end()));
   process.disconnect();

@@ -78,6 +78,9 @@ test("A07.3 CI discovers bounded DB fixture and retains failure evidence", async
   assert.match(ci, /npm run test:inbound:db/);
   assert.match(ci, /INBOUND_TEST_ARTIFACTS:/);
   assert.match(ci, /actions\/upload-artifact@v4/);
+  const isolated = await readFile(".github/workflows/inbound-fixtures.yml", "utf8");
+  assert.match(isolated, /pull_request:/);
+  assert.match(isolated, /if: always\(\)/);
   const packageJson = JSON.parse(await readFile("package.json", "utf8"));
   assert.ok(packageJson.scripts["test:inbound:db"]);
   assert.ok(packageJson.scripts["test:inbound:db:isolated"]);
