@@ -268,7 +268,11 @@ SIP/RTP evidence with no browser or provider traffic.
 
 Follow-up PR: [#50](https://github.com/sptmru/outbound-freeswitch-dialer/pull/50).
 GitHub's repository Actions permissions currently report `enabled: false`;
-the PR has no hosted workflow execution. Enabling Actions is a repository setting
-change requiring owner approval. Hosted run/artifact links must be added to A07
-after execution; these local results alone do not close A07.3. The issue and
-tracker remain open pending that evidence.
+the PR has no hosted workflow execution. On 2026-11-14 the owner explicitly
+instructed: "оставь actions выключенным, ты ж проверил все локально, закрой A07".
+A07 is therefore accepted in the amended local scope: A07.1/A07.2/A07.4 have
+the evidence above; for A07.3 the owner accepts local CI-equivalent execution and
+reviewed workflow/artifact wiring instead of a hosted run. Hosted execution and
+hosted artifact upload/download remain unverified, not reported as passed.
+Actions stays disabled; the issue and tracker can be closed under that explicit
+scope amendment. Provider, target-storage and I01–I05 gates remain separate.
