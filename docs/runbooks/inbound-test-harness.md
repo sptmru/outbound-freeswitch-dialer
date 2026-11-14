@@ -169,8 +169,9 @@ two-way media, target deployment, or product inbound behavior is established by 
 
 Issue [A07 #8](https://github.com/sptmru/outbound-freeswitch-dialer/issues/8), branch
 `test/a07-inbound-harness`, base `3494ed34ba62d035eb4fc90e3c6b50be4583945a`.
-Changes are local/uncommitted. This record leaves the issue open for the A07.3
-CI/runtime gate; it does not mark the backlog tracker complete.
+This historical record describes the original local/uncommitted handoff; the
+follow-up below records the subsequent merge, PR and new verification. The
+original handoff left the issue open for A07.3 and did not complete the tracker.
 
 | Criterion | Result and evidence                                                                                                                                                                                                                                                  |
 | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -238,11 +239,36 @@ budgets (`/tmp/outbound-a06.Ec3xtksc`); the bounded tmpfs reference passes with
 (`/tmp/outbound-a06.jbLm9VeZ`). See the [A06 follow-up](../inbound-resource-budgets.md#a07-follow-up-reproducible-storage-and-worker-failures)
 for the interpretation and target-storage acceptance boundary.
 
-Local Node 22 quality passed: 262 API tests plus the explicit optional-DB skip,
-135 web tests, 76 operations tests, static checks and workspace builds
-(`/tmp/a07-followup-quality.log`). The dedicated isolated A07 DB runner separately
-exercises all eight DB scenarios (`/tmp/a07-followup-db.log`). Hosted runs and
-artifact links are recorded in the A07 issue/PR; local results alone do not close
-the A07.3 gate. A read-only check of the existing dependency audit also found high
-Vite/Zod advisories; that separate product-dependency scope is not waived by the
-fixture changes.
+The owner also approved fixing the high Vite/Zod advisories exposed by the CI
+audit. Vite is locked to 6.4.6 (including peer consumers through the root override)
+and the API uses Zod 4.6.7. Route IDs use `z.guid()` to preserve the previous
+UUID-shaped ID contract; Zod 4's stricter UUID version/variant validation would
+reject previously accepted IDs. The HTTP 400 response retains
+`{ message: "Validation failed", issues }`, with issue `path`, `code` and `message`;
+individual issue codes/messages follow Zod 4. Regression checks cover that
+envelope, normalized environment defaults/coercion, absent optional request fields
+and the contact-field collection bound. See the [Zod migration guide](https://zod.dev/v4/changelog).
+
+Final local CI-equivalent verification used Node 22.13.0, npm 10.9.2 and disposable
+PostgreSQL 16 (matching the CI major). Clean `npm ci`, required
+`npm run test:inbound:db` and `npm run quality` passed: 277 API tests with no skips,
+135 web tests, 76 operations tests, formatting/lint/type checks and all workspace
+builds (`/tmp/outbound-inbound-db.wDj3GatX`). The DB evidence includes all eight
+harness scenarios and teardown. `npm audit --omit=dev --audit-level=high` passed
+with zero high/critical findings and seven moderate findings
+(`/tmp/a07-patched-production-audit.json`); this does not mean all advisories are
+resolved. Chromium's six Playwright checks, example Compose validation and the
+disposable hardened-proxy runtime check also passed locally
+(`/tmp/a07-zod-browser.log`, `/tmp/a07-followup-proxy.log`). Browser fixtures use
+mocked product endpoints/simulated presence and do not establish SIP/media proof.
+The separate pinned FreeSWITCH/PostgreSQL lab passed all twelve A05 groups on
+Node 22, including zero actual channels at teardown
+(`/tmp/outbound-a05.hgDdkR88`, `/tmp/a07-followup-fs.log`); it provides local UDP
+SIP/RTP evidence with no browser or provider traffic.
+
+Follow-up PR: [#50](https://github.com/sptmru/outbound-freeswitch-dialer/pull/50).
+GitHub's repository Actions permissions currently report `enabled: false`;
+the PR has no hosted workflow execution. Enabling Actions is a repository setting
+change requiring owner approval. Hosted run/artifact links must be added to A07
+after execution; these local results alone do not close A07.3. The issue and
+tracker remain open pending that evidence.

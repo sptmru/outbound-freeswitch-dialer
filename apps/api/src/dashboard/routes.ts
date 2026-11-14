@@ -156,11 +156,11 @@ import {
 
 const manualDialValidationSchema = z.object({
   phoneNumber: z.string().min(3),
-  campaignId: z.string().uuid().optional()
+  campaignId: z.guid().optional()
 }) satisfies z.ZodType<StartManualCallRequest>;
 
 const startNextCallSchema = z.object({
-  campaignId: z.string().uuid().optional()
+  campaignId: z.guid().optional()
 }) satisfies z.ZodType<StartNextCallRequest>;
 
 const startLeadCallSchema = z.object({
@@ -179,7 +179,7 @@ const callEndClientContextSchema = z.object({
 });
 
 const endCallSchema = z.object({
-  campaignId: z.string().uuid().optional(),
+  campaignId: z.guid().optional(),
   clientContext: callEndClientContextSchema.optional()
 }) satisfies z.ZodType<EndCallRequest>;
 
@@ -250,13 +250,13 @@ const updateCallStatusSchema = z.object({
 
 const dropVoicemailSchema = z
   .object({
-    campaignId: z.string().uuid().optional()
+    campaignId: z.guid().optional()
   })
   .strict() satisfies z.ZodType<DropVoicemailRequest>;
 
 const sendDtmfSchema = z.object({
   digit: z.enum(["1", "2", "3", "4", "5", "6", "7", "8", "9", "*", "0", "#"]),
-  campaignId: z.string().uuid().optional()
+  campaignId: z.guid().optional()
 }) satisfies z.ZodType<SendDtmfRequest>;
 
 const createCampaignSchema = z.object({
@@ -278,7 +278,7 @@ const updateCampaignSchema = z.object({
 }) satisfies z.ZodType<UpdateCampaignRequest>;
 
 const createContactSchema = z.object({
-  campaignId: z.string().uuid(),
+  campaignId: z.guid(),
   name: z.string().min(1).max(160),
   phoneNumber: z.string().min(3).max(64),
   company: z.string().max(160).optional(),
@@ -310,15 +310,15 @@ const contactsQuerySchema = z.object({
 });
 
 const campaignParamsSchema = z.object({
-  campaignId: z.string().uuid()
+  campaignId: z.guid()
 });
 
 const suppressionParamsSchema = z.object({
-  suppressionId: z.string().uuid()
+  suppressionId: z.guid()
 });
 
 const recordingParamsSchema = z.object({
-  recordingId: z.string().uuid()
+  recordingId: z.guid()
 });
 
 const recordingAudioQuerySchema = z.object({
@@ -329,8 +329,8 @@ const callHistoryQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(25),
   q: z.string().max(160).optional(),
-  campaignId: z.string().uuid().optional(),
-  agentId: z.string().uuid().optional(),
+  campaignId: z.guid().optional(),
+  agentId: z.guid().optional(),
   outcome: z
     .enum([
       "answered",
@@ -384,14 +384,14 @@ const retentionRunSchema = z.object({
 const adminAuditQuerySchema = z.object({
   page: z.coerce.number().int().positive().default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(25),
-  actorId: z.string().uuid().optional(),
+  actorId: z.guid().optional(),
   method: z.enum(["DELETE", "GET", "PATCH", "POST", "PUT"]).optional(),
   dateFrom: z.string().datetime().optional(),
   dateTo: z.string().datetime().optional()
 });
 
 const supervisorSessionParamsSchema = z.object({
-  sessionId: z.string().uuid()
+  sessionId: z.guid()
 });
 
 const updateSupervisorSessionSchema = z.object({
@@ -399,12 +399,12 @@ const updateSupervisorSessionSchema = z.object({
 }) satisfies z.ZodType<UpdateSupervisorSessionRequest>;
 
 const agentDeskQuerySchema = z.object({
-  campaignId: z.string().uuid().optional()
+  campaignId: z.guid().optional()
 });
 
 const updateAgentAvailabilitySchema = z.object({
   status: z.enum(["available", "paused"]),
-  campaignId: z.string().uuid().optional()
+  campaignId: z.guid().optional()
 }) satisfies z.ZodType<UpdateAgentAvailabilityRequest>;
 
 export function registerDashboardRoutes(
@@ -495,7 +495,7 @@ export function registerDashboardRoutes(
       return reply.code(401).send({ message: "Unauthorized" });
     }
 
-    const params = z.object({ callId: z.string().uuid() }).parse(request.params);
+    const params = z.object({ callId: z.guid() }).parse(request.params);
     const telemetry = browserMediaTelemetrySchema.parse(request.body);
     const saved = await upsertBrowserMediaTelemetry(pool, {
       callId: params.callId,
@@ -549,7 +549,7 @@ export function registerDashboardRoutes(
     async (request, reply): Promise<SupervisorSession | void> => {
       const user = await requireAdmin(request, reply, config, pool);
       if (!user) return;
-      const params = z.object({ callId: z.string().uuid() }).parse(request.params);
+      const params = z.object({ callId: z.guid() }).parse(request.params);
       try {
         const session = await startSupervisorSession(pool, config, {
           actorUserId: user.id,
@@ -704,9 +704,7 @@ export function registerDashboardRoutes(
     if (!user) {
       return;
     }
-    const query = adminLibraryQuerySchema
-      .extend({ campaignId: z.string().uuid().optional() })
-      .parse(request.query);
+    const query = adminLibraryQuerySchema.extend({ campaignId: z.guid().optional() }).parse(request.query);
     return getRecordingsPage(pool, query);
   });
 
@@ -756,7 +754,7 @@ export function registerDashboardRoutes(
       return;
     }
 
-    const params = z.object({ callId: z.string().uuid() }).parse(request.params);
+    const params = z.object({ callId: z.guid() }).parse(request.params);
     const detail = await getCallDetail(pool, params.callId);
     if (!detail) {
       return reply.code(404).send({ message: "Call not found" });
@@ -767,7 +765,7 @@ export function registerDashboardRoutes(
   app.put("/admin/calls/:callId/avmd-review", async (request, reply): Promise<CallAvmdReview | void> => {
     const user = await requireAdmin(request, reply, config, pool);
     if (!user) return;
-    const params = z.object({ callId: z.string().uuid() }).parse(request.params);
+    const params = z.object({ callId: z.guid() }).parse(request.params);
     const input = upsertCallAvmdReviewSchema.parse(request.body);
     const result = await upsertCallAvmdReview(pool, {
       callId: params.callId,
@@ -783,7 +781,7 @@ export function registerDashboardRoutes(
   });
 
   app.get("/admin/calls/:callId/recording", async (request, reply): Promise<void> => {
-    const params = z.object({ callId: z.string().uuid() }).parse(request.params);
+    const params = z.object({ callId: z.guid() }).parse(request.params);
     const user = await requireAdminOrMediaTicket(
       request,
       reply,
@@ -819,7 +817,7 @@ export function registerDashboardRoutes(
       if (!user) {
         return;
       }
-      const params = z.object({ callId: z.string().uuid() }).parse(request.params);
+      const params = z.object({ callId: z.guid() }).parse(request.params);
       if (!(await getCallRecordingAudioFile(pool, params.callId))) {
         return reply.code(404).send({ message: "Call recording not found" });
       }
@@ -839,7 +837,7 @@ export function registerDashboardRoutes(
     if (!user) {
       return;
     }
-    const params = z.object({ callId: z.string().uuid() }).parse(request.params);
+    const params = z.object({ callId: z.guid() }).parse(request.params);
     const capture = await pool.query<{ file_path: string | null; file_size_bytes: string | number | null }>(
       `
         select file_path, file_size_bytes
@@ -1005,7 +1003,7 @@ export function registerDashboardRoutes(
       return;
     }
 
-    const params = z.object({ importId: z.string().uuid() }).parse(request.params);
+    const params = z.object({ importId: z.guid() }).parse(request.params);
     const query = csvImportFailuresQuerySchema.parse(request.query);
     const detail = await getCsvImportDetail(pool, params.importId, query);
     if (!detail) {
@@ -1022,7 +1020,7 @@ export function registerDashboardRoutes(
         return;
       }
 
-      const params = z.object({ campaignId: z.string().uuid() }).parse(request.params);
+      const params = z.object({ campaignId: z.guid() }).parse(request.params);
       const query = contactsQuerySchema.parse(request.query);
       return getCampaignContacts(pool, params.campaignId, query);
     }
@@ -1149,7 +1147,7 @@ export function registerDashboardRoutes(
     }
 
     const publicUser = toPublicUser(user);
-    const params = z.object({ contactId: z.string().uuid() }).parse(request.params);
+    const params = z.object({ contactId: z.guid() }).parse(request.params);
     const input = startLeadCallSchema.parse(request.body ?? {});
     const agent = await ensureAgentForUser(pool, config, publicUser);
     const created = await createDialerCall(pool, config, {
@@ -1185,7 +1183,7 @@ export function registerDashboardRoutes(
     }
 
     const publicUser = toPublicUser(user);
-    const params = z.object({ callId: z.string().uuid() }).parse(request.params);
+    const params = z.object({ callId: z.guid() }).parse(request.params);
     const input = endCallSchema.parse(request.body ?? {});
     const endRequest = buildCallEndRequestContext(request, publicUser, input);
     request.log.info({ callId: params.callId, endRequest }, "Agent call end requested");
@@ -1204,7 +1202,7 @@ export function registerDashboardRoutes(
       return reply.code(401).send({ message: "Unauthorized" });
     }
 
-    const params = z.object({ callId: z.string().uuid() }).parse(request.params);
+    const params = z.object({ callId: z.guid() }).parse(request.params);
     const input = updateCallStatusSchema.parse(request.body);
     const result = await setManualCallStatus(pool, {
       callId: params.callId,
@@ -1233,7 +1231,7 @@ export function registerDashboardRoutes(
       }
 
       const publicUser = toPublicUser(user);
-      const params = z.object({ callId: z.string().uuid() }).parse(request.params);
+      const params = z.object({ callId: z.guid() }).parse(request.params);
       const input = dropVoicemailSchema.parse(request.body ?? {});
       const dropped = await dropVoicemailForCall(pool, config, publicUser.id, params.callId);
       if (!dropped.ok) {
@@ -1251,7 +1249,7 @@ export function registerDashboardRoutes(
     }
 
     const publicUser = toPublicUser(user);
-    const params = z.object({ callId: z.string().uuid() }).parse(request.params);
+    const params = z.object({ callId: z.guid() }).parse(request.params);
     const input = sendDtmfSchema.parse(request.body ?? {});
     const sent = await sendDtmfForCall(pool, config, publicUser.id, params.callId, input.digit);
     if (!sent.ok) {
@@ -1424,7 +1422,7 @@ export function registerDashboardRoutes(
     }
 
     const name = normalizeRecordingName(getMultipartFieldValue(file.fields.name), file.filename);
-    const campaignIdResult = z.string().uuid().safeParse(getMultipartFieldValue(file.fields.campaignId));
+    const campaignIdResult = z.guid().safeParse(getMultipartFieldValue(file.fields.campaignId));
     if (!campaignIdResult.success) {
       file.file.resume();
       return reply.code(400).send({ message: "Choose a campaign before uploading voicemail" });
@@ -1476,10 +1474,7 @@ export function registerDashboardRoutes(
   app.patch("/admin/campaigns/:campaignId/voicemail", async (request, reply) => {
     if (!(await requireAdmin(request, reply, config, pool))) return;
     const { campaignId } = campaignParamsSchema.parse(request.params);
-    const { recordingId } = z
-      .object({ recordingId: z.string().uuid().nullable() })
-      .strict()
-      .parse(request.body);
+    const { recordingId } = z.object({ recordingId: z.guid().nullable() }).strict().parse(request.body);
     try {
       await setCampaignVoicemail(pool, campaignId, recordingId, request.id);
       return { campaignId, recordingId };
@@ -1657,7 +1652,7 @@ export function registerDashboardRoutes(
         return;
       }
 
-      const params = z.object({ contactId: z.string().uuid() }).parse(request.params);
+      const params = z.object({ contactId: z.guid() }).parse(request.params);
       const input = suppressContactSchema.parse(request.body ?? {});
       const contact = await pool.query<{
         phone_number: string;
@@ -1706,7 +1701,7 @@ export function registerDashboardRoutes(
         return;
       }
 
-      const params = z.object({ contactId: z.string().uuid() }).parse(request.params);
+      const params = z.object({ contactId: z.guid() }).parse(request.params);
       const result = await pool.query(
         `
           update contacts
@@ -1737,7 +1732,7 @@ export function registerDashboardRoutes(
         return;
       }
 
-      const params = z.object({ campaignId: z.string().uuid() }).parse(request.params);
+      const params = z.object({ campaignId: z.guid() }).parse(request.params);
       const input = importCsvSchema.parse(request.body);
       if (!(await campaignExists(pool, params.campaignId))) {
         return reply.code(404).send({ message: "Campaign not found" });
@@ -1779,7 +1774,7 @@ export function registerDashboardRoutes(
         return;
       }
 
-      const params = z.object({ campaignId: z.string().uuid() }).parse(request.params);
+      const params = z.object({ campaignId: z.guid() }).parse(request.params);
       let file;
       try {
         file = await request.file({ limits: { fileSize: config.CSV_UPLOAD_MAX_BYTES, files: 1 } });
@@ -2724,6 +2719,10 @@ async function getCampaignContacts(
 }
 
 export const __testing = {
+  manualDialValidationSchema,
+  createCampaignSchema,
+  createContactSchema,
+  dropVoicemailSchema,
   buildAgentDeskResponse,
   buildCallEndRequestContext,
   callHistoryCsvRows,

@@ -3,6 +3,7 @@ import cors from "@fastify/cors";
 import multipart from "@fastify/multipart";
 import Fastify from "fastify";
 import { ZodError } from "zod";
+import { validationErrorResponse } from "./validation.js";
 import { registerAdminAudit } from "./admin-audit.js";
 import { registerApiDocumentation } from "./api-documentation.js";
 import { startAgentRegistrationReconciler } from "./agent-registrations.js";
@@ -62,10 +63,7 @@ let stopPcapCaptureFinalizer: (() => void) | null = null;
 
 app.setErrorHandler((error, _request, reply) => {
   if (error instanceof ZodError) {
-    return reply.code(400).send({
-      message: "Validation failed",
-      issues: error.issues
-    });
+    return reply.code(400).send(validationErrorResponse(error));
   }
 
   if (isPostgresError(error, "23505")) {
