@@ -273,6 +273,12 @@ establish how old workers stop and in-flight commands resolve before reuse. A mo
 
 #### 5.3.1. Executor Connection Budget
 
+The [A06 resource and acceptance budget specification](inbound-resource-budgets.md)
+selects finite defaults, counting/overload rules, dedicated role/pool partitions and
+replica-wide DB headroom. Its isolated PostgreSQL saturation prototype measures
+protected SQL paths with simulated ESL; product C02/C03/D02 enforcement and
+I03/I04/I05 media/load/provider/enablement gates remain separate.
+
 Bound concurrent executors and their pending work. A connection is leased for one
 serialized command sequence, not for the entire customer conversation or while an
 offer waits for a human. Bound lock waiters as well as running executors; do not

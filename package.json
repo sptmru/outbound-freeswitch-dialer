@@ -28,7 +28,8 @@
     "test:voicemail:db": "bash scripts/test-campaign-voicemail.sh",
     "test:prototype:durable-ingress": "bash scripts/test-a03-ingress.sh",
     "test:prototype:desk-binding": "bash scripts/test-a04-binding.sh",
-    "test:prototype:rebridge": "bash scripts/test-a05-rebridge.sh"
+    "test:prototype:rebridge": "bash scripts/test-a05-rebridge.sh",
+    "test:prototype:budgets": "bash scripts/test-a06-budgets.sh"
   },
   "engines": {
     "node": ">=22"
