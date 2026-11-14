@@ -227,6 +227,11 @@ transfer recipient who is not yet `calls.agent_id`.
 
 ### 5.3. Lock Ordering and Command Execution
 
+The [A01 lock inventory and compatibility review](inbound-locks-and-compatibility.md)
+records the current lock owners/lifetimes, migration checklist, controlled conflict
+schedules and rollback-reader boundaries at `2c4050a`. Its target order is a source
+review contract for later implementation, not a passing concurrency/runtime gate.
+
 Inventory `lockUserMediaAction`, `lockUserMediaSession`, `lockCampaignVoicemail`,
 maintenance, finalization, supervisor, and reconciliation locks before implementation.
 Proposed common order:
