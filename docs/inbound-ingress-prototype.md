@@ -3,10 +3,19 @@
 Date: 2026-11-14. [Task A02 / #3](https://github.com/sptmru/outbound-freeswitch-dialer/issues/3),
 under [tracker #1](https://github.com/sptmru/outbound-freeswitch-dialer/issues/1).
 Base revision: `416767f3393f92e8ce27013cadb0341ca9e8f9c9`.
-Branch: `prototype/a02-trusted-ingress`. Changes are local and uncommitted.
+Original implementation branch: `prototype/a02-trusted-ingress`, merged into `dev`
+by [PR #49](https://github.com/sptmru/outbound-freeswitch-dialer/pull/49), merge
+`b5c4cd06665548dfcfc2428dbd9dadf8a20e085b`. The results below describe the original
+prototype run; the documentation amendment does not claim a new acceptance run.
 
-**Status: local FS prototype verified; provider gate open. A02 is incomplete.**
+**Status: A02 complete in its amended local FS/R scope; provider acceptance deferred
+to I04 and still mandatory before I05 target enablement.**
 No product ingress, schema, API, offers, deployment or provider routing is enabled.
+
+On 2026-11-14 the owner explicitly approved separating local development from
+real-provider acceptance. This supersedes the original A02 completion boundary and
+earlier comments requiring A02 to stay open. The local acceptance criteria are
+mapped below; no provider check was waived, run or marked passed by this change.
 
 ## Selection and scope
 
@@ -142,7 +151,8 @@ estimate was 439 Hz for the 440 Hz fixture. For each scenario: exactly one incom
 channel, no bridge/agent connection, no forged product authority and zero channels
 after cleanup. Unknown, disabled and untrusted ingress emitted no validated event.
 The unavailable cases had no answer event. Early waiting audio had no answer event;
-each answered case had exactly one. No rejected call emitted RTP.
+each answered case had exactly one. No trust/DID or unavailable-admission refusal
+emitted RTP.
 
 Local final causes were `NORMAL_TEMPORARY_FAILURE` for 503, `CALL_REJECTED` for
 403, `UNALLOCATED_NUMBER` for 404, `NO_USER_RESPONSE` for the early-media 480, and
@@ -192,21 +202,33 @@ PostgreSQL suites were not exercised; aggregate runner output does not constitut
 DB proof. No `test:e2e`, product `test:freeswitch`, load, restore or provider matrix
 was run. The separate A02 command above supplies only its declared FS coverage.
 
-## Acceptance and remaining provider gate
+## Amended acceptance and transferred provider gate
 
-| Criterion | Local evidence                                                                                                                         | Remaining mandatory evidence / status                                                                                                                                      |
-| --------- | -------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| A02.1     | Real FS trusted/untrusted, enabled/unknown/disabled DID and forged-header INVITEs; no forged internal authority, bridges or extra legs | Local prototype portion passed. Actual provider source/authentication, exact DID field and production-path policy remain unverified. No product DB offers are implemented. |
-| A02.2     | Real SIP answer/early-media chronology, decoded waiting audio, no agent bridge; separate proposed answer/connection timestamps         | FS portion passed. Provider delivery/far-end audio and billing confirmation remain open.                                                                                   |
-| A02.3     | Bounded unavailable-admission fixture, exact local final SIP replies and hangup causes; explicit history boundary                      | Local FS/R portion passed. Provider retry/disconnect timing and forwarding caller-ID constraints remain open.                                                              |
+| Criterion | Completed local FS/R scope                                                                                                                                            | Provider obligations retained under I04                                                                                                                                             |
+| --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A02.1     | Lab transport trust, enabled/unknown/disabled DID and forged-header INVITEs; internal UUID and no forged authority, bridge or extra legs; zero channels after cleanup | I04.1: actual provider source/authentication, delivered DID field/normalization, codecs/caller ID and target ingress policy. No product DB offers are implemented by the prototype. |
+| A02.2     | Local 183/early-media versus 200/answered waiting audio, decoded tone, no agent bridge; SIP answer kept separate from agent connection                                | I04.1: actual far-end delivery, whether waiting audio requires answer, two-way browser audio and explicit provider billing confirmation.                                            |
+| A02.3     | Bounded unavailable-admission fixture, exact local replies/causes, no answer/RTP on refusal and explicit pre-admission history limitation                             | I04.5: provider-facing rejection, retry/disconnect/failover, timing and history guarantee; I04.2: forwarding caller-ID/From/PAI policy and forbidden-ID rejection.                  |
+
+A02 may be closed and checked in the tracker on these amended local criteria.
+Dependencies on A02, including [A03 #4](https://github.com/sptmru/outbound-freeswitch-dialer/issues/4),
+now consume this documented local contract and can proceed in isolation. A03 must
+still select and prove its own durable capture/commit/ack, recovery and history
+guarantees with real FS + DB tests; simulated admission here proves none of those.
+Do not treat the fixture's IPs/DID, 750 ms delay or eight-session settings as
+production values, assume provider retry deduplication, or assume PSTN early-media
+delivery. The provider's actual behavior may require later integration adjustments.
 
 No target DID, authorized receiving endpoints, provider ingress delivery/access or
-provider confirmation was supplied for this run. No production access, provider calls
-or routing changes are authorized by this prototype. Do not close #3, tick A02 in
-the tracker, or treat A03's A02 dependency as satisfied by these local results.
+provider confirmation was supplied for the original run. Provider testing is deferred;
+this amendment authorizes no provider calls, production changes or target enablement.
+[I04 #46](https://github.com/sptmru/outbound-freeswitch-dialer/issues/46) remains open
+and [I05 #47](https://github.com/sptmru/outbound-freeswitch-dialer/issues/47) must block
+target enablement until its provider prerequisites and other gates pass.
 
-To finish A02 in an authorized target test environment, retain sanitized signaling
-and far-end observations with deployed image/config revision, time and observer:
+To finish the transferred requirements under I04 in a separately authorized target
+test environment, retain sanitized signaling and far-end observations with deployed
+image/config revision, time and observer:
 
 1. Record the provider's confirmed source CIDRs or authentication mechanism separately
    from outbound registration settings. Confirm whether signaling arrives through a

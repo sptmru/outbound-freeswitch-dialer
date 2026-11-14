@@ -17,6 +17,14 @@ offer expiry; atomic transfer-offer decline on successful manual outbound; and e
 contracts for ingress recovery, Desk-to-SIP binding, overload, and executor DB capacity.
 Approval applies to this plan; implementation and runtime acceptance remain pending.
 
+Owner-approved amendment, 2026-11-14: A02's isolated local FS/R prototype is complete
+and merged into `dev` by [PR #49](https://github.com/sptmru/outbound-freeswitch-dialer/pull/49).
+Actual-provider checks originally included in A02 are deferred to
+[I04 #46](https://github.com/sptmru/outbound-freeswitch-dialer/issues/46), without waiver.
+Dependencies on A02 consume its local contract; isolated development may proceed.
+Real inbound routing remains disabled until I04 and I05 acceptance and explicit
+deployment authorization. This amendment changes backlog scope, not runtime behavior.
+
 ## 1. Confirmed Requirements
 
 - Start with one inbound number and one shared queue; support adding numbers later.
@@ -431,7 +439,9 @@ A02 has an opt-in [isolated ingress prototype and evidence report](inbound-ingre
 It exercises a loopback trust/DID gate, correlation-header rejection, bounded refusal,
 and answered waiting audio on the pinned FreeSWITCH base image. Provider trust, DID
 delivery, billing and forwarding caller ID remain open; this prototype does not enable
-product ingress or implement durable admission.
+product ingress or implement durable admission. A02 is complete only in its amended
+local scope. Its original provider trust/DID, audio/billing, forwarding caller-ID and
+unavailable-admission/retry obligations are retained under I04.1, I04.2 and I04.5.
 
 1. Validate trusted SIP source and DID in the repo-owned dialplan.
 2. Set internal correlation; do not trust arbitrary SIP headers as product variables.
@@ -483,7 +493,12 @@ cannot reconstruct already ended calls.
 
 The safe default is bounded rejection before answer/admission if the selected durable
 capture/admission protocol cannot be established. Specify the SIP response, pre-admission
-timeout, and provider behavior in the prototype. Explicitly document the history guarantee for calls
+timeout in the local A03 prototype; verify actual provider rejection/retry/disconnect
+behavior later under I04.5. A03 depends on A02's completed local contract, not on
+I04 provider acceptance. A03 must still prove durable capture, commit/ack, replay
+and failure bounds; A02's simulated admission and fixture values cannot satisfy those
+criteria. Do not assume retries are deduplicated or that the provider delivers early media.
+Explicitly document the history guarantee for calls
 rejected before admission, including journal exhaustion/failure; do not imply that a
 rejected, unrecorded attempt has complete product history. Accepted/queued calls must
 not silently disappear. Retain evidence until acknowledged import; define storage bounds,
@@ -935,6 +950,11 @@ commands do not prove new paths are covered.
 Provider acceptance separately verifies DID, codecs, two-way audio, caller ID, external
 forwarding, hangup, and transfer behavior. Separate local/synthetic from provider and
 production evidence. Listed future tests have not run merely because they appear here.
+The checks deferred from A02 remain mandatory in I04: transport source/authentication
+and delivered DID field/normalization; early versus answered waiting audio and billing
+confirmation; forwarding caller-ID/From/PAI and forbidden-ID behavior; exact unavailable
+admission responses, retry/disconnect/failover, timing and rejected-attempt history
+boundary. Closing A02 supplies only local prototype evidence, not these results.
 
 ## 14. Enablement, Compatibility, and Rollback
 
@@ -946,7 +966,8 @@ production evidence. Listed future tests have not run merely because they appear
    Confirm the pre-insert evidence/import mechanism, SIP endpoint binding, FS/DB capacity
    limits, overflow actions, and reserved executor/control-plane DB budgets.
 5. Complete unit/integration/E2E, controlled load/recovery, and provider acceptance
-   before enabling the target route.
+   before enabling the target route. I04.1–I04.5 include all provider requirements
+   transferred from A02; a closed A02 or merged local prototype cannot bypass them.
 6. Before rollback, stop new inbound/transfers and drain new scenarios/unresolved
    operations and pending ingress evidence imports; preserve unacknowledged journals.
    Migrations are not reversed automatically.
@@ -971,7 +992,10 @@ Provide this file and name a phase from section 12. The next agent must:
    Do not silently change requirements.
 9. Do not commit/push/deploy without permission; capture verified summaries per project rules.
 
-Open implementation checks: provider DID field/trust boundary; chosen durable ingress
+Open target-provider checks under I04: actual trust/DID delivery, codecs/caller ID,
+early/far-end audio and billing, forwarding policy, unavailable-admission rejection
+and retries/disconnect. These are deferred acceptance work, not A02 blockers for
+isolated development. Open implementation checks: chosen durable ingress
 protocol and pre-admission history boundary; verified Desk-to-SIP binding and takeover;
 numeric retry/capacity limits and overload responses; executor concurrency/DB reserves;
 pinned-image rebridge and stopping stale executors before uncertain reuse; old-reader
