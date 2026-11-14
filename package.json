@@ -19,6 +19,7 @@
     "test:ops": "node --test tests/*.test.mjs",
     "test:e2e": "playwright test",
     "test:freeswitch": "bash scripts/test-freeswitch-scenarios.sh",
+    "test:prototype:ingress": "bash scripts/test-a02-ingress.sh",
     "test:load:desk": "node scripts/load-agent-desk.mjs",
     "test:load:sip-rtp": "node scripts/load-sip-rtp.mjs",
     "test:load:suite": "bash scripts/run-load-suite.sh",
