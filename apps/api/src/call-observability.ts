@@ -22,19 +22,24 @@ export async function persistCallMediaStats(
     callId: string;
     eventName: string;
     frame: EslFrame;
-    legType: CallLegType;
+    legType: CallLegType | "external";
     legUuid: string | null;
+    // Internal concrete writer. Legacy callers retain their projection unchanged.
+    callLegId?: string;
   }
 ): Promise<boolean> {
+  if (input.legType === "external" && !input.callLegId) return false;
   const headers = input.frame.headers;
   if (!MEDIA_HEADER_NAMES.some((name) => hasNumericHeader(headers, name))) {
     return false;
   }
 
   const capturedAt = parseFreeSwitchEventTimestamp(headers) ?? new Date();
-  await pool.query(
+  const table = input.callLegId ? "call_leg_media_stats" : "call_media_stats";
+  const result = await pool.query(
     `
-      insert into call_media_stats (
+      insert into ${table} (
+        ${input.callLegId ? "call_leg_id," : ""}
         call_id,
         leg_type,
         freeswitch_uuid,
@@ -62,12 +67,13 @@ export async function persistCallMediaStats(
         inbound_mos,
         inbound_quality_percentage
       )
-      values (
+      select
+        ${input.callLegId ? "$27," : ""}
         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
         $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26
-      )
-      on conflict (call_id, leg_type) do update
-      set freeswitch_uuid = coalesce(excluded.freeswitch_uuid, call_media_stats.freeswitch_uuid),
+      ${input.callLegId ? `where exists (select 1 from call_legs where id=$27 and call_id=$1 and type=$2 and freeswitch_uuid=$3)` : ""}
+      on conflict (${input.callLegId ? "call_leg_id" : "call_id, leg_type"}) do update
+      set freeswitch_uuid = coalesce(excluded.freeswitch_uuid, ${table}.freeswitch_uuid),
           source_event_name = excluded.source_event_name,
           captured_at = excluded.captured_at,
           read_codec = excluded.read_codec,
@@ -92,6 +98,7 @@ export async function persistCallMediaStats(
           inbound_mos = excluded.inbound_mos,
           inbound_quality_percentage = excluded.inbound_quality_percentage,
           updated_at = now()
+      ${input.callLegId ? `where excluded.captured_at >= ${table}.captured_at` : ""}
     `,
     [
       input.callId,
@@ -120,10 +127,11 @@ export async function persistCallMediaStats(
       decimalHeader(headers, "variable_rtp_audio_in_jitter_burst_rate"),
       decimalHeader(headers, "variable_rtp_audio_in_jitter_max_variance"),
       decimalHeader(headers, "variable_rtp_audio_in_mos"),
-      decimalHeader(headers, "variable_rtp_audio_in_quality_percentage")
+      decimalHeader(headers, "variable_rtp_audio_in_quality_percentage"),
+      ...(input.callLegId ? [input.callLegId] : [])
     ]
   );
-  return true;
+  return !input.callLegId || result.rowCount === 1;
 }
 
 export function parseFreeSwitchEventTimestamp(headers: Record<string, string>): Date | null {

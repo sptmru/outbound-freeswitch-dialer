@@ -155,6 +155,11 @@ legacy ownership/resources conservatively and leaves reconciliation required.
 C01–C07/D01 still own runtime integration; this schema does not establish actual
 media absence, enforce aggregate capacity or enable inbound.
 
+B03 supplies the additive call origin/participation/concrete-media foundation in
+migration 027, with an internal reader and explicit legacy-reader exclusions.
+See [the B03 schema, evidence semantics and compatibility matrix](inbound-call-participation.md).
+Product lifecycle writers/public contracts/history integration remain later tasks.
+
 Extend `calls` with direction, original DID, calling/called numbers, queue, and current
 owner. Inbound can exist without an agent or contact. Keep `calls.agent_id` as a
 compatibility projection, not the sole occupancy record: transfers occupy the source

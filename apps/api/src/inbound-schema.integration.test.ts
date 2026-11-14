@@ -144,7 +144,14 @@ for (const mode of ["fresh", "upgrade"] as const) {
           (await pool.query("select * from recordings where campaign_id=$1 order by id", [campaign])).rows,
           mediaBefore
         );
-        assert.deepEqual((await pool.query("select * from calls where id=$1", [call])).rows, callsBefore);
+        const callsAfter = (await pool.query("select * from calls where id=$1", [call])).rows;
+        // Later additive migrations may add fields; every original value must survive.
+        assert.deepEqual(
+          callsAfter.map((row) =>
+            Object.fromEntries(Object.keys(callsBefore[0]).map((key) => [key, row[key]]))
+          ),
+          callsBefore
+        );
         assert.equal((await pool.query("select * from inbound_numbers")).rowCount, 0);
         const migrations = (await pool.query("select * from schema_migrations order by filename")).rows;
         assert.equal(

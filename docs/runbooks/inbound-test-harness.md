@@ -103,7 +103,8 @@ Use these clients only inside the existing A04/A05 network-none namespace runner
 - API TypeScript compiles the new integration test. `scripts/run-api-tests.mjs`
   recursively discovers all `dist-test/**/*.test.js`, including future nested
   domain suites, and fails if none exist. The required DB command selects the
-  harness and `inbound-schema.integration.test.ts` files explicitly. When `TEST_DATABASE_URL` is set, API files run serially:
+  harness, routing schema, Desk/slot schema and B03 `call-participation.integration.test.ts`
+  files explicitly. When `TEST_DATABASE_URL` is set, API files run serially:
   existing suites share schema migrations and otherwise can deadlock a
   `CREATE INDEX CONCURRENTLY` against another migration advisory-lock waiter.
   Tests without a DB retain parallel file execution. This does not serialize

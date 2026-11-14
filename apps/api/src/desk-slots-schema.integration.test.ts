@@ -331,7 +331,13 @@ test(
         "update agent_call_slots set state='free',reservation_id=null,reconciliation_required=false where agent_id=$1",
         [a]
       );
-      let token = (await reserveAgentCallSlot(client, a, c, randomUUID()))!;
+      const participant = (
+        await client.query(
+          "insert into call_participants(call_id,role,agent_id) values($1,'agent',$2) returning id",
+          [c, a]
+        )
+      ).rows[0].id as string;
+      let token = (await reserveAgentCallSlot(client, a, c, participant))!;
       assert.ok(token);
       // Recipient has a slot for a call whose calls.agent_id is NULL.
       await rejectsCode(pool.query("delete from agents where id=$1", [a]), "23503");
@@ -483,7 +489,16 @@ test(
       const checksums = (await pool.query("select * from schema_migrations order by filename")).rows;
       await runMigrations(pool);
       await runMigrations(pool);
-      assert.deepEqual(await snapshot(), before);
+      const after = await snapshot();
+      // B03 adds origin/participation columns; all pre-existing values are retained.
+      for (const key of ["agents", "calls", "legs", "supervisors"] as const) {
+        assert.deepEqual(
+          after[key].map((row, index) =>
+            Object.fromEntries(Object.keys(before[key][index]).map((column) => [column, row[column]]))
+          ),
+          before[key]
+        );
+      }
       assert.deepEqual(
         (
           await pool.query("select * from schema_migrations where filename<$1 order by filename", [
