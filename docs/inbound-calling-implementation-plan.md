@@ -603,6 +603,11 @@ Only the current owner controls the call; former agents may submit bounded telem
 for their own participation. Proposed supervisor behavior is to end at handover and
 require a new explicit session, never silently carrying whisper to another agent.
 
+The [A05 rebridge/executor prototype](inbound-rebridge-executor-prototype.md)
+records the isolated FS/DB harness, selected uncertainty protocol and per-criterion
+evidence. Its recording/runtime status must be checked there before treating A05
+as a completed dependency; this link does not enable product transfers.
+
 ## 9. API and UI
 
 Preserve `/agent/desk`, `/agent/events`, `/agent/call-next`, `/agent/manual-dial/start`,

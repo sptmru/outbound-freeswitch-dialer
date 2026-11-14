@@ -27,7 +27,8 @@
     "typecheck": "npm --workspace @outbound-dialer/shared run build && npm --workspace @outbound-dialer/api run typecheck && npm --workspace @outbound-dialer/web run typecheck",
     "test:voicemail:db": "bash scripts/test-campaign-voicemail.sh",
     "test:prototype:durable-ingress": "bash scripts/test-a03-ingress.sh",
-    "test:prototype:desk-binding": "bash scripts/test-a04-binding.sh"
+    "test:prototype:desk-binding": "bash scripts/test-a04-binding.sh",
+    "test:prototype:rebridge": "bash scripts/test-a05-rebridge.sh"
   },
   "engines": {
     "node": ">=22"

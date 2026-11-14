@@ -39,8 +39,8 @@ function parseHeaders(raw) {
   return { first: lines[0], headers };
 }
 
-export async function openEsl() {
-  const socket = net.createConnection({ host: "127.0.0.1", port: 8021 });
+export async function openEsl({ port = 8021 } = {}) {
+  const socket = net.createConnection({ host: "127.0.0.1", port });
   const events = [];
   const logs = [];
   const frames = [];
