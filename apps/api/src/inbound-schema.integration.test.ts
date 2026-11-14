@@ -147,7 +147,10 @@ for (const mode of ["fresh", "upgrade"] as const) {
         assert.deepEqual((await pool.query("select * from calls where id=$1", [call])).rows, callsBefore);
         assert.equal((await pool.query("select * from inbound_numbers")).rowCount, 0);
         const migrations = (await pool.query("select * from schema_migrations order by filename")).rows;
-        assert.equal(migrations.length, 25);
+        assert.equal(
+          migrations.length,
+          (await readdir(migrationDirectory)).filter((name) => /^\d{3}_.*\.sql$/.test(name)).length
+        );
         for (const row of migrations)
           assert.equal(
             row.checksum_sha256,
@@ -156,7 +159,7 @@ for (const mode of ["fresh", "upgrade"] as const) {
               .digest("hex")
           );
         assertions.push(
-          "B01.3 25 checksums stable; migration runner twice; outbound campaign/audio/call unchanged; no seeded routes"
+          "B01.3 all checksums stable; migration runner twice; outbound campaign/audio/call unchanged; no seeded routes"
         );
 
         const flow = (

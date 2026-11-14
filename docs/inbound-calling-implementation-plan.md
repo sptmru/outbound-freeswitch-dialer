@@ -149,6 +149,12 @@ admission parallelism. Names below are proposals; choose migration numbers at im
 | `agent_auto_next_intents`  | Source completion, campaign, Desk revision, pending/deferred/started/canceled, stable retry key     |
 | Capacity reservations      | Resource scope/type, call/operation/leg, generation, state; atomic claims and confirmed release     |
 
+B02's feature-off schema and internal fenced slot primitives are documented in
+[Desk slots and capacity](inbound-desk-slots-capacity.md). Migration 026 captures
+legacy ownership/resources conservatively and leaves reconciliation required.
+C01–C07/D01 still own runtime integration; this schema does not establish actual
+media absence, enforce aggregate capacity or enable inbound.
+
 Extend `calls` with direction, original DID, calling/called numbers, queue, and current
 owner. Inbound can exist without an agent or contact. Keep `calls.agent_id` as a
 compatibility projection, not the sole occupancy record: transfers occupy the source

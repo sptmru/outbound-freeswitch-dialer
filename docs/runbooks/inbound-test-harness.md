@@ -12,7 +12,7 @@ paths; passing this harness does not satisfy their acceptance criteria.
 | `node --test tests/inbound-harness.test.mjs`                                     | Node >=22, `npm ci`                                                                           | U: URL/runner safety, ledger invariant failures, deterministic event replay, local SIP source guard and CI wiring                                                                                 |
 | `npm run test:inbound:db`                                                        | Explicit local `TEST_DATABASE_URL` pointing to a disposable test DB; CREATE SCHEMA permission | DB: required, fails before compilation if URL absent/unsafe; never reads `.env` or falls back to `DATABASE_URL`                                                                                   |
 | `npm run test:inbound:db:isolated`                                               | Linux Docker, cached pinned PostgreSQL image, Node >=22, `npm ci`                             | DB: creates/removes its own network-isolated container and Unix socket; no published ports; retained artifacts in printed `/tmp/outbound-inbound-db.*` directory                                  |
-| `npm --workspace @outbound-dialer/api test`                                      | Node >=22, `npm ci`; optional `TEST_DATABASE_URL`                                             | Existing API tests plus top-level A07 harness and B01 schema integration tests; harness explicitly skips when URL absent, rejects unsafe URL when present                                         |
+| `npm --workspace @outbound-dialer/api test`                                      | Node >=22, `npm ci`; optional `TEST_DATABASE_URL`                                             | Existing API tests plus A07, B01 and B02 schema/fencing suites; integration suites explicitly skip when URL absent, reject unsafe URL when present                                                |
 | `npm --workspace @outbound-dialer/web test -- src/test/inbound-fixtures.test.ts` | `npm ci`                                                                                      | U: jsdom EventTarget, simulated presence/events; no SIP or media                                                                                                                                  |
 | `npm run build && npm run test:e2e`                                              | Chromium installed via `npx playwright install --with-deps chromium`                          | B: Vite preview plus routed API fixtures; A07 browser test replays events across contexts. No integrated product API or SIP/RTP. I01 must supply a real isolated test API for integrated journeys |
 | `npm run test:prototype:desk-binding`                                            | Linux, Docker, `nsenter` privilege, pinned FS and PG images                                   | FS + DB: A04 two real UDP SIP clients; simulated Desk controls, not browser WebRTC or provider                                                                                                    |
@@ -47,7 +47,11 @@ override. It rejects other URL options and a URL designating the configured
 application `DATABASE_URL`, including localhost aliases. The guard is a mistake
 prevention measure: the operator must still provision a disposable database, never
 a production database or a proxy to one. It creates only a random
-`inbound_fixture_<hex>` schema; B01 uses separate `b01_<hex>` schemas for fresh and upgrade checks. Neither truncates application tables.
+`inbound_fixture_<hex>` schema; B01 uses separate `b01_<hex>` schemas and B02 uses
+`b02_<hex>` schemas for fresh, upgrade, constraint and fencing checks. These suites
+do not truncate application tables. The dedicated runner serializes migration
+files while retaining independent backend competitors inside the race tests; see
+[B02 schema and reconciliation](../inbound-desk-slots-capacity.md).
 
 ## Reusable controls and failure checks
 

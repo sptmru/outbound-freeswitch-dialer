@@ -15,8 +15,10 @@ const commands = [
     "node",
     [
       "--test",
+      "--test-concurrency=1",
       "apps/api/dist-test/inbound-harness.integration.test.js",
-      "apps/api/dist-test/inbound-schema.integration.test.js"
+      "apps/api/dist-test/inbound-schema.integration.test.js",
+      "apps/api/dist-test/desk-slots-schema.integration.test.js"
     ]
   ]
 ];
