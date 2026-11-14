@@ -14,7 +14,7 @@ const supportedTimeZones = new Set(["UTC", ...Intl.supportedValuesOf("timeZone")
 const analyticsQuerySchema = z.object({
   from: z.string().datetime({ offset: true }).optional(),
   to: z.string().datetime({ offset: true }).optional(),
-  campaignId: z.string().uuid().optional(),
+  campaignId: z.guid().optional(),
   timeZone: z
     .string()
     .max(100)

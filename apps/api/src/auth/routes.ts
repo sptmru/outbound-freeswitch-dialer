@@ -39,7 +39,7 @@ const createUserSchema = z.object({
 }) satisfies z.ZodType<CreateUserRequest>;
 
 const userParamsSchema = z.object({
-  userId: z.string().uuid()
+  userId: z.guid()
 });
 
 const updateUserSchema = z

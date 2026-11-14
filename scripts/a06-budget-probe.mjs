@@ -3,11 +3,12 @@ import { fork } from "node:child_process";
 import { once } from "node:events";
 import net from "node:net";
 import os from "node:os";
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { performance } from "node:perf_hooks";
 import pg from "pg";
 import { budgets as b, validateBudgets, percentile } from "./a06-budgets.mjs";
+import { monitorWorker, assertWorkersHealthy } from "./a06-worker-monitor.mjs";
 
 const directory = process.argv[2];
 assert.match(directory, /^\/tmp\/outbound-a06\.[\w]+$/);
@@ -16,7 +17,9 @@ const pool = new pg.Pool({
   database: "a06",
   user: "postgres",
   max: 2,
-  connectionTimeoutMillis: 1000
+  connectionTimeoutMillis: 1000,
+  query_timeout: 2000,
+  options: "-c statement_timeout=2000"
 });
 const children = [],
   messages = [],
@@ -38,6 +41,7 @@ const server = net.createServer((socket) => {
 async function until(fn, label, timeout = 10000) {
   const end = performance.now() + timeout;
   while (performance.now() < end) {
+    assertWorkersHealthy(children);
     const value = await fn();
     if (value) return value;
     await delay(10);
@@ -50,17 +54,14 @@ function start(mode, replica) {
     [mode, directory, String(replica)],
     { stdio: ["ignore", "pipe", "pipe", "ipc"] }
   );
-  const log = [];
-  child.stdout.on("data", (d) => log.push(d.toString()));
-  child.stderr.on("data", (d) => log.push(d.toString()));
   child.on("message", (message) => messages.push({ pid: child.pid, mode, replica, ...message }));
-  const ended = once(child, "exit").then(([code, signal]) => ({ code, signal, log: log.join("") }));
-  const handle = { child, ended };
+  const handle = monitorWorker(child, { mode, replica });
   children.push(handle);
   return handle;
 }
 const report = {
-  base: "958aa29ff6545798958c63945833b40c4e0b57fe",
+  base: (await readFile(`${directory}/base-revision.txt`, "utf8")).trim(),
+  storage: (await readFile(`${directory}/storage.txt`, "utf8")).trim(),
   scope: "A06 DB-only; simulated ESL, no SIP/RTP/provider",
   budgets: b,
   aggregate: validateBudgets(),
@@ -89,7 +90,9 @@ try {
     );
   }
   report.database = (
-    await pool.query("SELECT version(),current_setting('max_connections') AS max_connections")
+    await pool.query(
+      "SELECT version(),current_setting('max_connections') AS max_connections,current_setting('fsync') AS fsync,current_setting('synchronous_commit') AS synchronous_commit"
+    )
   ).rows[0];
   server.listen(`${directory}/esl.sock`);
   await once(server, "listening");
@@ -239,6 +242,20 @@ try {
 } catch (error) {
   report.result = "FAIL";
   report.error = error.stack;
+  report.messages = messages;
+  report.workers = children.map((h) => h.state);
+  report.wal = (
+    await pool
+      .query("SELECT wal_write,wal_sync,wal_write_time,wal_sync_time FROM pg_stat_wal")
+      .catch(() => ({ rows: [] }))
+  ).rows;
+  report.activity = (
+    await pool
+      .query(
+        "SELECT pid,usename,state,wait_event_type,wait_event,query,pg_blocking_pids(pid) AS blockers FROM pg_stat_activity WHERE datname='a06'"
+      )
+      .catch(() => ({ rows: [] }))
+  ).rows;
   await writeFile(`${directory}/report.json`, JSON.stringify(report, null, 2));
   throw error;
 } finally {
@@ -247,5 +264,15 @@ try {
   await Promise.all(children.map((h) => h.ended));
   for (const socket of sockets.values()) socket.destroy();
   await new Promise((resolve) => server.close(resolve));
-  await pool.end();
+  try {
+    report.workers = children.map((h) => h.state);
+    report.wal = (
+      await pool
+        .query("SELECT wal_write,wal_sync,wal_write_time,wal_sync_time FROM pg_stat_wal")
+        .catch(() => ({ rows: [] }))
+    ).rows;
+    await writeFile(`${directory}/report.json`, JSON.stringify(report, null, 2));
+  } finally {
+    await pool.end();
+  }
 }

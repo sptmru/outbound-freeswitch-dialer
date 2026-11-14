@@ -150,8 +150,8 @@ export type AppConfig = z.infer<typeof envSchema> & {
   corsOrigins: string[];
 };
 
-export function loadConfig(): AppConfig {
-  const parsed = envSchema.parse(normalizeEnv(process.env));
+export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
+  const parsed = envSchema.parse(normalizeEnv(env));
   assertProductionConfiguration(parsed);
 
   return {

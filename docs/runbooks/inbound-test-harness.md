@@ -113,11 +113,30 @@ Use these clients only inside the existing A04/A05 network-none namespace runner
   strict DB command and quality, and uploads `test-results/inbound-db/` on success
   or failure. Browser CI builds the web app, installs Chromium, runs Playwright,
   retains traces/screenshots on failure and uploads its HTML report/test results.
-- `.github/workflows/inbound-fixtures.yml` is manual-only. Its local-SIP/RTP job
+- `.github/workflows/inbound-fixtures.yml` runs on pull requests and supports manual
+  dispatch once available on the default branch. Its local-SIP/RTP job
   installs Node/npm dependencies, fetches pinned FS/PG images and runs A05 in
   isolated namespaces. Its separate bounded-saturation job runs A06 with pinned
   PG. Both have finite job/command deadlines and always upload sanitized evidence.
   Neither job receives provider/deployment credentials or changes deployment jobs.
+
+The saturation job uses a bounded 256 MiB tmpfs for disposable PGDATA, within the
+existing 512 MiB/2 CPU container limit. PostgreSQL keeps `fsync=on` and
+`synchronous_commit=on`; every A06 SQL/lock/pool/latency budget is unchanged. This
+isolates connection/executor scheduling from the host Docker-volume WAL flush
+latency. It proves resource isolation against simulated ESL, not durable storage
+performance or database-restart survival. I03 must measure the target storage.
+For storage diagnostics, use `A06_PG_STORAGE=volume npm run test:prototype:budgets`;
+that mode keeps the same budgets and fails on slow storage. It never falls back to
+tmpfs or retries a failed measurement. `storage.txt`, `isolation.txt` and the JSON
+report identify the selected storage mode and PostgreSQL settings.
+
+Worker SQL failures carry SQLSTATE, lane/sequence/stage and stack to the parent
+before pool cleanup. Failed/aborted workers fail the current checkpoint promptly;
+the report retains bounded stderr, exit status, PostgreSQL activity and WAL timing
+even when cleanup has to kill other workers. The shell prints failed-run output
+and records owned-container removal. `tests/a06-worker-monitor.test.mjs` covers
+early errors, abrupt exits, normal completion and invalid storage selection.
 
 The DB report contains seed, eight scenario snapshots, checkpoint transcript,
 status/error and schema/process cleanup assertions. Reports omit connection URLs.
@@ -150,8 +169,9 @@ two-way media, target deployment, or product inbound behavior is established by 
 
 Issue [A07 #8](https://github.com/sptmru/outbound-freeswitch-dialer/issues/8), branch
 `test/a07-inbound-harness`, base `3494ed34ba62d035eb4fc90e3c6b50be4583945a`.
-Changes are local/uncommitted. This record leaves the issue open for the A07.3
-CI/runtime gate; it does not mark the backlog tracker complete.
+This historical record describes the original local/uncommitted handoff; the
+follow-up below records the subsequent merge, PR and new verification. The
+original handoff left the issue open for A07.3 and did not complete the tracker.
 
 | Criterion | Result and evidence                                                                                                                                                                                                                                                  |
 | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -202,3 +222,57 @@ has not been established. No A06 budgets, retries or production code were change
 and no later run is substituted for either failure. Diagnose the saturation fixture
 and execute the declared CI jobs before closing the A07.3 gate. Hosted CI requires
 publishing the branch, which is outside this run's authorization.
+
+## A07 follow-up — local verification and CI submission
+
+The owner subsequently merged the harness into `dev` as
+`1a56154b5c4562b6d30a175dc02ce77ab2761008` and approved a follow-up PR into `dev`.
+Branch `fix/a07-saturation-ci` diagnoses the saturation failure, preserves worker
+errors and enables isolated jobs on PRs. No target/provider or deployment work is
+part of this follow-up.
+
+Local controlled comparison identified the Docker-volume WAL flush bottleneck:
+the admission worker failed with `55P03` while control sessions waited in COMMIT
+on `WalSync` / `WALWrite`. The volume diagnostic still fails with unchanged
+budgets (`/tmp/outbound-a06.Ec3xtksc`); the bounded tmpfs reference passes with
+`fsync=on`, `synchronous_commit=on`, p95 ≤15.335 ms / p99 ≤39.683 ms and no leaks
+(`/tmp/outbound-a06.jbLm9VeZ`). See the [A06 follow-up](../inbound-resource-budgets.md#a07-follow-up-reproducible-storage-and-worker-failures)
+for the interpretation and target-storage acceptance boundary.
+
+The owner also approved fixing the high Vite/Zod advisories exposed by the CI
+audit. Vite is locked to 6.4.6 (including peer consumers through the root override)
+and the API uses Zod 4.6.7. Route IDs use `z.guid()` to preserve the previous
+UUID-shaped ID contract; Zod 4's stricter UUID version/variant validation would
+reject previously accepted IDs. The HTTP 400 response retains
+`{ message: "Validation failed", issues }`, with issue `path`, `code` and `message`;
+individual issue codes/messages follow Zod 4. Regression checks cover that
+envelope, normalized environment defaults/coercion, absent optional request fields
+and the contact-field collection bound. See the [Zod migration guide](https://zod.dev/v4/changelog).
+
+Final local CI-equivalent verification used Node 22.13.0, npm 10.9.2 and disposable
+PostgreSQL 16 (matching the CI major). Clean `npm ci`, required
+`npm run test:inbound:db` and `npm run quality` passed: 277 API tests with no skips,
+135 web tests, 76 operations tests, formatting/lint/type checks and all workspace
+builds (`/tmp/outbound-inbound-db.wDj3GatX`). The DB evidence includes all eight
+harness scenarios and teardown. `npm audit --omit=dev --audit-level=high` passed
+with zero high/critical findings and seven moderate findings
+(`/tmp/a07-patched-production-audit.json`); this does not mean all advisories are
+resolved. Chromium's six Playwright checks, example Compose validation and the
+disposable hardened-proxy runtime check also passed locally
+(`/tmp/a07-zod-browser.log`, `/tmp/a07-followup-proxy.log`). Browser fixtures use
+mocked product endpoints/simulated presence and do not establish SIP/media proof.
+The separate pinned FreeSWITCH/PostgreSQL lab passed all twelve A05 groups on
+Node 22, including zero actual channels at teardown
+(`/tmp/outbound-a05.hgDdkR88`, `/tmp/a07-followup-fs.log`); it provides local UDP
+SIP/RTP evidence with no browser or provider traffic.
+
+Follow-up PR: [#50](https://github.com/sptmru/outbound-freeswitch-dialer/pull/50).
+GitHub's repository Actions permissions currently report `enabled: false`;
+the PR has no hosted workflow execution. On 2026-11-14 the owner explicitly
+instructed: "оставь actions выключенным, ты ж проверил все локально, закрой A07".
+A07 is therefore accepted in the amended local scope: A07.1/A07.2/A07.4 have
+the evidence above; for A07.3 the owner accepts local CI-equivalent execution and
+reviewed workflow/artifact wiring instead of a hosted run. Hosted execution and
+hosted artifact upload/download remain unverified, not reported as passed.
+Actions stays disabled; the issue and tracker can be closed under that explicit
+scope amendment. Provider, target-storage and I01–I05 gates remain separate.

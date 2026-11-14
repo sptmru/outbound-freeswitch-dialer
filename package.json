@@ -37,7 +37,8 @@
     "node": ">=22"
   },
   "overrides": {
-    "@fastify/static": "10.1.2"
+    "@fastify/static": "10.1.2",
+    "vite": "^6.4.6"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
