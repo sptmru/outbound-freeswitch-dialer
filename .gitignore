@@ -16,3 +16,4 @@ coverage/
 infra/freeswitch/recordings/*
 !infra/freeswitch/recordings/.gitkeep
 infra/freeswitch/recordings.pre-restore-*/
+.idea/

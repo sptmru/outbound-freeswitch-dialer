@@ -133,7 +133,7 @@ This design avoids maintaining per-user product snapshots in the SSE layer. Auth
 6. ESL events update leg state, call state, answer timestamps, recording/AVMD status, hangup cause, automatic outcome, contact status, and agent availability.
 7. The originate watchdog and reconnect reconciliation close missing calls rather than leaving durable state stuck.
 
-Contact selection uses `FOR UPDATE SKIP LOCKED`; database uniqueness also prevents two active claims for one agent/contact. Defaults allow three attempts with a 15-minute delay between retryable attempts.
+Agent Desk and next-contact selection use the same ordering: never-attempted contacts first, then oldest attempt, oldest creation time, and contact UUID ascending to break ties within CSV imports. The desk shows the first 25 contacts with callable contacts first. This is a preview rather than a reservation: another agent may claim a displayed contact before a call starts. Contact selection uses `FOR UPDATE SKIP LOCKED`; database uniqueness also prevents two active claims for one agent/contact. Defaults allow three attempts with a 15-minute delay between retryable attempts.
 
 ## Supervisor Call Flow
 
@@ -158,8 +158,9 @@ bridged
        or failed/interrupted terminal outcome
 ```
 
-1. The API checks that the call/customer UUID/recording/action are eligible.
-2. A transaction conditionally moves the call to `voicemail_drop_requested`; a repeated/concurrent request cannot claim it twice.
+1. The API checks the call owner, customer UUID and action eligibility. It never accepts an agent-selected recording.
+2. Assignment, upload-and-assign, deletion and drop claims acquire the same campaign advisory transaction lock before row locks. The drop transaction rechecks the call and reads `campaigns.voicemail_recording_id` through `calls.campaign_id`; it requires an active recording owned by that campaign. It saves `calls.recording_id` and moves to `voicemail_drop_requested`. A repeated/concurrent request cannot claim it twice. No database transaction remains open during ESL commands.
+   Before the claim, Agent Desk shows the campaign's current assignment; after the claim the saved recording is immutable for that attempt. An explicit rejected command may allow another attempt using the latest assignment; an ambiguous command remains claimed for reconciliation. Failed-attempt events retain the attempted asset, and the request event is updated on an eligible retry.
 3. ESL transfers the customer channel into the application-owned voicemail dialplan.
 4. After the transfer succeeds, the API asks FreeSWITCH to kill only the agent leg and records `agent_released` only after confirmation or an already-absent-channel response. Originate watchdogs treat the missing agent leg as intentional in voicemail background states.
 5. The agent becomes available for a new interactive call while the original customer leg remains visible as a background job.
@@ -186,7 +187,7 @@ The event record is the source of lifecycle evidence. A local completion event s
 3. The audio endpoint accepts either the admin session or the matching ticket, verifies the active user and scope, and streams the file.
 4. Valid single byte ranges return partial content for seeking. Invalid/missing/empty files do not return misleading success.
 
-Campaign bulk export uses a separate admin-only GET. The API verifies the campaign before sending headers, selects only `available` rows from that exact campaign, and accepts a file only when its database path exactly matches `CALL_RECORDINGS_STORAGE_DIR/<callId>.wav` and `lstat` reports a non-empty regular file. It then streams a store-mode ZIP with UUID-named WAV entries and a spreadsheet-safe manifest. Preflight skips are listed without raw paths; a retention unlink race aborts the stream rather than producing a misleading partial archive. The export start is written to the admin audit log with campaign and included/skipped counts.
+Campaign bulk export uses a separate admin-only GET. Call History first checks the same URL with an explicit admin-only HEAD handler that verifies files without constructing an archive or recording an export-start audit event, then starts a native browser download. Both requests recheck availability, so retention or session expiry between requests can still cause the download to fail; the check does not reserve files. History filters other than the campaign do not apply to this export. The API verifies the campaign before sending headers, selects only `available` rows from that exact campaign, and accepts a file only when its database path exactly matches `CALL_RECORDINGS_STORAGE_DIR/<callId>.wav` and `lstat` reports a non-empty regular file. It then streams a store-mode ZIP with UUID-named WAV entries and a spreadsheet-safe manifest. Preflight skips are listed without raw paths; a retention unlink race aborts the stream rather than producing a misleading partial archive. The export start is written to the admin audit log with campaign and included/skipped counts.
 
 ## Campaign, User, Suppression, And Audit Model
 

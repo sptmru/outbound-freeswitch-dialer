@@ -74,7 +74,9 @@ This document is the current product and operational contract. Items described a
 
 ## Voicemail Drop
 
-- Agents manually request a drop only when the call is eligible and select a recording or use the global default.
+- Agents manually request a drop only when the call is eligible. The API selects the currently assigned voicemail from the call's persisted campaign; agents cannot choose or override recordings.
+- Campaigns may have no voicemail. Assignment changes, including disabling voicemail, affect existing calls until a drop is transactionally claimed. A claimed drop keeps its recorded asset even after the campaign changes. There is no global/default fallback.
+- New voicemail uploads belong to exactly one campaign. Legacy unassigned assets are hidden from libraries and audio APIs and cannot be used for new drops.
 - The request is claimed transactionally and must be idempotent under repeated/concurrent clicks.
 - FreeSWITCH emits application-owned custom events for playback start, completion, and playback failure; customer-channel terminal events classify interruption/hangup.
 - The database lifecycle distinguishes `voicemail_drop_requested`, `voicemail_playback_started`, `agent_released`, and terminal completion/failure/interruption.
@@ -86,7 +88,8 @@ This document is the current product and operational contract. Items described a
 
 ## Voicemail And Call Recordings
 
-- Admins can upload WAV or MP3 voicemail audio, choose a default, preview, and deactivate/delete a recording.
+- Admins can upload WAV or MP3 voicemail audio to a required campaign, preview it, and assign one owned recording or disable voicemail. Multiple saved recordings per campaign are supported; ownership cannot be reassigned.
+- Upload-and-assign commits only after successful audio processing. Assignment, deletion and drop claims serialize per campaign. Assigned recordings must be replaced/disabled before deletion, and recordings referenced by unfinished calls/jobs cannot be deleted.
 - Uploads are decoded and transcoded before activation to mono, 8 kHz, signed 16-bit PCM WAV with loudness normalization.
 - Audio with no valid stream, unavailable processing, malformed content, or duration over five minutes is rejected.
 - Call recording remains campaign-controlled and is started on the customer leg through FreeSWITCH.
@@ -129,6 +132,7 @@ This document is the current product and operational contract. Items described a
 - Date-filtered call metrics and current contact-queue snapshots are labeled separately. Current callable/suppressed/exhausted counts must not be presented as historical values for the selected call period.
 - Admin call history is paginated and filterable by text, campaign, agent, outcome, date range, voicemail drop/signal, and recording availability. Manual calls show a matching named lead when the normalized destination exists in any campaign; matches from the call's campaign take precedence, otherwise the most recently added named lead is used. Calls without a named match remain labeled **Manual dial**.
 - Call detail includes lifecycle events and technical identifiers needed for diagnosis. The technical timeline is bounded to the latest 100 events and reports the total and whether older events were omitted.
+- Call History offers **Download campaign recordings** after selecting one campaign. It exports all retained playable recordings in that campaign, independently of pagination and other history filters, and reports availability/access errors before starting the download.
 - CSV export applies the same filters, refuses exports above `CALL_HISTORY_EXPORT_MAX_ROWS` (50,000 by default), and streams accepted rows in bounded pages.
 - Outcomes are derived from backend call events. Agents do not select a mandatory post-call disposition in this version.
 

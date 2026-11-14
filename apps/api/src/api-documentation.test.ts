@@ -147,7 +147,7 @@ test("documents every registered API route with request and response contracts",
   await app.close();
 });
 
-const openApiMethods = new Set(["delete", "get", "patch", "post", "put"]);
+const openApiMethods = new Set(["delete", "get", "head", "patch", "post", "put"]);
 
 type OpenApiOperation = {
   summary: string;

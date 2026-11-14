@@ -7,8 +7,10 @@ import type { PublicUser } from "@outbound-dialer/shared";
 import multipart from "@fastify/multipart";
 import Fastify, { type FastifyRequest } from "fastify";
 import type pg from "pg";
+import { ZodError } from "zod";
 import type { AppConfig } from "../config.js";
 import { signAuthToken } from "../auth/tokens.js";
+import { encryptSecret } from "../auth/crypto.js";
 import { SESSION_COOKIE_NAME } from "../security.js";
 import { getAgentCampaign, getAgentCampaignForDialerAction } from "./campaigns.js";
 import {
@@ -31,6 +33,89 @@ const config = {
 } as AppConfig;
 
 describe("dashboard route helpers", () => {
+  it("rejects agent recording overrides and retires global defaults", async () => {
+    const routeConfig = {
+      ...config,
+      JWT_SECRET: "voicemail-route-test-secret",
+      JWT_EXPIRES_SECONDS: 3600
+    } as AppConfig;
+    const pool = createQueryPool((sql) => {
+      if (sql.includes("from users"))
+        return rows([{ ...userRow({ role: "admin" }), is_active: true, auth_version: 1 }]);
+      throw new Error(`Unexpected query: ${sql}`);
+    });
+    const app = Fastify();
+    app.setErrorHandler((error, _request, reply) => {
+      if (error instanceof ZodError) return reply.code(400).send({ message: "Invalid request" });
+      return reply.send(error);
+    });
+    registerDashboardRoutes(app, routeConfig, pool);
+    const token = signAuthToken(routeConfig, {
+      sub: userRow().id,
+      email: userRow().email,
+      role: "admin",
+      ver: 1
+    });
+    const headers = { authorization: `Bearer ${token}` };
+    try {
+      const override = await app.inject({
+        method: "POST",
+        url: `/agent/calls/${selectedCampaignId}/drop-voicemail`,
+        headers,
+        payload: { recordingId: selectedCampaignId }
+      });
+      assert.equal(override.statusCode, 400, override.body);
+      const retired = await app.inject({
+        method: "PATCH",
+        url: `/admin/recordings/${selectedCampaignId}/default`,
+        headers
+      });
+      assert.equal(retired.statusCode, 410, retired.body);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("requires campaign ownership on uploads and admin permission on assignment", async () => {
+    let role: "admin" | "agent" = "admin";
+    const routeConfig = {
+      ...config,
+      JWT_SECRET: "voicemail-route-test-secret",
+      JWT_EXPIRES_SECONDS: 3600
+    } as AppConfig;
+    const pool = createQueryPool((sql) => {
+      if (sql.includes("from users"))
+        return rows([{ ...userRow({ role }), is_active: true, auth_version: 1 }]);
+      throw new Error(`Unexpected query: ${sql}`);
+    });
+    const app = Fastify();
+    await app.register(multipart);
+    registerDashboardRoutes(app, routeConfig, pool);
+    const token = signAuthToken(routeConfig, { sub: userRow().id, email: userRow().email, role, ver: 1 });
+    const headers = { authorization: `Bearer ${token}` };
+    try {
+      const upload = await app.inject({
+        method: "POST",
+        url: "/admin/recordings",
+        headers: { ...headers, "content-type": "multipart/form-data; boundary=vmfixture" },
+        payload:
+          '--vmfixture\r\nContent-Disposition: form-data; name="file"; filename="message.wav"\r\nContent-Type: audio/wav\r\n\r\nfixture\r\n--vmfixture--\r\n'
+      });
+      assert.equal(upload.statusCode, 400, upload.body);
+      assert.match(upload.json().message, /campaign/);
+      role = "agent";
+      const denied = await app.inject({
+        method: "PATCH",
+        url: `/admin/campaigns/${selectedCampaignId}/voicemail`,
+        headers,
+        payload: { recordingId: null }
+      });
+      assert.equal(denied.statusCode, 403, denied.body);
+    } finally {
+      await app.close();
+    }
+  });
+
   it("preserves a manual lead's Zoho ID for the agent queue", async () => {
     let savedFields: Record<string, string> = {};
     const contact = {
@@ -378,6 +463,47 @@ describe("dashboard route helpers", () => {
       });
       assert.equal(response.statusCode, 401);
       assert.equal(queryCount, 0);
+      const check = await app.inject({
+        method: "HEAD",
+        url: `/admin/campaigns/${selectedCampaignId}/recordings.zip`,
+        headers: { authorization: "Bearer invalid" }
+      });
+      assert.equal(check.statusCode, 401);
+      assert.equal(queryCount, 0);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("denies agents access to both recording checks and downloads", async () => {
+    const app = Fastify();
+    const agent = userRow({ role: "agent" });
+    const routeConfig = {
+      JWT_EXPIRES_SECONDS: 3_600,
+      JWT_SECRET: "campaign-recording-export-test-secret"
+    } as AppConfig;
+    const pool = createQueryPool((sql) => {
+      if (sql.includes("from users")) {
+        return rows([{ ...agent, is_active: true, auth_version: 1 }]);
+      }
+      throw new Error(`An agent must not inspect recordings: ${sql}`);
+    });
+    registerDashboardRoutes(app, routeConfig, pool);
+    const token = signAuthToken(routeConfig, {
+      sub: agent.id,
+      email: agent.email,
+      role: "agent",
+      ver: 1
+    });
+    try {
+      for (const method of ["HEAD", "GET"] as const) {
+        const response = await app.inject({
+          method,
+          url: `/admin/campaigns/${selectedCampaignId}/recordings.zip`,
+          headers: { authorization: `Bearer ${token}` }
+        });
+        assert.equal(response.statusCode, 403);
+      }
     } finally {
       await app.close();
     }
@@ -425,6 +551,13 @@ describe("dashboard route helpers", () => {
       });
       assert.equal(response.statusCode, 404);
       assert.deepEqual(response.json(), { message: "Campaign not found" });
+      const check = await app.inject({
+        method: "HEAD",
+        url: `/admin/campaigns/${selectedCampaignId}/recordings.zip`,
+        headers: { authorization: `Bearer ${token}` }
+      });
+      assert.equal(check.statusCode, 404);
+      assert.equal(check.body, "");
       assert.equal(
         queries.some((sql) => sql.includes("from calls")),
         false
@@ -477,6 +610,14 @@ describe("dashboard route helpers", () => {
       assert.deepEqual(response.json(), {
         message: "No playable call recordings found for this campaign"
       });
+      const check = await app.inject({
+        method: "HEAD",
+        url: `/admin/campaigns/${selectedCampaignId}/recordings.zip`,
+        headers: { authorization: `Bearer ${token}` }
+      });
+      assert.equal(check.statusCode, 404);
+      assert.equal(check.headers["cache-control"], "private, no-store");
+      assert.equal(check.body, "");
     } finally {
       await app.close();
     }
@@ -536,6 +677,17 @@ describe("dashboard route helpers", () => {
     });
 
     try {
+      const check = await app.inject({
+        method: "HEAD",
+        url: `/admin/campaigns/${selectedCampaignId}/recordings.zip`,
+        headers: { authorization: `Bearer ${token}` }
+      });
+      assert.equal(check.statusCode, 200);
+      assert.equal(check.headers["x-recording-count"], "1");
+      assert.equal(check.headers["x-recording-skipped-count"], "0");
+      assert.equal(check.headers["cache-control"], "private, no-store");
+      assert.equal(check.body, "");
+      assert.equal(auditParams.length, 0);
       const response = await app.inject({
         method: "GET",
         url: `/admin/campaigns/${selectedCampaignId}/recordings.zip`,
@@ -926,7 +1078,11 @@ describe("dashboard route helpers", () => {
     const pool = createTransactionalPool({
       clientHandler: (sql, params) => {
         clientQueries.push({ sql, params });
-        if (sql.includes("select registered, availability_status, caller_id from agents")) {
+        if (
+          sql.includes(
+            "select registered, availability_status, caller_id, last_registered_at, last_unregistered_at from agents"
+          )
+        ) {
           return rows([
             {
               registered: true,
@@ -969,7 +1125,11 @@ describe("dashboard route helpers", () => {
         if (sql === "select agent_id from calls where id = $1") {
           return rows([{ agent_id: "33333333-3333-4333-8333-333333333333" }]);
         }
-        if (sql.includes("select registered, availability_status, caller_id from agents")) {
+        if (
+          sql.includes(
+            "select registered, availability_status, caller_id, last_registered_at, last_unregistered_at from agents"
+          )
+        ) {
           return rows([
             {
               registered: true,
@@ -1063,7 +1223,11 @@ describe("dashboard route helpers", () => {
     const contactQueries: Array<{ params: readonly unknown[]; sql: string }> = [];
     const pool = createTransactionalPool({
       clientHandler: (sql, params) => {
-        if (sql.includes("select registered, availability_status, caller_id from agents")) {
+        if (
+          sql.includes(
+            "select registered, availability_status, caller_id, last_registered_at, last_unregistered_at from agents"
+          )
+        ) {
           return rows([{ registered: true, availability_status: "available" }]);
         }
         if (sql.includes("from calls") && sql.includes("for update")) {
@@ -1172,7 +1336,9 @@ describe("dashboard route helpers", () => {
     const pool = createTransactionalPool({
       clientHandler: (sql) => {
         queries.push(sql);
-        return sql.includes("select registered, availability_status, caller_id from agents")
+        return sql.includes(
+          "select registered, availability_status, caller_id, last_registered_at, last_unregistered_at from agents"
+        )
           ? rows([{ registered: false, availability_status: "available" }])
           : rows([]);
       }
@@ -1604,6 +1770,83 @@ describe("dashboard route helpers", () => {
     });
   });
 
+  for (const total of [0, 1, 1_001, 1_501]) {
+    it(`returns the call-history CSV over HTTP for ${total} matching rows`, async () => {
+      const routeConfig = {
+        ...config,
+        JWT_SECRET: "csv-export-test-secret",
+        JWT_EXPIRES_SECONDS: 3_600,
+        CALL_HISTORY_EXPORT_MAX_ROWS: 1_500
+      } as AppConfig;
+      let historyQueries = 0;
+      const pool = createQueryPool((sql, params) => {
+        if (sql.includes("from users")) {
+          return rows([{ ...userRow({ role: "admin" }), is_active: true, auth_version: 1 }]);
+        }
+        assert.match(sql, /from calls/);
+        assert.equal(params[1], selectedCampaignId);
+        const offset = historyQueries++ * 1_000;
+        return rows(
+          Array.from({ length: Math.min(1_000, total - offset) }, (_, index) => ({
+            id: `44444444-4444-4444-8444-${String(total - offset - index).padStart(12, "0")}`,
+            lead_name: `Lead ${offset + index + 1}`,
+            agent_name: "Alex",
+            phone_number: "+14155550100",
+            campaign_name: "Follow-up",
+            campaign_id: selectedCampaignId,
+            agent_user_id: userRow().id,
+            state: "completed",
+            outcome: "answered",
+            created_at: new Date("2026-07-10T08:00:00.000Z"),
+            duration_seconds: 60,
+            recording_available: true,
+            pcap_status: null,
+            pcap_available: false,
+            voicemail_signal_status: "none",
+            avmd_review_status: "reviewed",
+            total_count: String(total)
+          }))
+        );
+      });
+      const app = Fastify();
+      registerDashboardRoutes(app, routeConfig, pool);
+      const token = signAuthToken(routeConfig, {
+        sub: userRow().id,
+        email: userRow().email,
+        role: "admin",
+        ver: 1
+      });
+      try {
+        const response = await app.inject({
+          method: "GET",
+          url: `/admin/calls/export.csv?campaignId=${selectedCampaignId}`,
+          headers: { authorization: `Bearer ${token}` }
+        });
+        if (total > routeConfig.CALL_HISTORY_EXPORT_MAX_ROWS) {
+          assert.equal(response.statusCode, 413, response.body);
+          assert.match(response.json().message, /1501 rows.*1500-row limit/);
+          assert.equal(historyQueries, 1);
+          return;
+        }
+        assert.equal(response.statusCode, 200, response.body);
+        assert.equal(response.headers["content-type"], "text/csv; charset=utf-8");
+        assert.match(
+          String(response.headers["content-disposition"]),
+          /^attachment; filename="call-history-\d{4}-\d{2}-\d{2}\.csv"$/
+        );
+        assert.match(response.body, /^"created_at","lead","phone"/);
+        const lines = response.body.trimEnd().split("\n");
+        assert.equal(lines.length, total + 1);
+        for (let index = 1; index <= total; index++) {
+          assert.ok(lines[index]?.includes(`,"Lead ${index}",`));
+        }
+        assert.equal(historyQueries, Math.max(1, Math.ceil(total / 1_000)));
+      } finally {
+        await app.close();
+      }
+    });
+  }
+
   it("streams call-history export with a stable keyset order without holding a pool client", async () => {
     const commands: string[] = [];
     const pool = {
@@ -1720,6 +1963,109 @@ describe("dashboard route helpers", () => {
     assert.equal(result.softphone.status, "offline");
     assert.ok(!serialized.includes("campaign_demo_solar_followup"));
     assert.ok(!serialized.includes("+1 415 555 0148"));
+  });
+  it("logs rejected starts for all calling routes with the decision-time registration snapshot", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "call-start-audit-"));
+    const routeConfig = {
+      ...config,
+      JWT_SECRET: "call-start-audit-fixture",
+      JWT_EXPIRES_SECONDS: 3600,
+      FREESWITCH_GENERATED_CONFIG_DIR: directory,
+      FREESWITCH_DOMAIN: "dialer.local",
+      FREESWITCH_ESL_ENABLED: false
+    } as AppConfig;
+    const agentId = "33333333-3333-4333-8333-333333333333";
+    const lastRegisteredAt = new Date("2026-10-18T22:55:34Z");
+    const lastUnregisteredAt = new Date("2026-10-18T22:55:59Z");
+    const logs: Array<Record<string, unknown>> = [];
+    const pool = createTransactionalPool({
+      poolHandler: (sql) => {
+        if (sql.includes("from users")) return rows([{ ...userRow(), is_active: true, auth_version: 1 }]);
+        if (sql.includes("from campaigns")) return rows([campaignRow()]);
+        if (sql.includes("from agents"))
+          return rows([
+            {
+              id: agentId,
+              sip_username: "agent1000",
+              display_name: "Agent Example",
+              sip_password_encrypted: encryptSecret(routeConfig, "private-sip-fixture")
+            }
+          ]);
+        return rows([]);
+      },
+      clientHandler: (sql) => {
+        if (sql.includes("select is_active")) return rows([{ is_active: true }]);
+        if (sql.includes("select registered,"))
+          return rows([
+            {
+              registered: false,
+              availability_status: "available",
+              caller_id: "private-caller-id",
+              last_registered_at: lastRegisteredAt,
+              last_unregistered_at: lastUnregisteredAt
+            }
+          ]);
+        return rows([]);
+      }
+    });
+    const app = Fastify({
+      logger: {
+        stream: {
+          write: (line: string) => {
+            logs.push(JSON.parse(line));
+          }
+        }
+      }
+    });
+    registerDashboardRoutes(app, routeConfig, pool);
+    const token = signAuthToken(routeConfig, {
+      sub: userRow().id,
+      email: userRow().email,
+      role: "agent",
+      ver: 1
+    });
+    try {
+      for (const url of [
+        "/agent/manual-dial/start",
+        "/agent/call-next",
+        `/agent/leads/${selectedCampaignId}/call`
+      ]) {
+        const response = await app.inject({
+          method: "POST",
+          url,
+          headers: { authorization: `Bearer ${token}` },
+          payload: {
+            campaignId: selectedCampaignId,
+            ...(url.includes("manual-dial") ? { phoneNumber: "+14155550100" } : {})
+          }
+        });
+        assert.equal(response.statusCode, 409, response.body);
+        assert.equal(response.json().message, "The browser phone must be connected before starting a call");
+      }
+      const rejected = logs.filter((entry) => entry.event === "call_start_rejected");
+      assert.equal(rejected.length, 3);
+      for (const entry of rejected) {
+        assert.equal(entry.reason, "agent_not_registered");
+        assert.equal(entry.actorUserId, userRow().id);
+        assert.equal(entry.agentId, agentId);
+        assert.equal(entry.requestId, entry.reqId);
+        assert.deepEqual(entry.agentRegistration, {
+          registered: false,
+          availabilityStatus: "available",
+          lastRegisteredAt: lastRegisteredAt.toISOString(),
+          lastUnregisteredAt: lastUnregisteredAt.toISOString()
+        });
+      }
+      assert.deepEqual(
+        rejected.map((entry) => entry.route),
+        ["/agent/manual-dial/start", "/agent/call-next", "/agent/leads/:contactId/call"]
+      );
+      assert.doesNotMatch(JSON.stringify(rejected), /private-|14155550100|authorization|cookie|password/i);
+      assert.ok(!JSON.stringify(rejected).includes(token));
+    } finally {
+      await app.close();
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 });
 

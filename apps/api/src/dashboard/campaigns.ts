@@ -40,6 +40,7 @@ type CampaignOverviewRow = {
   callable: string;
   attempted: string;
   outcome_distribution: Array<{ outcome: string; count: number }>;
+  voicemail_recording_id: string | null;
   manual_dialing_enabled: boolean;
   call_recording_enabled: boolean;
   early_media_avmd_enabled: boolean;
@@ -296,6 +297,7 @@ async function queryCampaignLibrary(
     select
       campaigns.id,
       campaigns.name,
+      campaigns.voicemail_recording_id,
       campaigns.status,
       campaigns.manual_dialing_enabled,
       campaigns.call_recording_enabled,
@@ -361,6 +363,7 @@ function mapCampaignOverviewRow(row: CampaignOverviewRow): AdminOverviewResponse
     callable: Number(row.callable),
     attempted: Number(row.attempted ?? 0),
     outcomeDistribution: row.outcome_distribution ?? [],
+    voicemailRecordingId: row.voicemail_recording_id ?? null,
     manualDialingEnabled: row.manual_dialing_enabled,
     callRecordingEnabled: row.call_recording_enabled,
     earlyMediaAvmdEnabled: row.early_media_avmd_enabled,
@@ -381,6 +384,7 @@ export async function getCampaignOverviewItem(
     callable: string;
     attempted: string;
     outcome_distribution: Array<{ outcome: string; count: number }>;
+    voicemail_recording_id: string | null;
     manual_dialing_enabled: boolean;
     call_recording_enabled: boolean;
     early_media_avmd_enabled: boolean;
@@ -390,6 +394,7 @@ export async function getCampaignOverviewItem(
       select
         campaigns.id,
         campaigns.name,
+        campaigns.voicemail_recording_id,
         campaigns.status,
         campaigns.manual_dialing_enabled,
         campaigns.call_recording_enabled,
@@ -438,6 +443,7 @@ export async function getCampaignOverviewItem(
     callable: Number(row.callable),
     attempted: Number(row.attempted ?? 0),
     outcomeDistribution: row.outcome_distribution ?? [],
+    voicemailRecordingId: row.voicemail_recording_id ?? null,
     manualDialingEnabled: row.manual_dialing_enabled,
     callRecordingEnabled: row.call_recording_enabled,
     earlyMediaAvmdEnabled: row.early_media_avmd_enabled,

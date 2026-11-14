@@ -32,9 +32,11 @@
 
 ## Voicemail Recordings
 
-- Upload one WAV or MP3 from **Recordings**. The API probes and transcodes it to mono 8 kHz signed 16-bit PCM WAV with loudness normalization; malformed/no-audio/over-five-minute input is rejected.
-- Preview the canonical file, check duration/size, and keep one appropriate global default.
-- Deactivation/removal preserves database references used by historical calls. Do not change the active library during a live voicemail test without recording the context.
+- Create the campaign first. Upload one WAV or MP3 from **Recordings**, selecting its campaign, or use **Upload voicemail for this campaign** on the campaign card. The API probes and transcodes it to mono 8 kHz signed 16-bit PCM WAV with loudness normalization; malformed/no-audio/over-five-minute input is rejected.
+- Preview the canonical file and check duration/size. **Use for this campaign** assigns it after a successful upload; unchecking this saves it without changing the campaign's current message.
+- Use **Campaign voicemail** to select one of that campaign's recordings or **No voicemail**. Updates apply to current conversations until Drop is accepted. Already-started drops keep their original message. Agents cannot select a message.
+- The library shows each recording's campaign and supports campaign filtering. Legacy unassigned recordings are hidden and unavailable through audio APIs; upload a new copy into the intended campaign if needed.
+- Replace or disable the assigned message before deleting it. An unfinished call/voicemail job protects its file from deletion. Removing an unused file preserves historical database references. Archived campaigns retain their recordings and cannot accept new uploads or assignment changes.
 - Playback in the browser uses short-lived media tickets. If a long-open player expires, retry playback to obtain a new ticket.
 
 ## Users And Sessions
@@ -54,10 +56,11 @@
 ## History And Audit
 
 - Filter call history by search text, campaign, agent, outcome, date, voicemail drop/signal, and recording availability. Manual calls reuse a known lead name when their normalized number matches an existing named lead; otherwise they appear as **Manual dial**.
+- Select a **Campaign** in Call History, then use **Download campaign recordings** to download one ZIP containing all currently available recordings for that campaign and `manifest.csv`. Date, agent, search, outcome, and other history filters do not limit this download. The button requires a campaign selection; an availability check reports missing recordings or access errors in the page before the browser starts the download. Archived campaigns and campaigns with recording now disabled can still export retained recordings.
 - Open call detail for leg UUIDs, state events, commands, hangup causes, AVMD/voicemail lifecycle, and media availability. Technical history shows the latest 100 events and explicitly reports when older events were omitted.
 - For an answered call with a playable recording, use **AVMD review** to label what actually answered as Human, Voicemail / machine, or Uncertain. Listen before labeling; the detector result alone is not ground truth. Analytics always shows reviewed-sample coverage next to precision/recall.
 - Technical media cards report FreeSWITCH RTP counters captured at hangup separately for the agent and customer legs. Browser WebRTC evidence is shown separately and includes packet loss, concealed samples, maximum jitter/RTT, average playout jitter-buffer delay, ICE candidate path, codecs, and applied microphone DSP. A suspected one-way flag is diagnostic evidence, not confirmation of what either party heard.
-- CSV export uses the active filters and is rejected above `CALL_HISTORY_EXPORT_MAX_ROWS` (50,000 by default).
+- **Export CSV** downloads column headers and all matching rows using the active filters. If no calls match, the file contains only column headers. Export is rejected above `CALL_HISTORY_EXPORT_MAX_ROWS` (50,000 by default).
 - Successful mutating admin requests are recorded in the administrative audit log. Use actor/method/date filters when investigating; request bodies/secrets are intentionally not stored.
 
 ## Retention

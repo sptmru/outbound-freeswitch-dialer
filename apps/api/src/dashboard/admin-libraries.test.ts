@@ -45,7 +45,9 @@ describe("admin library pagination", () => {
         runtime_file_path: "/recordings/primary.wav",
         duration_seconds: 12,
         file_size_bytes: 4096,
-        is_default: true,
+        is_assigned: true,
+        campaign_id: "campaign-1",
+        campaign_name: "Summer Sales",
         is_active: true,
         total_count: "4"
       }
@@ -55,9 +57,9 @@ describe("admin library pagination", () => {
       page: 2,
       pageSize: 2
     });
-    assert.deepEqual(recordingsQuery.params, ["primary", 2, 2]);
+    assert.deepEqual(recordingsQuery.params, ["primary", 2, 2, null]);
     assert.equal(recordings.totalPages, 2);
-    assert.equal(recordings.items[0]?.status, "default");
+    assert.equal(recordings.items[0]?.status, "assigned");
 
     const usersQuery = stubQuery([
       {
@@ -114,7 +116,7 @@ describe("admin library pagination", () => {
 
     const recordingsQuery = stubQuery([]);
     await getRecordings(recordingsQuery.pool);
-    assert.deepEqual(recordingsQuery.params, [null, null, 0]);
+    assert.deepEqual(recordingsQuery.params, [null, null, 0, null]);
 
     const usersQuery = stubQuery([]);
     await getUsers(usersQuery.pool);

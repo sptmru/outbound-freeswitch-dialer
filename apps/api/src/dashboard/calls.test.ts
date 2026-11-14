@@ -261,7 +261,6 @@ describe("call lifecycle", () => {
       {} as AppConfig,
       userId,
       callId,
-      undefined,
       async (_config, command) => {
         commands.push(command);
         return { body: "+OK", headers: {}, raw: "" };
@@ -319,7 +318,7 @@ function voicemailDropRow(overrides: Record<string, unknown> = {}) {
     ended_at: null,
     outcome: null,
     runtime_file_path: "/recordings/default.wav",
-    selected_recording_id: null,
+    campaign_id: "88888888-8888-4888-8888-888888888888",
     state: "bridged",
     ...overrides
   };
