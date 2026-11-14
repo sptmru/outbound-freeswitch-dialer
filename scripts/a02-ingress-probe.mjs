@@ -39,9 +39,10 @@ function parseHeaders(raw) {
   return { first: lines[0], headers };
 }
 
-async function openEsl() {
+export async function openEsl() {
   const socket = net.createConnection({ host: "127.0.0.1", port: 8021 });
   const events = [];
+  const logs = [];
   const frames = [];
   let buffer = Buffer.alloc(0);
   let failure;
@@ -61,7 +62,8 @@ async function openEsl() {
       if (headers["content-type"] === "text/event-plain") {
         const parsed = parseHeaders(`event\n${body}`).headers;
         events.push(Object.fromEntries(Object.entries(parsed).map(([k, v]) => [k, decodeURIComponent(v)])));
-      } else frames.push(frame);
+      } else if (headers["content-type"] === "log/data") logs.push(body);
+      else frames.push(frame);
     }
   });
   async function frame() {
@@ -86,7 +88,7 @@ async function openEsl() {
       ).headers["reply-text"],
       /^\+OK/
     );
-    return { events, command, close: () => socket.destroy() };
+    return { events, logs, command, close: () => socket.destroy() };
   } catch (error) {
     socket.destroy();
     throw error;
@@ -100,7 +102,15 @@ async function bind(socket, host) {
   });
 }
 
-async function invite({ source = "127.0.0.2", did = "+12025550100", forged = false, codec = "PCMU" }) {
+export async function invite({
+  source = "127.0.0.2",
+  did = "+12025550100",
+  forged = false,
+  codec = "PCMU",
+  timeoutMs = 5000,
+  allowNoFinal = false,
+  control
+}) {
   const sip = dgram.createSocket("udp4");
   const rtp = dgram.createSocket("udp4");
   const messages = [];
@@ -200,9 +210,10 @@ async function invite({ source = "127.0.0.2", did = "+12025550100", forged = fal
       ],
       sdp
     );
-    const deadline = Date.now() + 5000;
+    control?.({ cancel: () => send("CANCEL", uri, 1, to) });
+    const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline && !(final >= 300 || (final === 200 && bye))) await delay(10);
-    assert.ok(final, "INVITE had no final response within 5 seconds");
+    assert.ok(final || allowNoFinal, "INVITE had no final response within deadline");
     return {
       callId,
       spoof,

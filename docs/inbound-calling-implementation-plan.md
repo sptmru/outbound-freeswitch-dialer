@@ -476,6 +476,11 @@ outbound; automatic advancement retains inbound priority.
 
 ### 6.1. Recovery Before the First Database Insert
 
+A03's opt-in [durable ingress prototype and protocol](inbound-durable-ingress-prototype.md)
+uses a separate local journal agent with bounded FS requests and idempotent PostgreSQL
+import. Its isolated evidence does not implement or enable product ingress; D03 must
+integrate the protocol with product admission, discovery, authorization and recovery.
+
 An ESL subscription and its process-local backlog are not durable ingress storage.
 Recovery must also discover trusted, application-tagged live FreeSWITCH ingress channels
 that have no `calls` row. Keep an internally assigned ingress UUID, original arrival
