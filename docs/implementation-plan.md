@@ -23,6 +23,12 @@ The planned single-tenant operational MVP is implemented in the repository. The 
 
 Firewall and host-published-port changes were excluded by instruction. They are not counted as completed and require a separate deployment-owner review.
 
+The inbound/transfer extension has separate staged contracts and acceptance gates.
+[C04 manual outbound admission](inbound-manual-outbound.md) now supplies atomic
+actor-only dismissal and durable command/slot/contact/capacity admission, verified
+with real PostgreSQL/API and simulated ESL. Its native execution dependency is
+not installed in `server.ts`; this is not product inbound/transfer enablement.
+
 ## Completed Repository Work
 
 ### 1. Foundation And Data Integrity

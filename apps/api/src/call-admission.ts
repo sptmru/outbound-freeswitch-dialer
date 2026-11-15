@@ -111,7 +111,8 @@ export class CallAdmission {
   readonly capacity: CallCapacity;
   constructor(
     readonly client: pg.PoolClient,
-    private readonly resources: Awaited<ReturnType<typeof discoverAdmissionResources>>
+    private readonly resources: Awaited<ReturnType<typeof discoverAdmissionResources>>,
+    readonly startPaused = false
   ) {
     this.capacity = new CallCapacity(client, (callId, agentId) => {
       if (!this.open) throw new AdmissionError("transaction_closed");
@@ -278,7 +279,7 @@ export class CallAdmission {
  */
 export async function withCallAdmission<T>(
   client: pg.PoolClient,
-  input: AdmissionResources & { startsCall?: boolean },
+  input: AdmissionResources & { startsCall?: boolean; allowPausedReplay?: boolean },
   work: (admission: CallAdmission) => Promise<T>
 ): Promise<T> {
   const discovered = await discoverAdmissionResources(client, input);
@@ -288,6 +289,7 @@ export async function withCallAdmission<T>(
     await client.query("set local lock_timeout='250ms'");
     await client.query("set local statement_timeout='500ms'");
     await client.query("set local idle_in_transaction_session_timeout='1000ms'");
+    let startPaused = false;
     if (input.startsCall) {
       await client.query(
         "insert into system_settings(key,value_json) values('ops.call_start_paused','false') on conflict(key) do nothing"
@@ -295,7 +297,8 @@ export async function withCallAdmission<T>(
       const maintenance = await client.query(
         "select value_json='true'::jsonb as paused from system_settings where key='ops.call_start_paused' for share"
       );
-      if (maintenance.rows[0]?.paused) throw new AdmissionError("maintenance");
+      startPaused = Boolean(maintenance.rows[0]?.paused);
+      if (startPaused && !input.allowPausedReplay) throw new AdmissionError("maintenance");
     }
     await client.query("select pg_advisory_xact_lock($1,0)", [ADMISSION_LOCK_NAMESPACE]);
     const marker = await client.query(
@@ -316,7 +319,7 @@ export async function withCallAdmission<T>(
       await client.query("select id from calls where id=$1 for update", [id]);
     const current = await discoverAdmissionResources(client, input);
     if (JSON.stringify(current) !== JSON.stringify(discovered)) throw new AdmissionDiscoveryChanged();
-    admission = new CallAdmission(client, discovered);
+    admission = new CallAdmission(client, discovered, startPaused);
     const result = await work(admission);
     admission.close();
     await client.query("commit");

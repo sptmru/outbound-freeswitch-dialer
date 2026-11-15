@@ -1,4 +1,10 @@
 import type pg from "pg";
+import { ADMISSION_LOCK_NAMESPACE } from "../call-admission.js";
+import {
+  admitManualOutbound,
+  type ManualOutboundRequest,
+  type ManualOutboundAdmission
+} from "../manual-outbound.js";
 import type { CallEndRequestAudit, CallOutcome, CallState } from "@outbound-dialer/shared";
 import type { AppConfig } from "../config.js";
 import { finishAgentCall } from "../agent-availability.js";
@@ -169,7 +175,8 @@ type CreateDialerCallFailureReason =
   | "supervisor_session";
 
 type CreateDialerCallResult =
-  { ok: true; callId: string; campaignId: string } | { ok: false; reason: CreateDialerCallFailureReason };
+  | { ok: true; callId: string; campaignId: string; admission?: ManualOutboundAdmission }
+  | { ok: false; reason: CreateDialerCallFailureReason };
 
 export interface CallStartRejection {
   reason: CreateDialerCallFailureReason;
@@ -193,23 +200,31 @@ interface DialerCallContext {
 export async function createDialerCall(
   pool: pg.Pool,
   config: AppConfig,
-  input: {
-    actorUserId?: string;
-    agentId: string;
-    campaignId: string | null;
-    contactId: string | null | "next";
-    destinationNumber?: string;
-    normalizedDestinationNumber?: string;
-    sipUsername: string;
-    manualDial: boolean;
-    callRecordingEnabled: boolean;
-    earlyMediaAvmdEnabled: boolean;
-    confirmCompletedLead?: boolean;
-    confirmRetryWait?: boolean;
-    eventType: string;
-    onRejected?: (rejection: CallStartRejection) => void;
-  }
+  input:
+    | { coordination: ManualOutboundRequest; actorUserId: string }
+    | {
+        coordination?: never;
+        actorUserId?: string;
+        agentId: string;
+        campaignId: string | null;
+        contactId: string | null | "next";
+        destinationNumber?: string;
+        normalizedDestinationNumber?: string;
+        sipUsername: string;
+        manualDial: boolean;
+        callRecordingEnabled: boolean;
+        earlyMediaAvmdEnabled: boolean;
+        confirmCompletedLead?: boolean;
+        confirmRetryWait?: boolean;
+        eventType: string;
+        onRejected?: (rejection: CallStartRejection) => void;
+      }
 ): Promise<CreateDialerCallResult> {
+  if (input.coordination) {
+    if (input.coordination.actorUserId !== input.actorUserId) throw new Error("Call actor mismatch");
+    const admission = await admitManualOutbound(pool, config, input.coordination);
+    return { ok: true, callId: admission.callId, campaignId: admission.campaignId, admission };
+  }
   const client = await pool.connect();
   let callId: string | null = null;
   let callContext: DialerCallContext;
@@ -222,6 +237,9 @@ export async function createDialerCall(
   };
   try {
     await client.query("begin");
+    await client.query("set local lock_timeout='250ms'");
+    await client.query("set local statement_timeout='500ms'");
+    await client.query("set local idle_in_transaction_session_timeout='1000ms'");
 
     // The certificate maintenance workflow updates this same durable row to
     // true before checking active calls. FOR SHARE lets ordinary call starts
@@ -243,6 +261,17 @@ export async function createDialerCall(
       return rejectCallStart("maintenance");
     }
 
+    // Legacy compatibility shares admission serialization even before cutover.
+    // Once native admission is reconciled, missing intent must fail closed below.
+    await client.query("select pg_advisory_xact_lock($1,0)", [ADMISSION_LOCK_NAMESPACE]);
+    const legacyCampaign =
+      input.campaignId ??
+      (input.contactId && input.contactId !== "next"
+        ? (await client.query("select campaign_id from contacts where id=$1", [input.contactId])).rows[0]
+            ?.campaign_id
+        : null);
+    if (legacyCampaign)
+      await client.query("select id from campaigns where id=$1 for share", [legacyCampaign]);
     if (input.actorUserId) {
       await lockUserMediaAction(client, input.actorUserId);
       const actor = await client.query<{ is_active: boolean }>("select is_active from users where id = $1", [
@@ -310,6 +339,7 @@ export async function createDialerCall(
     const coordinatedWork = await client.query(
       `select 1 where
         exists(select 1 from agent_desk_sessions where agent_id=$1 and revoked_at is null)
+        or exists(select 1 from call_admission_migration where not reconciliation_required and reconciled_at is not null)
         or exists(select 1 from call_offers where agent_id=$1 and state='pending')
         or exists(select 1 from agent_auto_next_intents where agent_id=$1 and closed_at is null)
         or exists(select 1 from call_transfers where recipient_agent_id=$1 and closed_at is null)

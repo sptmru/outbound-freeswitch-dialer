@@ -661,7 +661,7 @@ add(
   "POST",
   "/agent/manual-dial/start",
   "Start manual call",
-  "Starts an authorized legacy manual outbound call and returns refreshed Agent Desk state. V1 intent returns 409 coordination_unavailable until shared admission is integrated; native work rejects ambiguous legacy requests with legacy_initiator_required.",
+  "Starts an authorized legacy manual outbound call and returns refreshed Agent Desk state. V1 manual admission is implemented behind an internal execution dependency; the current server bootstrap returns 409 coordination_unavailable before mutation. Native activation requires the rollout gates; native work rejects ambiguous legacy requests with legacy_initiator_required.",
   {
     body: ref("StartManualCallRequest"),
     success: ref("AgentDeskResponse"),
@@ -672,7 +672,7 @@ add(
   "POST",
   "/agent/call-next",
   "Call next lead",
-  "Selects and starts the next callable lead in the legacy outbound campaign. V1 manual/automatic intent returns 409 coordination_unavailable until C04/C05; missing intent never authorizes native offer dismissal.",
+  "Selects and starts the next callable lead in the legacy outbound campaign. V1 manual intent has staged atomic admission; the current server bootstrap returns 409 coordination_unavailable because its native execution dependency is not installed. Automatic intent remains unavailable until C05; missing intent never authorizes native offer dismissal.",
   {
     body: ref("StartNextCallRequest"),
     success: ref("AgentDeskResponse"),
@@ -683,7 +683,7 @@ add(
   "POST",
   "/agent/leads/:contactId/call",
   "Call selected lead",
-  "Starts a legacy call to an eligible contact. V1 intent returns 409 coordination_unavailable until shared admission is integrated; native work rejects ambiguous legacy requests with legacy_initiator_required.",
+  "Starts a legacy call to an eligible contact. V1 manual admission is implemented behind an internal execution dependency; the current server bootstrap returns 409 coordination_unavailable before mutation. Native activation requires the rollout gates; native work rejects ambiguous legacy requests with legacy_initiator_required.",
   {
     params: contactParams,
     body: ref("StartLeadCallRequest"),

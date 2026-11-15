@@ -137,3 +137,11 @@ Artifacts are local temporary evidence, not hosted uploads. No independent
 voicemail DB runner was needed: this task changes no voicemail implementation or
 schema; existing voicemail API/unit regressions passed in quality. Browser E2E,
 FS/RTP, provider, load, target/rollback and hosted-CI gates were not run.
+
+C04's replayable manual producer takes the maintenance row before admission even
+for retries. `allowPausedReplay` exposes `admission.startPaused` instead of throwing
+immediately; only stored replay may return while paused. A new producer checks it
+before any write. Other callers keep the default fail-closed maintenance behavior.
+Legacy starts now share global admission serialization and campaign locks, and
+reject missing intent after the native reconciliation marker is set. See
+[inbound-manual-outbound.md](inbound-manual-outbound.md) for the staged boundary.

@@ -38,6 +38,7 @@ import {
   type FreeSwitchTrunkStatus,
   type ImportCsvRequest,
   type ImportCsvResponse,
+  type CoordinationMutationResponse,
   type LeadSummary,
   type ManualCallStatusResponse,
   type ManualDialValidationResponse,
@@ -65,6 +66,10 @@ import {
   startLeadCallSchema,
   startManualCallSchema
 } from "../call-coordination-contracts.js";
+import { ManualOutboundError, type ManualOutboundRequest } from "../manual-outbound.js";
+import { AdmissionError } from "../call-admission.js";
+import { ExecutionError } from "../call-executor.js";
+import { CapacityError } from "../call-capacity.js";
 import { requireUser } from "../auth/routes.js";
 import { setAgentAvailability } from "../agent-availability.js";
 import type { AppConfig } from "../config.js";
@@ -156,6 +161,8 @@ import {
   SupervisorActionError,
   updateSupervisorSessionMode
 } from "./supervisor.js";
+
+type CallStartResponse = AgentDeskResponse | CoordinationMutationResponse | void;
 
 const manualDialValidationSchema = z.object({
   phoneNumber: z.string().min(3),
@@ -413,8 +420,63 @@ export function registerDashboardRoutes(
   app: FastifyInstance,
   config: AppConfig,
   pool: pg.Pool,
-  runtimeSettings = new RuntimeSettingsService(pool, config)
+  runtimeSettings = new RuntimeSettingsService(pool, config),
+  manualOutbound?: { wakeExecutor(operationId: string): Promise<void> }
 ): void {
+  // Explicit integration seam: no request may commit a native reservation without
+  // an installed durable executor scheduler. Production bootstrap remains closed.
+  async function coordinatedStart(
+    request: FastifyRequest,
+    reply: FastifyReply,
+    input: ManualOutboundRequest
+  ) {
+    if (!manualOutbound) return rejectCoordinatedStart(reply);
+    try {
+      const created = await createDialerCall(pool, config, {
+        actorUserId: input.actorUserId,
+        coordination: input
+      });
+      if (!created.ok || !created.admission) throw new Error("Missing native admission result");
+      const result = created.admission;
+      if (!result.replayed) {
+        try {
+          await manualOutbound.wakeExecutor(result.operationId);
+        } catch {
+          request.log.warn(
+            { operationId: result.operationId },
+            "Executor wake failed; durable work retained"
+          );
+        }
+      }
+      return reply.send({
+        status: "started",
+        revision: result.revision,
+        callId: result.callId,
+        operationId: result.operationId
+      });
+    } catch (error) {
+      if (!(
+        error instanceof ManualOutboundError ||
+        error instanceof AdmissionError ||
+        error instanceof ExecutionError ||
+        error instanceof CapacityError
+      ))
+        throw error;
+      const codes: Record<string, string> = {
+        idempotency_conflict: "idempotency_conflict",
+        not_controller: "not_controller",
+        revision_conflict: "revision_conflict",
+        slot_occupied: "slot_occupied",
+        endpoint_unavailable: "endpoint_unavailable",
+        capacity_exceeded: "capacity_exhausted"
+      };
+      return reply.code(409).send({
+        message: error.reason,
+        code: codes[error.reason] ?? "coordination_unavailable",
+        revision: null
+      });
+    }
+  }
   const csvJsonBodyLimit = Math.min(67_108_864, (config.CSV_UPLOAD_MAX_BYTES ?? 5_242_880) * 2 + 65_536);
   const contactRetryPolicy = {
     get maxAttempts() {
@@ -1041,7 +1103,7 @@ export function registerDashboardRoutes(
     }
   );
 
-  app.post("/agent/manual-dial/start", async (request, reply): Promise<AgentDeskResponse | void> => {
+  app.post("/agent/manual-dial/start", async (request, reply): Promise<CallStartResponse> => {
     const user = await requireUser(request, config, pool);
     if (!user) {
       return reply.code(401).send({ message: "Unauthorized" });
@@ -1049,7 +1111,14 @@ export function registerDashboardRoutes(
 
     const publicUser = toPublicUser(user);
     const input = startManualCallSchema.parse(request.body);
-    if (input.intent) return rejectCoordinatedStart(reply);
+    if (input.intent)
+      return coordinatedStart(request, reply, {
+        actorUserId: user.id,
+        actorAuthVersion: user.auth_version,
+        route: "/agent/manual-dial/start",
+        ...input,
+        intent: input.intent
+      });
     const validation = await validateDialableNumber(pool, config, input.phoneNumber, input.campaignId);
     if (!validation.allowed) {
       if (validation.reason.toLowerCase().includes("suppression")) {
@@ -1107,14 +1176,23 @@ export function registerDashboardRoutes(
     return buildAgentDeskResponse(pool, publicUser, campaign.id, contactRetryPolicy);
   });
 
-  app.post("/agent/call-next", async (request, reply): Promise<AgentDeskResponse | void> => {
+  app.post("/agent/call-next", async (request, reply): Promise<CallStartResponse> => {
     const user = await requireUser(request, config, pool);
     if (!user) {
       return reply.code(401).send({ message: "Unauthorized" });
     }
 
     const input = startNextCallSchema.parse(request.body ?? {});
-    if (input.intent) return rejectCoordinatedStart(reply);
+    if (input.intent) {
+      if (input.intent.startReason !== "manual") return rejectCoordinatedStart(reply);
+      return coordinatedStart(request, reply, {
+        actorUserId: user.id,
+        actorAuthVersion: user.auth_version,
+        route: "/agent/call-next",
+        ...input,
+        intent: input.intent
+      });
+    }
     const publicUser = toPublicUser(user);
     const campaign = await getAgentCampaignForDialerAction(pool, input.campaignId, contactRetryPolicy);
     if (!campaign) {
@@ -1150,7 +1228,7 @@ export function registerDashboardRoutes(
     return buildAgentDeskResponse(pool, publicUser, campaign.id, contactRetryPolicy);
   });
 
-  app.post("/agent/leads/:contactId/call", async (request, reply): Promise<AgentDeskResponse | void> => {
+  app.post("/agent/leads/:contactId/call", async (request, reply): Promise<CallStartResponse> => {
     const user = await requireUser(request, config, pool);
     if (!user) {
       return reply.code(401).send({ message: "Unauthorized" });
@@ -1159,7 +1237,15 @@ export function registerDashboardRoutes(
     const publicUser = toPublicUser(user);
     const params = z.object({ contactId: z.guid() }).parse(request.params);
     const input = startLeadCallSchema.parse(request.body ?? {});
-    if (input.intent) return rejectCoordinatedStart(reply);
+    if (input.intent)
+      return coordinatedStart(request, reply, {
+        actorUserId: user.id,
+        actorAuthVersion: user.auth_version,
+        route: "/agent/leads/:contactId/call",
+        contactId: params.contactId,
+        ...input,
+        intent: input.intent
+      });
     const agent = await ensureAgentForUser(pool, config, publicUser);
     const created = await createDialerCall(pool, config, {
       actorUserId: publicUser.id,

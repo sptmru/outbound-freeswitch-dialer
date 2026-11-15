@@ -44,7 +44,7 @@ export function validateCapacityLimits(value: unknown): CapacityLimits {
 }
 
 export type CapacityKind =
-  "inbound" | "outbound_customer" | "browser" | "supervisor" | "transfer" | "forward";
+  "inbound" | "outbound" | "outbound_customer" | "browser" | "supervisor" | "transfer" | "forward";
 type Resource =
   | "queue_waiting"
   | "customer_channel"
@@ -149,9 +149,14 @@ export class CallCapacity {
         add("trunk_call", "default");
         break;
       case "outbound_customer":
+      case "outbound":
         if (call.direction !== "outbound") throw new CapacityError("direction_mismatch");
         add("customer_channel");
         add("trunk_call", "default");
+        if (input.kind === "outbound") {
+          if (!input.agentId) throw new CapacityError("agent_required");
+          add("browser_channel");
+        }
         break;
       case "browser":
         add("browser_channel");

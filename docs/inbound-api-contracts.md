@@ -36,24 +36,29 @@ means the server does not advertise v1 coordination; it is not permission to
 accept, infer a free slot, dismiss offers or enable automatic native work.
 The existing first-party browser continues its legacy outbound contract.
 
-The three existing start paths accept an optional nested `intent`. A valid v1
-intent currently returns **409 `coordination_unavailable`**, before campaign/contact
-claims or ESL. Malformed/partial intent and unrecognized actor/agent fields return
-400 instead of being stripped into an unintended legacy call.
+The three existing start paths accept an optional nested `intent`. C04 implements
+manual intent behind an internal execution dependency; the default `server.ts`
+still returns **409 `coordination_unavailable`** before claims or ESL because that
+dependency is not installed. When explicitly integrated, manual intent returns
+`{status: "started", revision, callId, operationId}` for durable admission. It is
+not conversation proof. Automatic intent stays unavailable until C05.
+Malformed/partial intent and unrecognized actor/agent fields return 400 instead
+of being stripped into an unintended legacy call.
 
-Missing `intent` remains a legacy outbound request, with no implicit manual
-privilege, stable idempotency or permission to dismiss an offer. Under the existing
-agent-row lock, legacy creation refuses unrevoked Desk sessions, pending offers,
-open automatic intents/transfers, native participation or native reservations (including
-pre-SIP outbound reservations with an advanced slot generation). It rolls
-back with **409 `legacy_initiator_required`**, leaving attempts, offers, transfers,
-slots and calls unchanged. Otherwise existing outbound behavior is preserved.
+Missing `intent` remains a legacy request, with no implicit manual privilege,
+stable idempotency or permission to dismiss an offer. C04 serializes legacy starts
+under the common global admission lock and campaign/user/agent locks. Creation
+refuses unrevoked Desk sessions, pending offers, open automatic intents/transfers,
+native participation or native reservations. Once the native reconciliation
+marker is set, every missing-intent start fails closed, even without an offer or
+controller. **409 `legacy_initiator_required`** preserves attempts, offers,
+transfers, slots and calls. Existing feature-off outbound remains available while
+reconciliation is required and no coordinated work exists.
 
-This conservative guard is not the common admission gate or proof against
-concurrent native writers. Inbound/native writers must stay disabled until
-C01/C04–C07 migrate all competing paths to one lock order and authoritative
-post-lock checks. Do not remove the guard or silently ignore `intent` to make
-an upgraded browser appear to work with a legacy executor.
+The [C04 protocol and evidence](inbound-manual-outbound.md) include the C03 executor
+bridge and full native token revalidation. Native writer activation still requires
+all competing paths, session/endpoint lifecycle, protected pools and driver,
+recovery and the I01–I05 gates. Do not remove the guard or silently drop `intent`.
 
 ## Requests, revisions and endpoint binding
 
