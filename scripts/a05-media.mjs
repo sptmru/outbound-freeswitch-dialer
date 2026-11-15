@@ -200,12 +200,12 @@ export async function endpoint({ username, password, source, frequency }) {
     received,
     invites,
     errors,
-    async register() {
+    async register(expires = 60) {
       const id = randomUUID();
       const uri = "sip:a04.invalid";
       const from = `<sip:${username}@a04.invalid>;tag=a05`;
       const make = (n, extra = []) =>
-        request("REGISTER", uri, from, `<${uri}>`, id, n, ["Expires: 60", ...extra]);
+        request("REGISTER", uri, from, `<${uri}>`, id, n, [`Expires: ${expires}`, ...extra]);
       const challenge = await roundtrip(make(1), id, "1 REGISTER");
       assert.match(challenge.first, /401/);
       const auth = digest(challenge.headers["www-authenticate"], username, password, uri);

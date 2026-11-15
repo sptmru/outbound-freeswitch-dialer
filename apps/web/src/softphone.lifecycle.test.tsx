@@ -4,6 +4,9 @@ import type { PublicUser } from "./types";
 
 const mocks = vi.hoisted(() => ({
   fetchProvisioning: vi.fn(),
+  createDesk: vi.fn(),
+  updateDesk: vi.fn(),
+  leaveDesk: vi.fn(),
   register: vi.fn(),
   registerers: [] as Array<{ stateListener?: (state: string) => void }>,
   start: vi.fn(),
@@ -15,6 +18,9 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("./api", () => ({
   fetchSoftphoneProvisioning: mocks.fetchProvisioning,
+  createDeskSession: mocks.createDesk,
+  updateDeskSession: mocks.updateDesk,
+  leaveDeskSession: mocks.leaveDesk,
   submitBrowserMediaTelemetry: mocks.submitTelemetry
 }));
 
@@ -95,6 +101,57 @@ describe("softphone registration lifecycle", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  it("D01 native Desk uses generation credentials, verifies after REGISTER and leaves its own binding", async () => {
+    setGetUserMedia(async () => mediaStream());
+    const session = {
+      id: "10000000-0000-4000-8000-000000000001",
+      revision: "1",
+      bindingGeneration: "2",
+      campaignId: null,
+      endpointVerified: false,
+      ready: false,
+      expiresAt: "2099-11-15T12:00:00Z"
+    };
+    mocks.createDesk.mockResolvedValue({
+      revision: "1",
+      session,
+      sip: {
+        username: "desk_fixture",
+        password: "fixture-only",
+        domain: "fixture.invalid",
+        websocketUrl: "wss://fixture.invalid",
+        iceServers: []
+      }
+    });
+    mocks.updateDesk.mockResolvedValue({
+      revision: "2",
+      session: { ...session, revision: "2", endpointVerified: true, ready: true }
+    });
+    mocks.leaveDesk.mockResolvedValue({ revision: "3", session: null });
+    const { result, unmount } = renderHook(() =>
+      useSoftphoneRegistration(user, { campaignId: null, expectedRevision: null })
+    );
+    await waitFor(() => expect(mocks.register).toHaveBeenCalled());
+    expect(mocks.fetchProvisioning).not.toHaveBeenCalled();
+    expect(mocks.userAgents[0].options).toEqual(
+      expect.objectContaining({ contactName: "desk_fixture", authorizationUsername: "desk_fixture" })
+    );
+    expect(result.current.deskSession?.ready).toBe(false);
+    await act(async () => {
+      mocks.registerers[0].stateListener?.("Registered");
+    });
+    await waitFor(() => expect(result.current.deskSession?.ready).toBe(true));
+    expect(mocks.updateDesk).toHaveBeenCalledWith(
+      expect.objectContaining({ deskSessionId: session.id, bindingGeneration: "2", ready: true })
+    );
+    unmount();
+    await waitFor(() =>
+      expect(mocks.leaveDesk).toHaveBeenCalledWith(
+        expect.objectContaining({ deskSessionId: session.id, expectedRevision: "2", bindingGeneration: "2" })
+      )
+    );
   });
 
   it("uses the saved microphone and processing profile for registration capture", async () => {

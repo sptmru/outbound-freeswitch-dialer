@@ -438,7 +438,16 @@ export function App() {
       unsubscribe();
     };
   }, [activeView, selectedCampaignId, user?.id, user?.role]);
-  const softphoneRuntime = useSoftphoneRegistration(user && activeView === "desk" ? user : null);
+  // Native lifecycle is selected only by an authoritative coordination response.
+  // I05 owns activating that response and the native call executors together.
+  const phoneUser = user && activeView === "desk" ? user : null;
+  const phoneOptions = desk?.coordination
+    ? {
+        campaignId: selectedCampaignId ?? desk.campaign?.id ?? null,
+        expectedRevision: desk.coordination.session?.revision ?? null
+      }
+    : undefined;
+  const softphoneRuntime = useSoftphoneRegistration(phoneUser, phoneOptions);
   const supervisorSoftphone = useSupervisorSoftphone(
     user?.role === "admin" && activeView === "live" ? user : null
   );

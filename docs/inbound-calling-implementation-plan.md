@@ -714,6 +714,10 @@ activate a provider DID.
 
 ### 9.1. Controlling Desk Session and SIP Endpoint
 
+D01 implementation update: [controlling Desk session lifecycle](inbound-desk-sessions.md)
+records the implemented HTTP/provisioning/verification protocol, local evidence
+and open real-browser WSS/WebRTC disconnect gate. Native enablement remains I05.
+
 A04's isolated [Desk/SIP binding prototype and selected protocol](inbound-desk-binding-prototype.md)
 uses per-generation SIP identities, authoritative contact verification and fenced
 controller updates. It proves local FS + DB endpoint selection/takeover with UDP SIP

@@ -55,7 +55,10 @@ export function AgentDesk({
   const availabilityStatus = useEffectiveAvailability(desk.availability);
   const autoAdvancePausedRef = useRef(availabilityStatus === "paused");
   const canStartCalls =
-    softphone.registered && availabilityStatus === "available" && !softphone.audioSetup.checking;
+    softphone.registered &&
+    (softphone.deskSession === undefined || softphone.deskSession?.ready === true) &&
+    availabilityStatus === "available" &&
+    !softphone.audioSetup.checking;
 
   useEffect(() => {
     autoAdvancePausedRef.current = availabilityStatus === "paused";

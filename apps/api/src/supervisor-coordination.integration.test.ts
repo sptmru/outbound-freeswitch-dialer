@@ -639,7 +639,11 @@ test(
       await f.pool.query(
         `drop table supervisor_leg_evidence;drop function guard_supervisor_leg_evidence();alter table call_supervisor_sessions drop column coordination_protocol,drop column generation,drop column control_root_id;delete from schema_migrations where filename='032_supervisor_coordination.sql'`
       );
-      const history = (await f.pool.query("select * from schema_migrations order by filename")).rows;
+      const history = (
+        await f.pool.query(
+          "select * from schema_migrations where filename<'032_supervisor_coordination.sql' order by filename"
+        )
+      ).rows;
       const { runMigrations } = await import("./db.js");
       await runMigrations(f.pool);
       await runMigrations(f.pool);

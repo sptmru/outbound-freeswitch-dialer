@@ -389,7 +389,7 @@ describe("App Agent Desk empty states", () => {
 
     expect(await screen.findByRole("button", { name: "Campaigns" })).toBeDisabled();
     await waitFor(() => expect(window.location.pathname).toBe("/"));
-    expect(apiMocks.useSoftphoneRegistration).toHaveBeenLastCalledWith(admin);
+    expect(apiMocks.useSoftphoneRegistration).toHaveBeenLastCalledWith(admin, undefined);
   });
 
   it("rejects browser history navigation away from an active admin call", async () => {
@@ -407,7 +407,7 @@ describe("App Agent Desk empty states", () => {
 
     await waitFor(() => expect(window.location.pathname).toBe("/"));
     expect(screen.queryByRole("heading", { level: 1, name: "Settings" })).not.toBeInTheDocument();
-    expect(apiMocks.useSoftphoneRegistration).toHaveBeenLastCalledWith(admin);
+    expect(apiMocks.useSoftphoneRegistration).toHaveBeenLastCalledWith(admin, undefined);
   });
 
   it("keeps the Analytics campaign filter separate from the Agent Desk campaign", async () => {
@@ -1662,7 +1662,7 @@ describe("App Agent Desk empty states", () => {
     const campaigns = await screen.findByRole("button", { name: "Campaigns" });
     fireEvent.click(campaigns);
 
-    await waitFor(() => expect(apiMocks.useSoftphoneRegistration).toHaveBeenLastCalledWith(null));
+    await waitFor(() => expect(apiMocks.useSoftphoneRegistration).toHaveBeenLastCalledWith(null, undefined));
     expect(screen.queryByText("Phone offline")).not.toBeInTheDocument();
     expect(screen.queryByText("Mic ready")).not.toBeInTheDocument();
     expect(screen.queryByText(/Phone connecting/)).not.toBeInTheDocument();
@@ -1681,7 +1681,7 @@ describe("App Agent Desk empty states", () => {
     render(<App />);
 
     expect(await screen.findByRole("heading", { level: 1, name: heading })).toBeInTheDocument();
-    await waitFor(() => expect(apiMocks.useSoftphoneRegistration).toHaveBeenLastCalledWith(null));
+    await waitFor(() => expect(apiMocks.useSoftphoneRegistration).toHaveBeenLastCalledWith(null, undefined));
     expect(screen.queryByText(/Phone connecting/)).not.toBeInTheDocument();
     expect(screen.getByText("● Ready")).toBeInTheDocument();
   });

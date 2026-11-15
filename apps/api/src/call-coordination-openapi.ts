@@ -12,27 +12,6 @@ type ContractOperation = {
 export const plannedCallCoordinationOperations: ContractOperation[] = [
   {
     method: "post",
-    path: "/agent/desk-sessions",
-    request: "CreateDeskSessionRequest",
-    response: "DeskSessionResponse",
-    role: "authenticated"
-  },
-  {
-    method: "patch",
-    path: "/agent/desk-sessions/{sessionId}",
-    request: "UpdateDeskSessionRequest",
-    response: "DeskSessionResponse",
-    role: "authenticated"
-  },
-  {
-    method: "delete",
-    path: "/agent/desk-sessions/{sessionId}",
-    request: "DeskMutationRequest",
-    response: "DeskSessionResponse",
-    role: "authenticated"
-  },
-  {
-    method: "post",
     path: "/agent/call-offers/{offerId}/accept",
     request: "DeskMutationRequest",
     response: "AcceptCallOfferResponse",

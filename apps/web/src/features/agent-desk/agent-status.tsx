@@ -22,7 +22,7 @@ export function callStartBlockedMessage(desk: AgentDeskResponse, softphone: Soft
   if (softphone.audioSetup.checking) {
     return "Wait for the audio and network check to finish";
   }
-  if (!softphone.registered) {
+  if (!softphone.registered || (softphone.deskSession !== undefined && !softphone.deskSession?.ready)) {
     return "The browser phone is not ready yet";
   }
   if (desk.availability.status === "paused") {
@@ -291,6 +291,12 @@ export function AgentNoCampaignStatus({
 }
 
 function getPhoneStatusCopy(softphone: SoftphoneRuntime): { detail: string; label: string } {
+  if (softphone.deskSession !== undefined && !softphone.deskSession?.ready) {
+    return {
+      label: "Phone not ready",
+      detail: "Open Agent Desk in the controlling browser and reconnect the phone."
+    };
+  }
   if (softphone.registered) {
     return { label: "Phone ready", detail: "Calls will connect in this browser." };
   }

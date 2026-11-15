@@ -1,3 +1,5 @@
+import { DeskSessionController, type DeskControl } from "./desk-session";
+import type { DeskSessionSnapshot } from "./types";
 import { useEffect, useRef, useState } from "react";
 import { Invitation, Registerer, RegistererState, SessionState, UserAgent } from "sip.js";
 import { fetchSoftphoneProvisioning, submitBrowserMediaTelemetry } from "./api";
@@ -55,6 +57,7 @@ export interface AudioSetupRuntime {
 }
 
 export interface SoftphoneRuntime extends SoftphoneCoreRuntime {
+  deskSession?: DeskSessionSnapshot | null;
   audioSetup: AudioSetupRuntime;
   refreshAudioDevices: () => Promise<void>;
   runAudioCheck: () => Promise<void>;
@@ -171,7 +174,17 @@ async function stopInvitation(invitation: Invitation): Promise<void> {
   });
 }
 
-export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRuntime {
+export function useSoftphoneRegistration(
+  user: PublicUser | null,
+  deskControl?: DeskControl
+): SoftphoneRuntime {
+  const [deskSession, setDeskSession] = useState<DeskSessionSnapshot | null>(null);
+  const deskControllerRef = useRef<DeskSessionController | null>(null);
+  const deskControlRef = useRef(deskControl);
+  deskControlRef.current = deskControl;
+  useEffect(() => {
+    deskControllerRef.current?.selectCampaign(deskControl?.campaignId ?? null);
+  }, [deskControl?.campaignId]);
   const invitationRef = useRef<Invitation | null>(null);
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
   const browserMediaTelemetryRef = useRef<ActiveBrowserMediaTelemetry | null>(null);
@@ -375,6 +388,13 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
       return;
     }
 
+    const deskController = deskControlRef.current
+      ? new DeskSessionController(deskControlRef.current, setDeskSession)
+      : null;
+    deskControllerRef.current = deskController;
+    const deskHeartbeat = deskController
+      ? window.setInterval(() => void deskController.heartbeat().catch(() => {}), 5000)
+      : null;
     let cancelled = false;
     let mediaStream: MediaStream | null = null;
     let microphoneAllowed = false;
@@ -476,7 +496,9 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
           ...getActions()
         });
 
-        const provisioning = await fetchSoftphoneProvisioning();
+        const provisioning = deskController
+          ? await deskController.start()
+          : await fetchSoftphoneProvisioning();
         if (!isCurrent()) {
           return;
         }
@@ -487,6 +509,7 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
         }
 
         userAgent = new UserAgent({
+          ...(deskController ? { contactName: provisioning.sipUsername } : {}),
           authorizationPassword: provisioning.sipPassword,
           authorizationUsername: provisioning.sipUsername,
           displayName: provisioning.displayName,
@@ -576,7 +599,9 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
             return;
           }
 
+          deskController?.setRegistered(state === RegistererState.Registered);
           if (state === RegistererState.Registered) {
+            void deskController?.heartbeat().catch(() => {});
             clearRegistrationTimer();
             setRuntime((current) => ({
               ...current,
@@ -697,6 +722,9 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
 
     return () => {
       cancelled = true;
+      if (deskHeartbeat !== null) window.clearInterval(deskHeartbeat);
+      void deskController?.close();
+      if (deskControllerRef.current === deskController) deskControllerRef.current = null;
       if (registrationGenerationRef.current === generation) {
         registrationGenerationRef.current += 1;
       }
@@ -708,10 +736,11 @@ export function useSoftphoneRegistration(user: PublicUser | null): SoftphoneRunt
       clearRemoteAudio();
       void stopCurrentRegistration();
     };
-  }, [audioSetup.processingProfile, audioSetup.selectedInputId, user?.id]);
+  }, [audioSetup.processingProfile, audioSetup.selectedInputId, user?.id, Boolean(deskControl)]);
 
   return {
     ...runtime,
+    ...(deskControl ? { deskSession } : {}),
     audioSetup,
     refreshAudioDevices,
     runAudioCheck,

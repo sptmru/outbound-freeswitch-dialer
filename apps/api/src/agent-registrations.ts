@@ -1,4 +1,5 @@
 import type pg from "pg";
+import { DeskSessions } from "./desk-sessions.js";
 import type { AppConfig } from "./config.js";
 import { sendFreeSwitchApiCommand } from "./esl.js";
 import { lockEligibilityAgents, withEligibilityTransaction } from "./eligibility.js";
@@ -30,6 +31,7 @@ export function startAgentRegistrationReconciler(
     running = true;
     try {
       const changedAgents = await reconcileAgentRegistrations(config, pool, sendFreeSwitchApiCommand, logger);
+      await new DeskSessions(pool, config).reconcile();
       if (changedAgents > 0) {
         logger.info({ changedAgents }, "FreeSWITCH agent registration state reconciled");
       }
@@ -64,7 +66,7 @@ export async function reconcileAgentRegistrations(
     );
     const supervisorUsernames = new Set(supervisorEndpoints.rows.map((row) => row.sip_username));
     const registeredAgentUsernames = registeredUsernames.filter(
-      (sipUsername) => !supervisorUsernames.has(sipUsername)
+      (sipUsername) => !supervisorUsernames.has(sipUsername) && !/^desk_[a-f0-9]{32}$/.test(sipUsername)
     );
     const databaseRegistrations = await pool.query<{ sip_username: string }>(
       "select sip_username from agents where registered = true order by sip_username"

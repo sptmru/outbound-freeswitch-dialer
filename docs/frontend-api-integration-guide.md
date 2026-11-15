@@ -910,3 +910,12 @@ Existing start routes return 409 `coordination_unavailable` for v1 `intent` unti
 shared admission is integrated. Missing intent remains legacy-only and cannot
 silently dismiss pending native work; 409 `legacy_initiator_required` requires a
 Desk refresh and compatible server. Never retry automatic work as manual.
+
+### Controlling Desk lifecycle (D01)
+
+The authenticated Desk-session POST/PATCH/DELETE routes are implemented; see
+[the lifecycle contract and evidence boundaries](inbound-desk-sessions.md).
+`DeskSessionResponse.sip` is create-only owning-controller provisioning and must
+stay in memory. An agent-level registration indicator cannot authorize a native
+start. The browser opts into this lifecycle only when the API supplies
+`AgentDeskResponse.coordination`; the normal bootstrap remains I05 work.

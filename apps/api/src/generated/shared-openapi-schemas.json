@@ -169,6 +169,31 @@
     "$id": "DeskSessionResponse",
     "type": "object",
     "properties": {
+      "sip": {
+        "type": "object",
+        "properties": {
+          "username": { "type": "string" },
+          "password": { "type": "string" },
+          "domain": { "type": "string" },
+          "websocketUrl": { "type": "string" },
+          "iceServers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "urls": { "type": "array", "items": { "type": "string" } },
+                "username": { "type": "string" },
+                "credential": { "type": "string" }
+              },
+              "required": ["urls"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["username", "password", "domain", "websocketUrl", "iceServers"],
+        "additionalProperties": false,
+        "description": "D01 create only; authenticated controller credentials, never persisted in mutation results."
+      },
       "revision": { "$ref": "DeskRevision#" },
       "session": { "anyOf": [{ "$ref": "DeskSessionSnapshot#" }, { "type": "null" }] }
     },

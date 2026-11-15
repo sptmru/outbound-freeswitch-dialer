@@ -1,4 +1,10 @@
 import type {
+  CreateDeskSessionRequest,
+  UpdateDeskSessionRequest,
+  DeskMutationRequest,
+  DeskSessionResponse
+} from "./types";
+import type {
   AdminAnalyticsResponse,
   AdminOverviewResponse,
   AdminAuditResponse,
@@ -667,5 +673,25 @@ export async function importCampaignCsvFile(campaignId: string, file: File): Pro
   return apiFetch<ImportCsvResponse>(`/admin/campaigns/${campaignId}/import-csv-file`, {
     method: "POST",
     body: formData
+  });
+}
+
+export function createDeskSession(input: CreateDeskSessionRequest): Promise<DeskSessionResponse> {
+  return apiFetch<DeskSessionResponse>("/agent/desk-sessions", {
+    method: "POST",
+    body: JSON.stringify(input)
+  });
+}
+export function updateDeskSession(input: UpdateDeskSessionRequest): Promise<DeskSessionResponse> {
+  return apiFetch<DeskSessionResponse>(`/agent/desk-sessions/${encodeURIComponent(input.deskSessionId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(input)
+  });
+}
+export function leaveDeskSession(input: DeskMutationRequest): Promise<DeskSessionResponse> {
+  return apiFetch<DeskSessionResponse>(`/agent/desk-sessions/${encodeURIComponent(input.deskSessionId)}`, {
+    method: "DELETE",
+    body: JSON.stringify(input),
+    keepalive: true
   });
 }

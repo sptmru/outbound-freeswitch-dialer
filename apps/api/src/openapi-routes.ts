@@ -236,6 +236,24 @@ add(
     errors: [...agentErrors, 409]
   }
 );
+for (const [method, requestType] of [
+  ["POST", "CreateDeskSessionRequest"],
+  ["PATCH", "UpdateDeskSessionRequest"],
+  ["DELETE", "DeskMutationRequest"]
+]) {
+  add(
+    method!,
+    method === "POST" ? "/agent/desk-sessions" : "/agent/desk-sessions/:sessionId",
+    `${method} controlling Desk session`,
+    "Authenticated, revision-fenced Desk lifecycle. Positive readiness requires a server-verified SIP contact; takeover requires a reconciled free slot.",
+    {
+      ...(method === "POST" ? {} : { params: params("sessionId", "Desk session identifier") }),
+      body: ref(requestType!),
+      success: ref("DeskSessionResponse"),
+      errors: [...agentErrors, 409]
+    }
+  );
+}
 add(
   "GET",
   "/agent/softphone/provisioning",

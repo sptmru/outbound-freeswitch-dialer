@@ -190,8 +190,6 @@ No unimplemented operation is added to the main live `paths`. It specifies:
 
 | Operations                                                                          | Request / response                                                       |
 | ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
-| POST `/agent/desk-sessions`                                                         | CreateDeskSessionRequest / DeskSessionResponse                           |
-| PATCH, DELETE `/agent/desk-sessions/{sessionId}`                                    | UpdateDeskSessionRequest or DeskMutationRequest / DeskSessionResponse    |
 | POST `/agent/call-offers/{offerId}/accept`                                          | DeskMutationRequest / AcceptCallOfferResponse                            |
 | POST `/agent/call-offers/{offerId}/ignore`                                          | DeskMutationRequest / CoordinationMutationResponse                       |
 | GET `/agent/calls/{callId}/transfer-targets`                                        | no body / TransferTargetsResponse                                        |
@@ -247,3 +245,13 @@ hosted CI, product enablement or production acceptance was performed. Their
 later gates remain mandatory. The separate voicemail DB runner was not needed
 for this contract-only change and was not executed. No commit, push, PR or
 deployment was performed.
+
+## D01 implementation update
+
+POST `/agent/desk-sessions` and PATCH/DELETE `/agent/desk-sessions/{sessionId}`
+are now mounted authenticated handlers and appear in live OpenAPI paths, rather
+than the planned catalog. Create can return optional owning-controller `sip`
+credentials, WSS URL and ICE configuration. Mutation results persist no credentials.
+See [D01 lifecycle, replay, verification and activation boundaries](inbound-desk-sessions.md).
+The normal Desk response/native executor bootstrap remains staged under I05;
+this update does not enable inbound calling.

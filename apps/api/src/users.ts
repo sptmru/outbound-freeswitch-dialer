@@ -335,6 +335,17 @@ export async function migrateAgentSipSecretEncryption(pool: pg.Pool, config: App
       );
       migrated += 1;
     }
+    const deskSessions = await client.query<{ id: string; sip_secret_encrypted: string }>(
+      "select id,sip_secret_encrypted from agent_desk_sessions where sip_secret_encrypted like 'v1.%' for update"
+    );
+    for (const desk of deskSessions.rows) {
+      const plaintext = decryptSecret(config, desk.sip_secret_encrypted);
+      await client.query("update agent_desk_sessions set sip_secret_encrypted=$2 where id=$1", [
+        desk.id,
+        encryptSecret(config, plaintext)
+      ]);
+      migrated++;
+    }
     await client.query("commit");
     return migrated;
   } catch (error) {

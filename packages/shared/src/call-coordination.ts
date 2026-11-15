@@ -86,6 +86,14 @@ export interface DeskSessionSnapshot {
   expiresAt: string;
 }
 export interface DeskSessionResponse {
+  /** D01 create only; authenticated controller credentials, never persisted in mutation results. */
+  sip?: {
+    username: string;
+    password: string;
+    domain: string;
+    websocketUrl: string;
+    iceServers: Array<{ urls: string[]; username?: string; credential?: string }>;
+  };
   revision: DeskRevision;
   session: DeskSessionSnapshot | null;
 }

@@ -153,10 +153,11 @@ export class CallAdmission {
         when not u.is_active then 'session_revoked'
         when c.status <> 'active' then 'campaign_unavailable'
         when a.availability_status='paused' then 'paused'
-        when d.id is null or d.revoked_at is not null or d.expires_at <= clock_timestamp() then 'not_controller'
+        when d.id is null or d.revoked_at is not null or d.expires_at <= clock_timestamp()
+          or (d.actor_auth_version is not null and d.actor_auth_version <> u.auth_version) then 'not_controller'
         when d.campaign_id is distinct from c.id or d.revision <> $5::bigint then 'revision_conflict'
         when d.binding_generation <> $6::bigint or not d.ready or d.verified_generation is distinct from d.binding_generation
-          or d.verified_endpoint is null then 'endpoint_unavailable'
+          or d.verified_endpoint is null or d.verified_at < clock_timestamp()-interval '15 seconds' then 'endpoint_unavailable'
         when s.agent_id is null or s.reconciliation_required then 'coordination_unavailable'
         when s.state <> 'free' then 'slot_occupied'
         when exists(select 1 from call_supervisor_sessions where actor_user_id=u.id and state in ('connecting','active')) then 'supervisor_session'
