@@ -30,7 +30,7 @@ npm --workspace @outbound-dialer/shared run build
 node node_modules/typescript/bin/tsc -p apps/api/tsconfig.test.json
 "$NODE_BIN" "$ROOT_DIR/scripts/c06-executor-probe.mjs" render "$RUN_DIR"
 sha256sum "$ROOT_DIR"/scripts/c06-*.mjs "$ROOT_DIR"/scripts/a0{4,5}-*.mjs "$0" \
-  "$ROOT_DIR"/apps/api/src/call-cleanup*.ts "$ROOT_DIR"/apps/api/src/agent-availability*.ts "$ROOT_DIR"/apps/api/src/call-finalization*.ts "$ROOT_DIR"/apps/api/src/call-outcomes.ts "$ROOT_DIR"/tests/fixtures/inbound/cleanup.* "$ROOT_DIR"/apps/api/src/call-executor*.ts "$ROOT_DIR"/apps/api/src/call-command-transport*.ts \
+  "$ROOT_DIR"/apps/api/src/native-call-control*.ts "$ROOT_DIR"/apps/api/src/dashboard/routes.ts "$ROOT_DIR"/packages/shared/src/*.ts "$ROOT_DIR"/apps/api/src/esl-events.ts "$ROOT_DIR"/apps/api/src/call-cleanup*.ts "$ROOT_DIR"/apps/api/src/agent-availability*.ts "$ROOT_DIR"/apps/api/src/call-finalization*.ts "$ROOT_DIR"/apps/api/src/call-outcomes.ts "$ROOT_DIR"/tests/fixtures/inbound/cleanup* "$ROOT_DIR"/apps/api/src/call-executor*.ts "$ROOT_DIR"/apps/api/src/call-command-transport*.ts \
   "$ROOT_DIR"/apps/api/src/call-admission.ts "$ROOT_DIR"/apps/api/db/migrations/*.sql \
   "$ROOT_DIR/tests/fixtures/inbound/executor-worker.mjs" \
   "$ROOT_DIR/tests/fixtures/inbound/sip.mjs" \

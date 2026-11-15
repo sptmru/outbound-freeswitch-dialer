@@ -26,6 +26,14 @@ fails. Replay is not send authority. Under global admission, at most 48 normal a
 critical; normal work cannot borrow that partition. `execution_backlog_full`
 rolls back unstarted admission, rather than dropping uncertainty to create room.
 
+C06 adds optional immutable `request.dependsOn` to its control chains. C03 defers
+an unstarted child until its same-call predecessor succeeds, independently of the
+caller's chosen run order. A failed/canceled predecessor never authorizes agent
+release. C06 cancels never-sent children under admission. Driver send/reconcile
+callbacks receive the executor's leased PostgreSQL client for verified evidence
+persistence without acquiring a second connection. The transport destroys its
+command socket before calling the action verifier.
+
 Migration `029_call_execution.sql` adds an immutable integer key per call and an
 immutable sender attempt per operation. Namespace `72203` holds per-call session
 locks; `72204` holds deployment execution seats. Every operation/reconciliation

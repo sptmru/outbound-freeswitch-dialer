@@ -15,6 +15,8 @@ import {
 } from "./call-finalization.js";
 import { sendFreeSwitchApiCommand } from "./esl.js";
 import { isCoordinatedCall, persistCoordinatedCallEvent } from "./call-cleanup.js";
+import { persistNativeCommandJob } from "./native-call-control.js";
+import { AdmissionDiscoveryChanged } from "./call-admission.js";
 import {
   configureFreeSwitchEventQueueMetrics,
   recordFreeSwitchEslReconnect,
@@ -313,6 +315,9 @@ export function startFreeSwitchEventListener(config: AppConfig, pool: pg.Pool, l
 }
 
 function isTransientPersistenceError(error: unknown): boolean {
+  // Reacquire the complete graph after a concurrent participant/owner change.
+  // Dropping this exact event would strand concrete cleanup evidence.
+  if (error instanceof AdmissionDiscoveryChanged) return true;
   const code =
     typeof error === "object" && error !== null && "code" in error
       ? String((error as { code?: unknown }).code ?? "")
@@ -334,6 +339,15 @@ async function persistFreeSwitchEvent(
   logger?: Pick<Logger, "info">
 ): Promise<void> {
   const eventName = frame.headers["event-name"];
+  if (
+    eventName === "BACKGROUND_JOB" &&
+    (await persistNativeCommandJob(pool, {
+      jobUuid: frame.headers["job-uuid"] ?? "",
+      body: frame.body,
+      headers: frame.headers
+    }))
+  )
+    return;
   const concreteCallId =
     frame.headers["outbound-dialer-call-id"] ??
     frame.headers["variable_outbound_dialer_call_id"] ??

@@ -181,7 +181,10 @@ export const coordinationErrorCodes = [
   "offer_expired",
   "not_owner",
   "endpoint_unavailable",
-  "capacity_exhausted"
+  "capacity_exhausted",
+  "call_outcome_uncertain",
+  "transfer_in_progress",
+  "voicemail_unavailable"
 ] as const;
 export type CoordinationErrorCode = (typeof coordinationErrorCodes)[number];
 export interface CoordinationErrorResponse {

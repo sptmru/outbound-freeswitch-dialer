@@ -23,6 +23,7 @@ const commands = [
       "apps/api/dist-test/manual-outbound.integration.test.js",
       "apps/api/dist-test/auto-next.integration.test.js",
       "apps/api/dist-test/call-cleanup.integration.test.js",
+      "apps/api/dist-test/native-call-control.integration.test.js",
       "apps/api/dist-test/inbound-schema.integration.test.js",
       "apps/api/dist-test/desk-slots-schema.integration.test.js",
       "apps/api/dist-test/call-participation.integration.test.js",

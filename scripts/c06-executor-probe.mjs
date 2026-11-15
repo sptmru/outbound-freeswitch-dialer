@@ -10,6 +10,8 @@ import { endpoint, until, assertTone } from "./a05-media.mjs";
 import { uniqueEndpoint } from "./a04-binding.mjs";
 import { relay } from "./a05-executor.mjs";
 import { cleanupFixture } from "../tests/fixtures/inbound/cleanup.mjs";
+import { cleanupHttp, cleanupRecording } from "../tests/fixtures/inbound/cleanup-http.mjs";
+import { nativeCallControlExecutor } from "../apps/api/dist-test/native-call-control.js";
 import { CallExecutor } from "../apps/api/dist-test/call-executor.js";
 import { createCommandDriver } from "../apps/api/dist-test/call-command-transport.js";
 import { reconcileCoordinatedCallCleanup } from "../apps/api/dist-test/call-cleanup.js";
@@ -56,7 +58,7 @@ const report = {
   scenarios: [],
   commands: [],
   media:
-    "isolated UDP SIP/PCMU RTP; product C03/C06 schema; test-only admission and command adapters; no browser/provider"
+    "isolated UDP SIP/PCMU RTP; product HTTP routes, C03/C06 native controls and event adapter; test-only admission/verified Desk; no browser/provider"
 };
 const save = () => writeFile(join(directory, "report.json"), JSON.stringify(report, null, 2));
 let chain = Promise.resolve();
@@ -90,7 +92,7 @@ async function kill(s, uuid) {
 async function start(s, uuid, destination) {
   assert.match(
     await command(
-      `originate {origination_uuid=${uuid},originate_timeout=3,hangup_after_bridge=false,park_after_bridge=true}${destination} &park()`
+      `originate {origination_uuid=${uuid},outbound_dialer_call_id=${s.callId},originate_timeout=3,hangup_after_bridge=false,park_after_bridge=true}${destination} &park()`
     ),
     /^\+OK/
   );
@@ -312,6 +314,218 @@ try {
     await kill(next, next.customerUuid);
     await f.cleanup();
     f = null;
+    assert.match(await command("show channels count"), /^0 total/);
+  }
+  const longWav = Buffer.alloc(44 + 8000 * 2 * 12);
+  wav.copy(longWav, 0, 0, 44);
+  longWav.writeUInt32LE(longWav.length - 8, 4);
+  longWav.writeUInt32LE(longWav.length - 44, 40);
+  for (let n = 0; n < 96000; n++)
+    longWav.writeInt16LE(Math.round(6000 * Math.sin((2 * Math.PI * 660 * n) / 8000)), 44 + 2 * n);
+  await writeFile(join(directory, "voicemail-long.wav"), longWav);
+  // Complete real control path: authenticated HTTP -> persisted C03 chain ->
+  // one physical send per fixed job -> genuine ESL frames -> fenced cleanup.
+  for (const scenario of ["end", "vm-completed-first", "vm-hangup-first", "vm-lost-response"]) {
+    f = await cleanupFixture(config);
+    await admin.query(
+      `create role c06_executor login connection limit 8;grant usage on schema ${f.schema} to c06_executor;grant all on all tables in schema ${f.schema} to c06_executor;grant usage,select on all sequences in schema ${f.schema} to c06_executor`
+    );
+    executor = await CallExecutor.create(
+      { ...config, user: "c06_executor", options: `-c search_path=${f.schema}` },
+      0
+    );
+    const s = await f.seed();
+    await cleanupRecording(
+      f,
+      scenario === "vm-lost-response" ? "/a02/voicemail-long.wav" : "/a02/voicemail.wav"
+    );
+    let cursor = observer.eventFrames.length,
+      pumping = false,
+      pumpFailure;
+    const held = [];
+    let holdCustomerEnd = scenario !== "end";
+    const pump = async () => {
+      if (pumping || pumpFailure) return;
+      pumping = true;
+      try {
+        while (cursor < observer.eventFrames.length) {
+          const frame = observer.eventFrames[cursor++],
+            h = frame.headers;
+          if (
+            holdCustomerEnd &&
+            ((h["unique-id"] === s.customerUuid &&
+              ["CHANNEL_HANGUP_COMPLETE", "CHANNEL_DESTROY"].includes(h["event-name"])) ||
+              (h["outbound-dialer-call-id"] === s.callId &&
+                h["event-subclass"] === "outbound_dialer::voicemail_playback_completed"))
+          )
+            held.push(frame);
+          else if (
+            h["variable_outbound_dialer_call_id"] ||
+            h["outbound-dialer-call-id"] ||
+            h["event-name"] === "BACKGROUND_JOB"
+          )
+            await events.persistFreeSwitchEvent({}, f.pool, frame);
+        }
+      } catch (e) {
+        pumpFailure = e;
+      } finally {
+        pumping = false;
+      }
+    };
+    const timer = setInterval(() => void pump(), 10);
+    let http;
+    try {
+      await start(s, s.agentUuid, destinations[0]);
+      await start(s, s.customerUuid, destinations[1]);
+      assert.match(await command(`uuid_bridge ${s.customerUuid} ${s.agentUuid}`), /^\+OK/);
+      const beforeMedia = [await receiveTone(clients[0], 440), await receiveTone(clients[1], 880)];
+      if (scenario === "vm-lost-response") transport = await relay();
+      const adapter = nativeCallControlExecutor(f.pool, executor, {
+        host: "127.0.0.1",
+        port: transport?.port ?? 8021,
+        password: "a02-disposable-only"
+      });
+      http = await cleanupHttp(f, { wake: adapter.wakeExecutor });
+      const action = scenario === "end" ? "end" : "drop-voicemail",
+        body = { intent: http.intent() };
+      const responsePromise = http.api(s.callId, action, body);
+      let unresolvedSnapshot;
+      if (transport) {
+        await until(() => transport.queued, "native transfer bytes held");
+        const replay = await http.api(s.callId, action, body);
+        assert.equal(replay.statusCode, 200, replay.body);
+        assert.equal(http.wakes.length, 1);
+        unresolvedSnapshot = await f.snapshot();
+        assert.equal(unresolvedSnapshot.call_operations.filter((o) => !o.resolved_at).length, 2);
+        assert.equal(unresolvedSnapshot.agent_call_slots[0].state, "releasing");
+        transport.forward();
+        await until(
+          () =>
+            observer.events.find(
+              (e) =>
+                e["outbound-dialer-call-id"] === s.callId &&
+                e["event-subclass"] === "outbound_dialer::voicemail_playback_started"
+            ),
+          "actual native transfer with lost reply"
+        );
+      }
+      const response = await responsePromise;
+      assert.equal(response.statusCode, 200, response.body);
+      if (transport) {
+        assert.equal(transport.sends.length, 1);
+        await transport.close();
+        transport = null;
+        // New adapter/worker resumes from the listener's exact fixed-job evidence;
+        // it must not resend the transfer after the old relay/socket has closed.
+        const replacement = nativeCallControlExecutor(f.pool, executor, {
+          host: "127.0.0.1",
+          port: 8021,
+          password: "a02-disposable-only"
+        });
+        await replacement.wakeExecutor(response.json().operationId);
+      }
+      await until(
+        async () => {
+          if (pumpFailure) throw pumpFailure;
+          await pump();
+          const snapshot = await f.snapshot();
+          if (snapshot.call_operations.some((o) => !o.resolved_at))
+            await nativeCallControlExecutor(f.pool, executor, {
+              host: "127.0.0.1",
+              port: 8021,
+              password: "a02-disposable-only"
+            }).wakeExecutor(response.json().operationId);
+          return (await f.snapshot()).agent_call_slots[0].state === "free";
+        },
+        "HTTP native control releases only verified old slot",
+        10000
+      );
+      const afterRelease = await f.snapshot();
+      const operationJobs = afterRelease.call_operations.filter(
+        (o) => o.request.rootOperationId === response.json().operationId
+      );
+      assert.equal(operationJobs.length, 2);
+      for (const op of operationJobs)
+        assert.equal(
+          observer.events.filter(
+            (e) => e["event-name"] === "BACKGROUND_JOB" && e["job-uuid"] === op.command_uuid
+          ).length,
+          1,
+          "exactly one physical job for each operation"
+        );
+      assert.deepEqual((await http.api(s.callId, action, body)).json(), response.json());
+      assert.equal(http.wakes.length, 1);
+      if (scenario === "end") {
+        assert.ok(afterRelease.calls[0].ended_at);
+        assert.equal(afterRelease.calls[0].outcome, "answered");
+        assert.ok(afterRelease.call_capacity_reservations.every((r) => r.state === "released"));
+      } else {
+        assert.equal(afterRelease.calls[0].state, "agent_released");
+        assert.equal(await command(`uuid_exists ${s.customerUuid}`), "true");
+        const audio = await receiveTone(clients[1], 660);
+        const next = await f.seed();
+        await start(next, next.agentUuid, destinations[0]);
+        await start(next, next.customerUuid, destinations[1]);
+        await f.pool.query("update agents set availability_status='paused' where id=$1", [f.agentId]);
+        const newSlot = (await f.snapshot()).agent_call_slots[0];
+        await until(
+          () =>
+            held.some(
+              (frame) => frame.headers["event-subclass"] === "outbound_dialer::voicemail_playback_completed"
+            ) && held.some((frame) => frame.headers["event-name"] === "CHANNEL_HANGUP_COMPLETE"),
+          "hold both real customer terminal deliveries",
+          10000
+        );
+        holdCustomerEnd = false;
+        const complete = held.find(
+          (frame) => frame.headers["event-subclass"] === "outbound_dialer::voicemail_playback_completed"
+        );
+        const end = held.filter((frame) =>
+          ["CHANNEL_HANGUP_COMPLETE", "CHANNEL_DESTROY"].includes(frame.headers["event-name"])
+        );
+        const ordered = scenario === "vm-hangup-first" ? [...end, complete] : [complete, ...end];
+        for (const frame of [...ordered, ...ordered]) await events.persistFreeSwitchEvent({}, f.pool, frame);
+        assert.deepEqual((await f.snapshot()).agent_call_slots[0], newSlot);
+        assert.equal((await f.snapshot()).agents[0].availability_status, "paused");
+        assert.deepEqual((await http.api(s.callId, action, body)).json(), response.json());
+        assert.equal(http.wakes.length, 1);
+        assert.ok(
+          (await f.snapshot()).call_capacity_reservations
+            .filter((r) => r.call_id === s.callId)
+            .every((r) => r.state === "released")
+        );
+        report.scenarios.push({
+          name: `native ${scenario} media`,
+          status: "passed",
+          audio,
+          newCall: next.callId
+        });
+        for (const leg of [next.agentUuid, next.customerUuid])
+          if ((await command(`uuid_exists ${leg}`)) === "true")
+            await command(`uuid_kill ${leg} NORMAL_CLEARING`);
+        await until(async () => {
+          if (pumpFailure) throw pumpFailure;
+          return (await f.snapshot()).agent_call_slots[0].state === "free";
+        }, "event pump cleans new call");
+      }
+      await pass(`C06 native HTTP/C03/FS ${scenario}`, {
+        beforeMedia,
+        response: response.json(),
+        unresolvedSnapshot,
+        snapshot: await f.snapshot()
+      });
+    } finally {
+      clearInterval(timer);
+      await until(() => !pumping, "native event pump stopped");
+      await http?.close();
+      await transport?.close();
+      transport = null;
+      await executor.close();
+      executor = null;
+      await f.cleanup();
+      f = null;
+      await admin.query("drop role c06_executor");
+    }
     assert.match(await command("show channels count"), /^0 total/);
   }
   report.status = "passed";

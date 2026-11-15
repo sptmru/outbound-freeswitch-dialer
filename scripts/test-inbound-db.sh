@@ -29,13 +29,14 @@ mkdir "$RUN_DIR/socket"
 chmod 777 "$RUN_DIR/socket"
 git rev-parse HEAD > "$RUN_DIR/base-revision.txt"
 printf '%s\n' "$PG_STORAGE" > "$RUN_DIR/storage.txt"
-sha256sum tests/fixtures/inbound/* apps/api/src/inbound*.ts apps/api/src/agent-call-slots*.ts apps/api/src/call-admission*.ts apps/api/src/call-cleanup*.ts apps/api/src/call-finalization*.ts apps/api/src/call-outcomes.ts apps/api/src/agent-availability*.ts apps/api/src/esl-events*.ts apps/api/src/call-capacity*.ts apps/api/src/call-control-pools*.ts apps/api/src/manual-outbound*.ts apps/api/src/auto-next*.ts apps/api/src/call-executor*.ts apps/api/src/call-command-transport*.ts apps/api/src/desk-slots-schema.integration.test.ts apps/api/src/call-participation*.ts apps/api/src/durable-call-work*.ts apps/api/src/call-coordination*.ts apps/api/src/dashboard/calls.ts apps/api/src/dashboard/routes.ts packages/shared/src/*.ts apps/api/src/call-observability.ts apps/api/src/dashboard/browser-media.ts apps/api/src/dashboard/recordings.ts apps/api/src/dashboard/phone.ts apps/api/db/migrations/*.sql scripts/*inbound-db* > "$RUN_DIR/source-sha256.txt"
+sha256sum tests/fixtures/inbound/* apps/api/src/inbound*.ts apps/api/src/agent-call-slots*.ts apps/api/src/call-admission*.ts apps/api/src/native-call-control*.ts apps/api/src/call-cleanup*.ts apps/api/src/call-finalization*.ts apps/api/src/call-outcomes.ts apps/api/src/agent-availability*.ts apps/api/src/esl-events*.ts apps/api/src/call-capacity*.ts apps/api/src/call-control-pools*.ts apps/api/src/manual-outbound*.ts apps/api/src/auto-next*.ts apps/api/src/call-executor*.ts apps/api/src/call-command-transport*.ts apps/api/src/desk-slots-schema.integration.test.ts apps/api/src/call-participation*.ts apps/api/src/durable-call-work*.ts apps/api/src/call-coordination*.ts apps/api/src/dashboard/calls.ts apps/api/src/dashboard/routes.ts packages/shared/src/*.ts apps/api/src/call-observability.ts apps/api/src/dashboard/browser-media.ts apps/api/src/dashboard/recordings.ts apps/api/src/dashboard/phone.ts apps/api/db/migrations/*.sql scripts/*inbound-db* > "$RUN_DIR/source-sha256.txt"
 docker image inspect "$PG_IMAGE" --format '{{.Id}} {{json .RepoDigests}}' > "$RUN_DIR/image.txt"
 docker run -d --name "$PG_CONTAINER" --network none --memory 512m --cpus 2 --pids-limit 128 \
   "${storage_args[@]}" \
   --mount "type=bind,src=$RUN_DIR/socket,dst=/db-socket" \
   -e POSTGRES_HOST_AUTH_METHOD=trust -e POSTGRES_DB=inbound_test "$PG_IMAGE" \
-  -c unix_socket_directories=/var/run/postgresql,/db-socket -c listen_addresses= > "$RUN_DIR/pg-id.txt"
+  -c unix_socket_directories=/var/run/postgresql,/db-socket -c listen_addresses= \
+  -c max_wal_size=64MB -c min_wal_size=32MB > "$RUN_DIR/pg-id.txt"
 created=true
 ready=false
 for ((i=0;i<100;i++)); do

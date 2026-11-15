@@ -695,12 +695,12 @@ add(
   "POST",
   "/agent/calls/:callId/end",
   "End active call",
-  "Ends an owned active call, durably records request and optional first-party browser click evidence, and returns refreshed Agent Desk state.",
+  "Legacy requests end an owned call and return Agent Desk state. V1 intent requests persist fenced native control operations and return accepted identities, not proof of hangup. Native execution is staged behind the C03 dependency; absent bootstrap returns 409 before mutation.",
   {
     params: callParams,
     body: ref("EndCallRequest"),
-    success: ref("AgentDeskResponse"),
-    errors: [...agentErrors, 404]
+    success: { anyOf: [ref("AgentDeskResponse"), ref("CallControlResponse")] },
+    errors: [...agentErrors, 404, 409]
   }
 );
 add(
@@ -719,11 +719,11 @@ add(
   "POST",
   "/agent/calls/:callId/drop-voicemail",
   "Drop voicemail",
-  "Starts voicemail playback on the customer leg and releases the agent when safe.",
+  "Starts voicemail using the campaign's recording snapshot. V1 intent persists a transfer and dependent agent-release chain through C03, returns accepted identities, and frees only matching resources after job and concrete event evidence. Native bootstrap remains staged.",
   {
     params: callParams,
     body: ref("DropVoicemailRequest"),
-    success: ref("AgentDeskResponse"),
+    success: { anyOf: [ref("AgentDeskResponse"), ref("CallControlResponse")] },
     errors: [...agentErrors, 404, 409, 502]
   }
 );

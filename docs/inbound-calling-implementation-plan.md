@@ -656,7 +656,9 @@ and the rollout gates are installed. [C05 durable auto-next](inbound-auto-next.m
 adds source-idempotent automatic admission, queue priority and cancellation through
 the same staged execution seam. [C06 concrete cleanup](inbound-call-cleanup.md)
 adds reservation snapshots, exact-leg terminal handling and uncertainty-safe
-background release; native hangup/voicemail control integration remains open.
+background release, plus authenticated native hangup/voicemail producers and
+verified C03 execution tested through the actual HTTP/FreeSWITCH path. Global
+bootstrap remains staged under I05.
 Legacy starts
 share admission serialization and cannot silently dismiss native work. This contract does not mount the new
 Desk/offer/transfer/admin endpoints or enable product ingress/media.

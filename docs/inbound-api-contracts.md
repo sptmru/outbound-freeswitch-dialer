@@ -63,6 +63,15 @@ bridge and full native token revalidation. Native writer activation still requir
 all competing paths, session/endpoint lifecycle, protected pools and driver,
 recovery and the I01–I05 gates. Do not remove the guard or silently drop `intent`.
 
+C06 extends the two existing end/voicemail controls with the same optional Desk
+mutation `intent`. Its native producer returns `CallControlResponse` with
+`status: "accepted"`, revision, call and operation IDs. This acknowledges durable
+work; only verified jobs/concrete events release resources. Missing native-control
+execution dependency returns 409 before mutation. Legacy requests remain guarded.
+See [C06 control and evidence](inbound-call-cleanup.md). Native control conflicts
+also include `call_outcome_uncertain`, `transfer_in_progress` and
+`voicemail_unavailable`; they never authorize fallback to a legacy command.
+
 ## Requests, revisions and endpoint binding
 
 All IDs and idempotency keys are UUIDs. PostgreSQL revisions and generations are

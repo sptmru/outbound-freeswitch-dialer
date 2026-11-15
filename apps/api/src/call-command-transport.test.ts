@@ -3,6 +3,7 @@ import net from "node:net";
 import { once } from "node:events";
 import { randomUUID } from "node:crypto";
 import { test } from "node:test";
+import type pg from "pg";
 import { createCommandDriver } from "./call-command-transport.js";
 import type { DurableCommand } from "./call-executor.js";
 const operation = (): DurableCommand => ({
@@ -78,7 +79,7 @@ test("C03 transport fixes Job-UUID, ignores ACK/unrelated jobs and verifies only
       },
       reconcile: async () => null
     });
-    const result = await driver.send(op, AbortSignal.timeout(1000));
+    const result = await driver.send(op, AbortSignal.timeout(1000), {} as pg.PoolClient);
     assert.equal(result?.state, "succeeded");
     assert.equal(verified, 1);
     assert.equal(sends, 1);
@@ -109,7 +110,10 @@ test("C03 transport clean close, wrong Job-UUID and abort with active partial tr
         reconcile: async () => null
       });
       const began = performance.now();
-      await assert.rejects(driver.send(operation(), AbortSignal.timeout(150)), /peer|Job-UUID|aborted/);
+      await assert.rejects(
+        driver.send(operation(), AbortSignal.timeout(150), {} as pg.PoolClient),
+        /peer|Job-UUID|aborted/
+      );
       assert.ok(performance.now() - began < 1000);
       assert.equal(sends, 1);
     } finally {

@@ -1,3 +1,9 @@
+export function resolveAgentEndOutcome(state: string): "answered" | "agent_canceled" {
+  return ["bridged", "voicemail_signal_detected", "agent_connected"].includes(state)
+    ? "answered"
+    : "agent_canceled";
+}
+
 export function resolveCustomerHangupOutcome(input: {
   answered: boolean;
   hangupCause?: string;

@@ -431,7 +431,10 @@
       "offer_expired",
       "not_owner",
       "endpoint_unavailable",
-      "capacity_exhausted"
+      "capacity_exhausted",
+      "call_outcome_uncertain",
+      "transfer_in_progress",
+      "voicemail_unavailable"
     ]
   },
   "CoordinationErrorResponse": {
@@ -2831,8 +2834,21 @@
     "type": "object",
     "properties": {
       "campaignId": { "type": "string" },
-      "clientContext": { "$ref": "CallEndClientContext#" }
+      "clientContext": { "$ref": "CallEndClientContext#" },
+      "intent": { "$ref": "DeskMutationRequest#" }
     },
+    "additionalProperties": false
+  },
+  "CallControlResponse": {
+    "$id": "CallControlResponse",
+    "type": "object",
+    "properties": {
+      "status": { "type": "string", "const": "accepted" },
+      "callId": { "type": "string" },
+      "operationId": { "type": "string" },
+      "revision": { "type": "string" }
+    },
+    "required": ["status", "callId", "operationId", "revision"],
     "additionalProperties": false
   },
   "UpdateCallStatusRequest": {
@@ -2857,7 +2873,7 @@
   "DropVoicemailRequest": {
     "$id": "DropVoicemailRequest",
     "type": "object",
-    "properties": { "campaignId": { "type": "string" } },
+    "properties": { "campaignId": { "type": "string" }, "intent": { "$ref": "DeskMutationRequest#" } },
     "additionalProperties": false
   },
   "SetCampaignVoicemailRequest": {

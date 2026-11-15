@@ -42,6 +42,7 @@ function parseHeaders(raw) {
 export async function openEsl({ port = 8021 } = {}) {
   const socket = net.createConnection({ host: "127.0.0.1", port });
   const events = [];
+  const eventFrames = [];
   const logs = [];
   const frames = [];
   let buffer = Buffer.alloc(0);
@@ -61,7 +62,12 @@ export async function openEsl({ port = 8021 } = {}) {
       const frame = { headers, body };
       if (headers["content-type"] === "text/event-plain") {
         const parsed = parseHeaders(`event\n${body}`).headers;
-        events.push(Object.fromEntries(Object.entries(parsed).map(([k, v]) => [k, decodeURIComponent(v)])));
+        const decoded = Object.fromEntries(
+          Object.entries(parsed).map(([k, v]) => [k, decodeURIComponent(v)])
+        );
+        events.push(decoded);
+        const eventEnd = body.indexOf("\n\n");
+        eventFrames.push({ headers: decoded, body: eventEnd < 0 ? "" : body.slice(eventEnd + 2) });
       } else if (headers["content-type"] === "log/data") logs.push(body);
       else frames.push(frame);
     }
@@ -88,7 +94,7 @@ export async function openEsl({ port = 8021 } = {}) {
       ).headers["reply-text"],
       /^\+OK/
     );
-    return { events, logs, command, close: () => socket.destroy() };
+    return { events, eventFrames, logs, command, close: () => socket.destroy() };
   } catch (error) {
     socket.destroy();
     throw error;

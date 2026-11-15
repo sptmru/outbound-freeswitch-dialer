@@ -105,8 +105,16 @@ export interface CommandDriver {
   // SQL-only action-specific generation/slot/endpoint validation, under admission.
   // Integrating call paths must supply their full token checks here (C04-C07/D-G).
   validate?(operation: DurableCommand, admission: CallAdmission): Promise<boolean>;
-  send(operation: DurableCommand, signal: AbortSignal): Promise<CommandResolution | null>;
-  reconcile(operation: DurableCommand, signal: AbortSignal): Promise<CommandResolution | null>;
+  send(
+    operation: DurableCommand,
+    signal: AbortSignal,
+    client: pg.PoolClient
+  ): Promise<CommandResolution | null>;
+  reconcile(
+    operation: DurableCommand,
+    signal: AbortSignal,
+    client: pg.PoolClient
+  ): Promise<CommandResolution | null>;
 }
 export type ExecutionResult =
   { status: "deferred"; reason: string } | { status: "uncertain" | "terminal"; operation: DurableCommand };
@@ -220,6 +228,16 @@ export class CallExecutor {
         return { status: "deferred", reason: "critical_reserve" };
       let resolution: CommandResolution | null = null;
       if (op.state === "pending") {
+        if (op.request.dependsOn) {
+          const parent = (
+            await client.query("select state from call_operations where id=$1 and call_id=$2", [
+              op.request.dependsOn,
+              op.call_id
+            ])
+          ).rows[0];
+          if (parent?.state !== "succeeded")
+            return { status: "deferred", reason: "predecessor_not_succeeded" };
+        }
         const claimed = await withCallAdmission(client, { callIds: [op.call_id] }, async (admission) => {
           const current = (
             await admission.client.query(
@@ -323,7 +341,7 @@ export class CallExecutor {
     try {
       return await Promise.race([
         Promise.resolve()
-          .then(() => (controller.signal.aborted ? null : action(op, controller.signal)))
+          .then(() => (controller.signal.aborted ? null : action(op, controller.signal, client)))
           .catch(() => null),
         new Promise<null>((resolve) => {
           abort = () => resolve(null);

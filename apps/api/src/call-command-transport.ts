@@ -1,4 +1,5 @@
 import net from "node:net";
+import type pg from "pg";
 import type { CommandDriver, CommandResolution, DurableCommand } from "./call-executor.js";
 
 export interface BackgroundJobEvidence {
@@ -18,7 +19,8 @@ export function createCommandDriver(config: {
   verify: (
     operation: DurableCommand,
     job: BackgroundJobEvidence,
-    signal: AbortSignal
+    signal: AbortSignal,
+    client: pg.PoolClient
   ) => Promise<CommandResolution | null>;
   reconcile: CommandDriver["reconcile"];
   validate?: CommandDriver["validate"];
@@ -27,7 +29,7 @@ export function createCommandDriver(config: {
   return {
     validate: config.validate,
     reconcile: config.reconcile,
-    async send(operation, signal) {
+    async send(operation, signal, client) {
       const command = config.buildCommand(operation);
       if (!command || /[\r\n]/.test(command)) throw new Error("Invalid ESL command framing");
       const job = await new Promise<BackgroundJobEvidence>((resolve, reject) => {
@@ -109,7 +111,7 @@ export function createCommandDriver(config: {
         if (signal.aborted) abort();
       });
       if (signal.aborted) return null;
-      return config.verify(operation, job, signal);
+      return config.verify(operation, job, signal, client);
     }
   };
 }

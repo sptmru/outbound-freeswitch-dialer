@@ -7,6 +7,7 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type pg from "pg";
 import {
+  coordinationErrorCodes,
   callOutcomes,
   type AdminAnalyticsResponse,
   type AdminAuditResponse,
@@ -33,6 +34,7 @@ import {
   type DeleteResponse,
   type DropVoicemailRequest,
   type EndCallRequest,
+  type CallControlResponse,
   type FreeSwitchDiagnosticsResponse,
   type FreeSwitchSafeTestResponse,
   type FreeSwitchTrunkStatus,
@@ -64,12 +66,14 @@ import { z } from "zod";
 import {
   startNextCallSchema,
   startLeadCallSchema,
-  startManualCallSchema
+  startManualCallSchema,
+  deskMutationSchema
 } from "../call-coordination-contracts.js";
 import { ManualOutboundError, type CoordinatedOutboundRequest } from "../manual-outbound.js";
 import { AdmissionError } from "../call-admission.js";
 import { ExecutionError } from "../call-executor.js";
 import { CapacityError } from "../call-capacity.js";
+import { admitNativeCallControl, CallControlError } from "../native-call-control.js";
 import { requireUser } from "../auth/routes.js";
 import { setAgentAvailability } from "../agent-availability.js";
 import type { AppConfig } from "../config.js";
@@ -189,7 +193,8 @@ const callEndClientContextSchema = z.object({
 
 const endCallSchema = z.object({
   campaignId: z.guid().optional(),
-  clientContext: callEndClientContextSchema.optional()
+  clientContext: callEndClientContextSchema.optional(),
+  intent: deskMutationSchema.optional()
 }) satisfies z.ZodType<EndCallRequest>;
 
 function logCallStartRejection(
@@ -259,7 +264,8 @@ const updateCallStatusSchema = z.object({
 
 const dropVoicemailSchema = z
   .object({
-    campaignId: z.guid().optional()
+    campaignId: z.guid().optional(),
+    intent: deskMutationSchema.optional()
   })
   .strict() satisfies z.ZodType<DropVoicemailRequest>;
 
@@ -421,8 +427,41 @@ export function registerDashboardRoutes(
   config: AppConfig,
   pool: pg.Pool,
   runtimeSettings = new RuntimeSettingsService(pool, config),
-  manualOutbound?: { wakeExecutor(operationId: string): Promise<void> }
+  manualOutbound?: { wakeExecutor(operationId: string): Promise<void> },
+  nativeControls?: { wakeExecutor(operationId: string): Promise<void> }
 ): void {
+  async function nativeControl(
+    request: FastifyRequest,
+    reply: FastifyReply,
+    input: Parameters<typeof admitNativeCallControl>[1]
+  ) {
+    if (!nativeControls) return rejectCoordinatedStart(reply);
+    try {
+      const { replayed, ...response } = await admitNativeCallControl(pool, input);
+      if (!replayed) {
+        try {
+          await nativeControls.wakeExecutor(response.operationId);
+        } catch {
+          request.log.warn(
+            { operationId: response.operationId },
+            "Control wake failed; durable work retained"
+          );
+        }
+      }
+      return response;
+    } catch (error) {
+      if (!(
+        error instanceof CallControlError ||
+        error instanceof AdmissionError ||
+        error instanceof ExecutionError
+      ))
+        throw error;
+      const code = (coordinationErrorCodes as readonly string[]).includes(error.reason)
+        ? error.reason
+        : "coordination_unavailable";
+      return reply.code(409).send({ message: error.reason, code, revision: null });
+    }
+  }
   // Explicit integration seam: no request may commit a native reservation without
   // an installed durable executor scheduler. Production bootstrap remains closed.
   async function coordinatedStart(
@@ -1279,25 +1318,37 @@ export function registerDashboardRoutes(
     return buildAgentDeskResponse(pool, publicUser, created.campaignId, contactRetryPolicy);
   });
 
-  app.post("/agent/calls/:callId/end", async (request, reply): Promise<AgentDeskResponse | void> => {
-    const user = await requireUser(request, config, pool);
-    if (!user) {
-      return reply.code(401).send({ message: "Unauthorized" });
-    }
+  app.post(
+    "/agent/calls/:callId/end",
+    async (request, reply): Promise<AgentDeskResponse | CallControlResponse | void> => {
+      const user = await requireUser(request, config, pool);
+      if (!user) {
+        return reply.code(401).send({ message: "Unauthorized" });
+      }
 
-    const publicUser = toPublicUser(user);
-    const params = z.object({ callId: z.guid() }).parse(request.params);
-    const input = endCallSchema.parse(request.body ?? {});
-    const endRequest = buildCallEndRequestContext(request, publicUser, input);
-    request.log.info({ callId: params.callId, endRequest }, "Agent call end requested");
-    const ended = await endDialerCall(pool, config, publicUser.id, params.callId, endRequest);
-    if (!ended) {
-      request.log.warn({ callId: params.callId, endRequest }, "Agent call end target was not active");
-      return reply.code(404).send({ message: "Active call not found" });
-    }
+      const publicUser = toPublicUser(user);
+      const params = z.object({ callId: z.guid() }).parse(request.params);
+      const input = endCallSchema.parse(request.body ?? {});
+      const endRequest = buildCallEndRequestContext(request, publicUser, input);
+      if (input.intent)
+        return nativeControl(request, reply, {
+          callId: params.callId,
+          actorUserId: user.id,
+          actorAuthVersion: user.auth_version,
+          action: "end",
+          intent: input.intent,
+          audit: { ...endRequest }
+        });
+      request.log.info({ callId: params.callId, endRequest }, "Agent call end requested");
+      const ended = await endDialerCall(pool, config, publicUser.id, params.callId, endRequest);
+      if (!ended) {
+        request.log.warn({ callId: params.callId, endRequest }, "Agent call end target was not active");
+        return reply.code(404).send({ message: "Active call not found" });
+      }
 
-    return buildAgentDeskResponse(pool, publicUser, input.campaignId, contactRetryPolicy);
-  });
+      return buildAgentDeskResponse(pool, publicUser, input.campaignId, contactRetryPolicy);
+    }
+  );
 
   app.put("/agent/calls/:callId/status", async (request, reply): Promise<ManualCallStatusResponse | void> => {
     const user = await requireUser(request, config, pool);
@@ -1327,7 +1378,7 @@ export function registerDashboardRoutes(
 
   app.post(
     "/agent/calls/:callId/drop-voicemail",
-    async (request, reply): Promise<AgentDeskResponse | void> => {
+    async (request, reply): Promise<AgentDeskResponse | CallControlResponse | void> => {
       const user = await requireUser(request, config, pool);
       if (!user) {
         return reply.code(401).send({ message: "Unauthorized" });
@@ -1336,6 +1387,14 @@ export function registerDashboardRoutes(
       const publicUser = toPublicUser(user);
       const params = z.object({ callId: z.guid() }).parse(request.params);
       const input = dropVoicemailSchema.parse(request.body ?? {});
+      if (input.intent)
+        return nativeControl(request, reply, {
+          callId: params.callId,
+          actorUserId: user.id,
+          actorAuthVersion: user.auth_version,
+          action: "drop-voicemail",
+          intent: input.intent
+        });
       const dropped = await dropVoicemailForCall(pool, config, publicUser.id, params.callId);
       if (!dropped.ok) {
         return reply.code(dropped.statusCode).send({ message: dropped.message });

@@ -6,6 +6,7 @@ import {
   type CoordinatedOutboundAdmission
 } from "../manual-outbound.js";
 import type { CallEndRequestAudit, CallOutcome, CallState } from "@outbound-dialer/shared";
+import { resolveAgentEndOutcome } from "../call-outcomes.js";
 import type { AppConfig } from "../config.js";
 import { finishAgentCall } from "../agent-availability.js";
 import { finalizeCallTransaction, lockCallOwnerAgent } from "../call-finalization.js";
@@ -1476,7 +1477,7 @@ export async function endDialerCall(
 }
 
 export function inferAgentEndOutcome(state: CallState): CallOutcome {
-  return state === "bridged" || state === "voicemail_signal_detected" ? "answered" : "agent_canceled";
+  return resolveAgentEndOutcome(state);
 }
 
 export const __testing = {

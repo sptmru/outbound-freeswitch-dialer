@@ -126,6 +126,18 @@ export async function persistCoordinatedCallEvent(pool: pg.Pool, input: Concrete
             [input.callId]
           );
         if (ended || (vm && ["completed", "failed"].includes(input.playback ?? ""))) {
+          const requestedEnd = ended
+            ? (
+                await client.query(
+                  `select o.request->>'endOutcome' as outcome
+            from call_operations o join call_execution_attempts a on a.operation_id=o.id
+            where o.call_id=$1 and o.target_uuid=$2 and o.command_kind='hangup'
+              and o.request->>'controlAction'='end' and o.state in ('executing','uncertain','succeeded')
+            order by a.started_at limit 1`,
+                  [input.callId, input.legUuid]
+                )
+              ).rows[0]?.outcome
+            : null;
           const outcome: CallOutcome =
             input.playback === "completed"
               ? "voicemail_dropped"
@@ -133,11 +145,13 @@ export async function persistCoordinatedCallEvent(pool: pg.Pool, input: Concrete
                 ? "failed"
                 : vm && ["NORMAL_CLEARING", "ORIGINATOR_CANCEL"].includes(input.hangupCause ?? "")
                   ? "voicemail_dropped"
-                  : resolveCustomerHangupOutcome({
-                      answered: Boolean(call.pstn_answered_at || call.answered_at),
-                      hangupCause: input.hangupCause,
-                      voicemailDetected: call.voicemail_signal_status === "detected"
-                    });
+                  : ["answered", "agent_canceled"].includes(requestedEnd)
+                    ? requestedEnd
+                    : resolveCustomerHangupOutcome({
+                        answered: Boolean(call.pstn_answered_at || call.answered_at),
+                        hangupCause: input.hangupCause,
+                        voicemailDetected: call.voicemail_signal_status === "detected"
+                      });
           const failed = outcome === "failed";
           await client.query(
             `update calls set state=$2,outcome=coalesce(outcome,$3),ended_at=clock_timestamp(),

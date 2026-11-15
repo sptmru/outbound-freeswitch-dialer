@@ -1,5 +1,10 @@
 export * from "./call-coordination.js";
-import type { DeskCoordination, ManualStartIntent, OutboundStartIntent } from "./call-coordination.js";
+import type {
+  DeskCoordination,
+  DeskMutationRequest,
+  ManualStartIntent,
+  OutboundStartIntent
+} from "./call-coordination.js";
 
 export const callStates = [
   "created",
@@ -862,6 +867,14 @@ export interface CallEndRequestAudit {
 export interface EndCallRequest {
   campaignId?: string;
   clientContext?: CallEndClientContext;
+  intent?: DeskMutationRequest;
+}
+
+export interface CallControlResponse {
+  status: "accepted";
+  callId: string;
+  operationId: string;
+  revision: string;
 }
 
 export interface UpdateCallStatusRequest {
@@ -877,6 +890,7 @@ export interface ManualCallStatusResponse {
 
 export interface DropVoicemailRequest {
   campaignId?: string;
+  intent?: DeskMutationRequest;
 }
 
 export interface SetCampaignVoicemailRequest {

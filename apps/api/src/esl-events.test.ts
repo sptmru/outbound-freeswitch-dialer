@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import type pg from "pg";
 import type { AppConfig } from "./config.js";
 import { __testing, reconcileActiveCalls, repairFinalizedCallConsistency } from "./esl-events.js";
+import { AdmissionDiscoveryChanged } from "./call-admission.js";
 
 const config = {
   FREESWITCH_DOMAIN: "dialer.local",
@@ -11,6 +12,7 @@ const config = {
 
 describe("FreeSWITCH event helpers", () => {
   it("recognizes retryable PostgreSQL and connection failures", () => {
+    assert.equal(__testing.isTransientPersistenceError(new AdmissionDiscoveryChanged()), true);
     assert.equal(
       __testing.isTransientPersistenceError(Object.assign(new Error("connection lost"), { code: "08006" })),
       true
