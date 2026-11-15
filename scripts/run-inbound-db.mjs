@@ -19,7 +19,8 @@ const commands = [
       "apps/api/dist-test/inbound-harness.integration.test.js",
       "apps/api/dist-test/inbound-schema.integration.test.js",
       "apps/api/dist-test/desk-slots-schema.integration.test.js",
-      "apps/api/dist-test/call-participation.integration.test.js"
+      "apps/api/dist-test/call-participation.integration.test.js",
+      "apps/api/dist-test/durable-call-work.integration.test.js"
     ]
   ]
 ];

@@ -160,6 +160,11 @@ migration 027, with an internal reader and explicit legacy-reader exclusions.
 See [the B03 schema, evidence semantics and compatibility matrix](inbound-call-participation.md).
 Product lifecycle writers/public contracts/history integration remain later tasks.
 
+B04 adds durable offers and exclusions, transfers, operation identities/results,
+auto-next source intents and independent ingress evidence/checkpoints in migration 028. See [the B04 storage, retention and verification contract](inbound-durable-call-work.md).
+This is feature-off storage; admission/execution, journal integration, retention
+and public API work remain their respective later tasks.
+
 Extend `calls` with direction, original DID, calling/called numbers, queue, and current
 owner. Inbound can exist without an agent or contact. Keep `calls.agent_id` as a
 compatibility projection, not the sole occupancy record: transfers occupy the source
