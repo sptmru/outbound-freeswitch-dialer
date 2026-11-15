@@ -672,7 +672,7 @@ add(
   "POST",
   "/agent/call-next",
   "Call next lead",
-  "Selects and starts the next callable lead in the legacy outbound campaign. V1 manual intent has staged atomic admission; the current server bootstrap returns 409 coordination_unavailable because its native execution dependency is not installed. Automatic intent remains unavailable until C05; missing intent never authorizes native offer dismissal.",
+  "Selects and starts the next callable lead in the legacy outbound campaign. V1 manual intent has staged atomic admission; the current server bootstrap returns 409 coordination_unavailable because its native execution dependency is not installed. V1 automatic intent validates a stable outbound source and defers to eligible queued inbound without selecting a contact; started retries replay the original call. Both intents remain staged behind the execution dependency; missing intent never authorizes native offer dismissal.",
   {
     body: ref("StartNextCallRequest"),
     success: ref("AgentDeskResponse"),

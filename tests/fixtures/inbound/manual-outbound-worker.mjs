@@ -2,7 +2,7 @@
 import pg from "pg";
 import { once } from "node:events";
 import { databaseConfig, testDatabaseUrl } from "./database.mjs";
-import { admitManualOutbound } from "../../../apps/api/dist-test/manual-outbound.js";
+import { admitManualOutbound, admitAutomaticOutbound } from "../../../apps/api/dist-test/manual-outbound.js";
 import { AdmissionDiscoveryChanged, withCallAdmission } from "../../../apps/api/dist-test/call-admission.js";
 const [schema, raw] = process.argv.slice(2),
   input = JSON.parse(raw);
@@ -37,6 +37,8 @@ try {
   await start;
   let result;
   if (input.mode === "manual") result = await admitManualOutbound(pool, input.config, input.request);
+  else if (input.mode === "automatic")
+    result = await admitAutomaticOutbound(pool, input.config, input.request);
   else {
     const client = await pool.connect();
     try {
@@ -45,6 +47,10 @@ try {
           client,
           { agentIds: [input.agentId], callIds: [input.callId], campaignIds: [input.campaignId] },
           async (a) => {
+            if (input.mode === "sql") {
+              for (const statement of input.statements) await client.query(statement.sql, statement.values);
+              return "mutated";
+            }
             if (input.mode === "terminal") {
               await client.query(
                 "update calls set state='completed',ended_at=clock_timestamp() where id=$1",

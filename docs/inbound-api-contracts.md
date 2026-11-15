@@ -41,7 +41,10 @@ manual intent behind an internal execution dependency; the default `server.ts`
 still returns **409 `coordination_unavailable`** before claims or ESL because that
 dependency is not installed. When explicitly integrated, manual intent returns
 `{status: "started", revision, callId, operationId}` for durable admission. It is
-not conversation proof. Automatic intent stays unavailable until C05.
+not conversation proof. [C05 automatic intent](inbound-auto-next.md) now uses this
+same staged execution seam: it returns the original started identity or a durable
+`deferred/incoming_pending` intent before any contact claim. Canceled/stale work
+returns 409 and cannot be retried as manual automatically.
 Malformed/partial intent and unrecognized actor/agent fields return 400 instead
 of being stripped into an unintended legacy call.
 

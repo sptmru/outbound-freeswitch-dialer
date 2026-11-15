@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
 import type pg from "pg";
-import type { ManualStartIntent } from "@outbound-dialer/shared";
+import type { ManualStartIntent, AutomaticStartIntent } from "@outbound-dialer/shared";
 import type { AppConfig } from "./config.js";
 import { AdmissionDiscoveryChanged, withCallAdmission } from "./call-admission.js";
 import { enqueueCallCommand, ExecutionError } from "./call-executor.js";
 import { idempotencyScope, requestFingerprint } from "./call-coordination-contracts.js";
+import { prepareAutoNext, type AutoNextWaiting } from "./auto-next.js";
 import { normalizePhoneNumber } from "./dashboard/phone.js";
 
 export type ManualOutboundRoute =
@@ -20,6 +21,17 @@ export interface ManualOutboundRequest {
   confirmRetryWait?: boolean;
   intent: ManualStartIntent;
 }
+export interface AutomaticOutboundRequest extends Omit<
+  ManualOutboundRequest,
+  "intent" | "route" | "contactId" | "phoneNumber" | "confirmCompletedLead" | "confirmRetryWait"
+> {
+  route: "/agent/call-next";
+  intent: AutomaticStartIntent;
+}
+export type CoordinatedOutboundRequest = Omit<ManualOutboundRequest, "intent"> & {
+  intent: ManualStartIntent | AutomaticStartIntent;
+};
+export type CoordinatedOutboundAdmission = ManualOutboundAdmission | AutoNextWaiting;
 export interface ManualOutboundAdmission {
   status: "started";
   replayed: boolean;
@@ -43,6 +55,32 @@ export async function admitManualOutbound(
   config: AppConfig,
   input: ManualOutboundRequest
 ): Promise<ManualOutboundAdmission> {
+  return admitCoordinatedOutbound(pool, config, input) as Promise<ManualOutboundAdmission>;
+}
+export async function admitAutomaticOutbound(
+  pool: pg.Pool,
+  config: AppConfig,
+  input: AutomaticOutboundRequest
+): Promise<CoordinatedOutboundAdmission> {
+  return admitCoordinatedOutbound(pool, config, input);
+}
+export async function admitCoordinatedOutbound(
+  pool: pg.Pool,
+  config: AppConfig,
+  request: CoordinatedOutboundRequest
+): Promise<CoordinatedOutboundAdmission> {
+  // Automatic callers cannot smuggle manual selectors or confirmations internally.
+  const input = request;
+  const automatic = input.intent.startReason === "automatic" ? input.intent : null;
+  if (
+    automatic &&
+    (input.route !== "/agent/call-next" ||
+      input.contactId ||
+      input.phoneNumber ||
+      input.confirmCompletedLead ||
+      input.confirmRetryWait)
+  )
+    throw new ManualOutboundError("invalid_source");
   const client = await pool.connect();
   try {
     // Normalize before fingerprinting, but defer all mutable validation until after replay.
@@ -74,7 +112,14 @@ export async function admitManualOutbound(
       const selected = input.contactId
         ? (await client.query("select campaign_id from contacts where id=$1", [input.contactId])).rows[0]
         : null;
-      const campaignId = input.contactId ? selected?.campaign_id : (input.campaignId ?? actor.campaign_id);
+      const source = automatic
+        ? (await client.query("select campaign_id from calls where id=$1", [automatic.sourceCallId])).rows[0]
+        : null;
+      const campaignId = automatic
+        ? (input.campaignId ?? source?.campaign_id)
+        : input.contactId
+          ? selected?.campaign_id
+          : (input.campaignId ?? actor.campaign_id);
       if (!campaignId) throw new ManualOutboundError("campaign_unavailable");
       const pendingCalls = async () =>
         (
@@ -97,7 +142,7 @@ export async function admitManualOutbound(
             agentIds: [actor.agent_id],
             userIds: [input.actorUserId],
             campaignIds: [campaignId],
-            callIds: [...offeredCalls, callId]
+            callIds: [...offeredCalls, callId, ...(automatic ? [automatic.sourceCallId] : [])]
           },
           async (admission) => {
             if (JSON.stringify(await pendingCalls()) !== JSON.stringify(offeredCalls))
@@ -110,6 +155,16 @@ export async function admitManualOutbound(
               (input.actorAuthVersion !== undefined && active.auth_version !== input.actorAuthVersion)
             )
               throw new ManualOutboundError("session_revoked");
+            const auto = automatic
+              ? await prepareAutoNext(admission, {
+                  actorUserId: input.actorUserId,
+                  agentId: actor.agent_id,
+                  campaignId,
+                  intent: automatic,
+                  fingerprint
+                })
+              : null;
+            if (auto?.result) return auto.result;
             const old = (
               await client.query(
                 "select * from call_operations where idempotency_scope=$1 and idempotency_key=$2",
@@ -248,6 +303,11 @@ export async function admitManualOutbound(
               deadline: (await client.query("select clock_timestamp()+interval '5 seconds' as deadline"))
                 .rows[0].deadline
             });
+            if (auto)
+              await client.query(
+                "update agent_auto_next_intents set state='started',reason=null,started_call_id=$2,operation_id=$3,closed_at=clock_timestamp() where id=$1",
+                [auto.id, callId, operationId]
+              );
             // Lock child work at rank 6 before rank-7 capacity rows. Discovery has
             // already locked every affected customer/source call and participant.
             await client.query(
@@ -269,9 +329,10 @@ export async function admitManualOutbound(
               generation: slot.generation,
               agentId: actor.agent_id
             });
-            // All resource checks precede dismissal. Expiry/terminal source keeps its own cause.
-            await client.query(
-              `update call_offers o set
+            if (!automatic) {
+              // All resource checks precede dismissal. Expiry/terminal source keeps its own cause.
+              await client.query(
+                `update call_offers o set
             state=case when o.deadline_at<=clock_timestamp() then 'expired'
               when c.ended_at is not null then 'canceled'
               when o.kind='inbound' then 'ignored'
@@ -282,21 +343,22 @@ export async function admitManualOutbound(
               else 'transfer_closed' end,closed_at=clock_timestamp()
             from calls c left join call_transfers t on t.call_id=c.id and t.closed_at is null
             where o.call_id=c.id and o.agent_id=$1 and o.state='pending'`,
-              [actor.agent_id]
-            );
-            await client.query(
-              `update call_transfers t set state=case
+                [actor.agent_id]
+              );
+              await client.query(
+                `update call_transfers t set state=case
               when c.ended_at is not null then 'canceled' when t.deadline_at<=clock_timestamp() then 'expired' else 'declined' end,
             reason=case when c.ended_at is not null then 'call_closed' when t.deadline_at<=clock_timestamp() then 'deadline_elapsed'
               else 'manual_outbound_started' end,closed_at=clock_timestamp()
             from calls c where t.call_id=c.id and t.recipient_agent_id=$1 and t.state='offered' and t.closed_at is null`,
-              [actor.agent_id]
-            );
-            await client.query(
-              `update agent_auto_next_intents set state='canceled',reason='manual_outbound_started',closed_at=clock_timestamp()
+                [actor.agent_id]
+              );
+              await client.query(
+                `update agent_auto_next_intents set state='canceled',reason='manual_outbound_started',closed_at=clock_timestamp()
             where agent_id=$1 and closed_at is null`,
-              [actor.agent_id]
-            );
+                [actor.agent_id]
+              );
+            }
             if (contact)
               await client.query(
                 `update contacts set status='calling',attempt_count=attempt_count+1,last_attempted_at=clock_timestamp(),updated_at=clock_timestamp() where id=$1`,
@@ -308,8 +370,13 @@ export async function admitManualOutbound(
             );
             await client.query(
               `insert into call_events(call_id,agent_id,event_type,state,raw_json)
-            values($1,$2,'manual_outbound_admitted','created',$3)`,
-              [callId, actor.agent_id, { route: input.route, operationId }]
+            values($1,$2,$4,'created',$3)`,
+              [
+                callId,
+                actor.agent_id,
+                { route: input.route, operationId },
+                automatic ? "automatic_outbound_admitted" : "manual_outbound_admitted"
+              ]
             );
             return result;
           }
@@ -336,7 +403,7 @@ export async function validateManualOutboundCommand(
   admission.assertExecutionCall(operation.call_id);
   const request = operation.request;
   const token = request.slot as import("./agent-call-slots.js").SlotToken | undefined;
-  const intent = request.intent as ManualStartIntent | undefined;
+  const intent = request.intent as ManualStartIntent | AutomaticStartIntent | undefined;
   if (
     operation.command_kind !== "originate" ||
     !token ||
@@ -379,7 +446,19 @@ export async function validateManualOutboundCommand(
       ]
     )
   ).rows[0];
-  return Boolean(row);
+  if (!row) return false;
+  if (intent.startReason === "automatic")
+    return Boolean(
+      (
+        await admission.client.query(
+          `select 1 from agent_auto_next_intents i join campaigns c on c.id=i.campaign_id
+     where i.agent_id=$1 and i.source_call_id=$2 and i.started_call_id=$3 and i.operation_id=$4
+       and i.state='started' and c.auto_advance_to_next_lead_enabled`,
+          [token.agentId, intent.sourceCallId, operation.call_id, operation.id]
+        )
+      ).rowCount
+    );
+  return true;
 }
 
 /** C04 integration with the C03 executor. The adapter is server-owned and must

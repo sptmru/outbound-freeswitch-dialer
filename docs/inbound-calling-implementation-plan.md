@@ -652,7 +652,9 @@ Its future operations are cataloged separately from live OpenAPI paths.
 [C04 manual admission](inbound-manual-outbound.md) supplies atomic native starts
 and DB/API verification for the three existing manual routes. The production
 bootstrap still fails coordinated starts closed until a native execution adapter
-and the rollout gates are installed; automatic intent remains C05. Legacy starts
+and the rollout gates are installed. [C05 durable auto-next](inbound-auto-next.md)
+adds source-idempotent automatic admission, queue priority and cancellation through
+the same staged execution seam. Legacy starts
 share admission serialization and cannot silently dismiss native work. This contract does not mount the new
 Desk/offer/transfer/admin endpoints or enable product ingress/media.
 

@@ -10,7 +10,8 @@ Local branch: `feat/c04-manual-outbound-admission`.
 `createDialerCall` supports the B05 manual intent through `admitManualOutbound`.
 All three existing POST routes select that path for explicit manual intents:
 `/agent/manual-dial/start`, `/agent/leads/:contactId/call` and `/agent/call-next`.
-Automatic intent remains rejected until C05. The native response is B05's
+[C05 automatic intent](inbound-auto-next.md) now uses the same staged producer
+and executor seam with source validation and durable queue priority. The native response is B05's
 `{status: "started", revision, callId, operationId}`: admitted work, never an
 established conversation.
 

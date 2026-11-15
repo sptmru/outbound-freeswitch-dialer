@@ -28,6 +28,9 @@ The inbound/transfer extension has separate staged contracts and acceptance gate
 actor-only dismissal and durable command/slot/contact/capacity admission, verified
 with real PostgreSQL/API and simulated ESL. Its native execution dependency is
 not installed in `server.ts`; this is not product inbound/transfer enablement.
+[C05 durable auto-next](inbound-auto-next.md) adds automatic source/revision
+validation, queue priority and persistent replay/cancellation at that same staged
+DB/API boundary.
 
 ## Completed Repository Work
 

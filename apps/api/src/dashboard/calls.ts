@@ -1,9 +1,9 @@
 import type pg from "pg";
 import { ADMISSION_LOCK_NAMESPACE } from "../call-admission.js";
 import {
-  admitManualOutbound,
-  type ManualOutboundRequest,
-  type ManualOutboundAdmission
+  admitCoordinatedOutbound,
+  type CoordinatedOutboundRequest,
+  type CoordinatedOutboundAdmission
 } from "../manual-outbound.js";
 import type { CallEndRequestAudit, CallOutcome, CallState } from "@outbound-dialer/shared";
 import type { AppConfig } from "../config.js";
@@ -175,7 +175,12 @@ type CreateDialerCallFailureReason =
   | "supervisor_session";
 
 type CreateDialerCallResult =
-  | { ok: true; callId: string; campaignId: string; admission?: ManualOutboundAdmission }
+  | {
+      ok: true;
+      callId: string | null;
+      campaignId: string | undefined;
+      admission?: CoordinatedOutboundAdmission;
+    }
   | { ok: false; reason: CreateDialerCallFailureReason };
 
 export interface CallStartRejection {
@@ -201,7 +206,7 @@ export async function createDialerCall(
   pool: pg.Pool,
   config: AppConfig,
   input:
-    | { coordination: ManualOutboundRequest; actorUserId: string }
+    | { coordination: CoordinatedOutboundRequest; actorUserId: string }
     | {
         coordination?: never;
         actorUserId?: string;
@@ -222,7 +227,9 @@ export async function createDialerCall(
 ): Promise<CreateDialerCallResult> {
   if (input.coordination) {
     if (input.coordination.actorUserId !== input.actorUserId) throw new Error("Call actor mismatch");
-    const admission = await admitManualOutbound(pool, config, input.coordination);
+    const admission = await admitCoordinatedOutbound(pool, config, input.coordination);
+    if (admission.status !== "started")
+      return { ok: true, callId: null, campaignId: input.coordination.campaignId, admission };
     return { ok: true, callId: admission.callId, campaignId: admission.campaignId, admission };
   }
   const client = await pool.connect();

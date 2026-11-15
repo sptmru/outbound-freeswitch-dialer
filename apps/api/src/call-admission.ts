@@ -239,6 +239,11 @@ export class CallAdmission {
       throw new AdmissionError("call_closed");
     const token = await reserveAgentCallSlot(this.client, input.agentId, callId, participantId);
     if (!token) throw new AdmissionError("slot_occupied");
+    if (input.offerId)
+      await this.client.query(
+        "update agent_auto_next_intents set state='canceled',reason='offer_accepted',closed_at=clock_timestamp() where agent_id=$1 and closed_at is null",
+        [input.agentId]
+      );
     return token;
   }
   async transition(token: SlotToken, state: OccupiedSlotState) {

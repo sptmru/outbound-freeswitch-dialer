@@ -66,7 +66,7 @@ import {
   startLeadCallSchema,
   startManualCallSchema
 } from "../call-coordination-contracts.js";
-import { ManualOutboundError, type ManualOutboundRequest } from "../manual-outbound.js";
+import { ManualOutboundError, type CoordinatedOutboundRequest } from "../manual-outbound.js";
 import { AdmissionError } from "../call-admission.js";
 import { ExecutionError } from "../call-executor.js";
 import { CapacityError } from "../call-capacity.js";
@@ -428,7 +428,7 @@ export function registerDashboardRoutes(
   async function coordinatedStart(
     request: FastifyRequest,
     reply: FastifyReply,
-    input: ManualOutboundRequest
+    input: CoordinatedOutboundRequest
   ) {
     if (!manualOutbound) return rejectCoordinatedStart(reply);
     try {
@@ -438,6 +438,9 @@ export function registerDashboardRoutes(
       });
       if (!created.ok || !created.admission) throw new Error("Missing native admission result");
       const result = created.admission;
+      if (result.status === "deferred") return reply.send(result);
+      if (result.status === "canceled")
+        return reply.code(409).send({ message: result.reason, code: "revision_conflict", revision: null });
       if (!result.replayed) {
         try {
           await manualOutbound.wakeExecutor(result.operationId);
@@ -1184,14 +1187,14 @@ export function registerDashboardRoutes(
 
     const input = startNextCallSchema.parse(request.body ?? {});
     if (input.intent) {
-      if (input.intent.startReason !== "manual") return rejectCoordinatedStart(reply);
-      return coordinatedStart(request, reply, {
+      const coordinated = {
         actorUserId: user.id,
         actorAuthVersion: user.auth_version,
-        route: "/agent/call-next",
+        route: "/agent/call-next" as const,
         ...input,
         intent: input.intent
-      });
+      };
+      return coordinatedStart(request, reply, coordinated);
     }
     const publicUser = toPublicUser(user);
     const campaign = await getAgentCampaignForDialerAction(pool, input.campaignId, contactRetryPolicy);
