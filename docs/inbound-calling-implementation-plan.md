@@ -241,6 +241,9 @@ considering campaign-level sharding and revising the lock graph.
 C01 now supplies the internal [ordered SQL admission and fenced slot protocol](inbound-admission.md),
 including PostgreSQL race/revalidation checks. Legacy writers are not migrated or
 enabled by this module; C02–C07 and the later runtime/cutover gates remain required.
+C02 adds internal [shared capacity bundles, queue return permits and confirmed release](inbound-call-capacity.md)
+under that gate; actual path migration, FS hard safeguards and enablement remain
+with their owning tasks.
 
 ### 5.2. Agent Slot and Fencing
 

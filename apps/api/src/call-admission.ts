@@ -8,6 +8,7 @@ import {
 } from "./agent-call-slots.js";
 import { lockUserMediaAction } from "./user-media-lock.js";
 import { lockCampaignVoicemail } from "./dashboard/recordings.js";
+import { CallCapacity } from "./call-capacity.js";
 
 // A01 namespace; distinct from user media (72201) and execution (A05/C03).
 export const ADMISSION_LOCK_NAMESPACE = 72_202;
@@ -107,10 +108,17 @@ export interface EligibilityResult {
 
 export class CallAdmission {
   private open = true;
+  readonly capacity: CallCapacity;
   constructor(
     readonly client: pg.PoolClient,
     private readonly resources: Awaited<ReturnType<typeof discoverAdmissionResources>>
-  ) {}
+  ) {
+    this.capacity = new CallCapacity(client, (callId, agentId) => {
+      if (!this.open) throw new AdmissionError("transaction_closed");
+      if (callId) this.assertCall(callId);
+      if (agentId) this.assertAgent(agentId);
+    });
+  }
   close() {
     this.open = false;
   }

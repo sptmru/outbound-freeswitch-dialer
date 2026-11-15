@@ -290,3 +290,13 @@ server-observed lock barriers. Reports `c01-*-report.json` include persisted
 slots/operations, eligibility, fencing and lock-order results. Reconciliation and
 cleanup evidence in these fixtures are simulated SQL; no media/provider or legacy
 path-migration acceptance is implied. Containers/schemas/workers are disposable.
+
+## C02 capacity database tests
+
+The isolated runner and DB-backed API gate include [C02 shared capacity](../inbound-call-capacity.md).
+`call-capacity.integration.test.ts` and `capacity-worker.mjs` use separate OS/PG
+workers, actual product claims and server-observed blocking to exercise all seven
+DB budgets in both commit orders plus rollback. The queue/requeue, lower-limit,
+released-VM, uncertain-command and full-token cleanup cases retain reports
+`c02-*-report.json`. Command sends are simulated and verified after SQL commit;
+no real ESL, browser media, FS safeguards or provider acceptance is implied.
