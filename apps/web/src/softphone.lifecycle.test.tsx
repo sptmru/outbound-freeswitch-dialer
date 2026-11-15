@@ -200,6 +200,48 @@ describe("softphone registration lifecycle", () => {
     unmount();
   });
 
+  it("late state changes from the previous dialog cannot clear a replacement call", async () => {
+    setGetUserMedia(async () => mediaStream());
+    const { result, unmount } = renderHook(() => useSoftphoneRegistration(user));
+    await waitFor(() => expect(mocks.register).toHaveBeenCalled());
+    const makeInvitation = () => {
+      let listener: ((state: string) => void) | undefined;
+      const invitation = {
+        state: "Established",
+        accept: vi.fn().mockResolvedValue(undefined),
+        bye: vi.fn().mockResolvedValue(undefined),
+        reject: vi.fn().mockResolvedValue(undefined),
+        remoteIdentity: { displayName: "Call" },
+        request: { getHeader: () => undefined },
+        stateChange: {
+          addListener: (changed: (state: string) => void) => {
+            listener = changed;
+          }
+        }
+      };
+      return { invitation, emit: (state: string) => listener?.(state) };
+    };
+    const previous = makeInvitation(),
+      current = makeInvitation();
+    await act(async () => {
+      mocks.userAgents[0].options.delegate?.onInvite?.(previous.invitation as never);
+    });
+    act(() => previous.emit("Established"));
+    act(() => previous.emit("Terminated"));
+    await act(async () => {
+      mocks.userAgents[0].options.delegate?.onInvite?.(current.invitation as never);
+    });
+    act(() => current.emit("Established"));
+    expect(result.current.callState).toBe("active");
+    act(() => previous.emit("Terminated"));
+    expect(result.current.callState).toBe("active");
+    await act(async () => {
+      await result.current.hangUpSoftphoneCall();
+    });
+    expect(current.invitation.bye).toHaveBeenCalledTimes(1);
+    unmount();
+  });
+
   it("D01 native Desk uses generation credentials, verifies after REGISTER and leaves its own binding", async () => {
     setGetUserMedia(async () => mediaStream());
     const session = {

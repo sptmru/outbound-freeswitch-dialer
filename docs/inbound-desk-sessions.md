@@ -3,8 +3,8 @@
 Date: 2026-11-15. [Issue #21](https://github.com/sptmru/outbound-freeswitch-dialer/issues/21).
 Original implementation: `feat/d01-desk-sessions`, base `4fc84ef`, merged by the
 owner as `c363470`. The [browser recovery follow-up](inbound-desk-browser-recovery.md)
-records real WSS/WebRTC evidence, the local fix and the remaining terminal
-signaling failure. Its branch is `feat/d01-browser-recovery`; closure is reserved
+records real WSS/WebRTC evidence, transport preservation and confirmed terminal
+recovery. Its current branch is `fix/d01-terminal-recovery`; closure is reserved
 for the owner. The evidence tables below describe the original implementation run.
 
 D01 implements the authenticated lifecycle and its staged browser adapter. It does
@@ -113,8 +113,8 @@ It does not execute the future D/E/G product call-flow matrix.
 
 Commands and final artifact paths/results are recorded below after validation.
 The original handoff left D01 open with tracker #1 unchecked. The follow-up
-above records the current browser evidence and remaining terminal signaling
-failure; the owner decides closure. Neither run includes a push, PR, deployment,
+above records the current browser evidence and terminal signaling recovery;
+the owner decides closure. Neither run includes a push, PR, deployment,
 provider call, production change or hosted CI execution.
 
 ### Recorded checks

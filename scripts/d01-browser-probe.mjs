@@ -1,12 +1,13 @@
 // Real production softphone hook + HTTP lifecycle, Chromium WSS/DTLS-SRTP.
 // Reservations and terminal reconciliation are fixtures, not E/G executors.
-/* global window, AudioContext, MediaStream */
+/* global window, document, AudioContext, MediaStream */
 import assert from "node:assert/strict";
 import { randomUUID, randomBytes } from "node:crypto";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import net from "node:net";
+import { setTimeout as delay } from "node:timers/promises";
 import Fastify from "fastify";
 import cookie from "@fastify/cookie";
 import staticFiles from "@fastify/static";
@@ -62,6 +63,7 @@ if (mode === "render") {
       '<X-PRE-PROCESS cmd="set" data="certs_dir=/a02/certs"/>\n<section name="configuration">'
     )
     .replaceAll("a04-loopback", "internal-webrtc")
+    .replace('name="auth-calls" value="false"', 'name="auth-calls" value="true"')
     .replace("<users>", '<users>\n<X-PRE-PROCESS cmd="include" data="/a02/directory/default/*.xml"/>\n')
     .replace(
       '<param name="sip-port" value="5080"/>',
@@ -101,7 +103,6 @@ const report = {
   commands: [],
   browserErrors: [],
   signaling: [],
-  limitations: [],
   boundary:
     "Real Chromium production useSoftphoneRegistration/DeskSessionController, native HTTP/PostgreSQL, real WSS and bidirectional decoded WebRTC DTLS-SRTP/UDP PCMU; synthetic audio, seeded reservation states, accelerated DB expiry, fixture terminal cleanup; no provider/production or future E/G executors"
 };
@@ -196,9 +197,33 @@ async function media(page) {
   );
   assert.equal(audio.dtlsState, "connected");
   assert.equal(audio.connectionState, "connected");
-  const offset = customer.received.length;
-  await until(() => customer.received.length > offset + 4000, "far end RTP", 5000);
-  return { browser: audio, customer: assertTone(customer.received.slice(offset + 1600, offset + 4000), 880) };
+  let offset = customer.received.length;
+  const started = Date.now();
+  let customerTone,
+    windowRetries = 0,
+    lastError;
+  // As on the browser side, wait for a fresh decoded tone window. A packet
+  // discontinuity can spoil one concatenated window; keep the original tone
+  // amplitude/noise thresholds and fail if none passes within five seconds.
+  await until(
+    () => {
+      if (customer.received.length <= offset + 4000) return false;
+      try {
+        customerTone = assertTone(customer.received.slice(offset + 1600, offset + 4000), 880);
+        return true;
+      } catch (error) {
+        lastError = error.message;
+        windowRetries++;
+        offset = customer.received.length;
+        return false;
+      }
+    },
+    "far end decoded 880 Hz within 5s",
+    5000
+  ).catch((error) => {
+    throw new Error(`${error.message}; ${lastError ?? "no fresh RTP"}`);
+  });
+  return { browser: audio, customer: { ...customerTone, windowRetries, settleMs: Date.now() - started } };
 }
 async function seedTransferReservation(config) {
   // Actual source/recipient identities, slots, transfer row and overlap permits;
@@ -395,6 +420,7 @@ try {
       };
     });
     const page = await context.newPage();
+    const traceStart = report.signaling.length;
     page.on("websocket", (ws) => {
       for (const [event, direction] of [
         ["framesent", "sent"],
@@ -405,7 +431,8 @@ try {
           report.signaling.push({
             direction,
             line: text.split("\r\n")[0],
-            cseq: text.match(/\r\nCSeq: ([^\r]+)/i)?.[1]
+            cseq: text.match(/\r\nCSeq: ([^\r]+)/i)?.[1],
+            callId: text.match(/\r\nCall-ID: ([^\r]+)/i)?.[1]
           });
         });
     });
@@ -567,28 +594,125 @@ try {
         cases.at(-1)
       );
     }
+    if (direction === "inbound" && process.env.D01_BROWSER_SMOKE !== "1") {
+      const before = report.signaling.filter(
+        (e) => e.direction === "sent" && e.callId && / INVITE$/.test(e.cseq ?? "")
+      ).length;
+      // Hold signaling past SIP.js's 32-second transaction timeout; RTP stays live.
+      // Discard buffered requests by closing this flow before allowing reconnect.
+      for (const socket of sockets) socket.pause();
+      await until(
+        () =>
+          report.signaling.filter((e) => e.direction === "sent" && / INVITE$/.test(e.cseq ?? "")).length >
+          before,
+        "re-INVITE emitted into paused WSS flow",
+        10000
+      );
+      const started = Date.now();
+      const during = [];
+      while (Date.now() - started < 35000) {
+        await delay(5000);
+        assert.equal(
+          await page.evaluate(() => window.d01.callState),
+          "active",
+          "no termination on missing SIP responses"
+        );
+        during.push(await media(page));
+      }
+      for (const socket of sockets) socket.destroy();
+      await page.waitForFunction(() => window.d01?.registered === false);
+      await page.waitForFunction(() => window.d01?.registered === true);
+      const recovered = await media(page);
+      await pass("inbound: signaling timeout preserves active peer and decoded media", {
+        heldMs: Date.now() - started,
+        during,
+        recovered
+      });
+    }
+    const dialog = report.signaling
+      .slice(traceStart)
+      .find((e) => e.direction === "received" && e.line.startsWith("INVITE "))?.callId;
+    assert.ok(dialog, "real browser dialog correlation");
+    const terminalStart = report.signaling.length;
+    const terminalBegan = Date.now();
+    const terminalSlots = (
+      await f.pool.query("select * from agent_call_slots where call_id=$1 order by agent_id", [seeded.callId])
+    ).rows;
+    // Also prove remote termination while WSS is down, then recovery on reconnect.
+    if (direction === "transfer") {
+      blocked = true;
+      for (const socket of sockets) socket.destroy();
+      await page.waitForFunction(() => window.d01?.registered === false);
+    }
     await command(`uuid_kill ${seeded.agentUuid} NORMAL_CLEARING`);
     await command(`uuid_kill ${seeded.customerUuid} NORMAL_CLEARING`);
     if (seeded.sourceUuid) await command(`uuid_kill ${seeded.sourceUuid} NORMAL_CLEARING`);
-    try {
-      await page.waitForFunction(() => window.d01?.callState === "none", null, { timeout: 3000 });
-    } catch {
-      report.limitations.push({
-        direction,
-        check: "remote BYE after WSS reconnect",
-        status: "failed",
-        observed:
-          "FreeSWITCH channels terminated, but browser did not receive BYE and retained its session; explicit browser hangup used for fixture teardown"
-      });
-      await page.evaluate(() => window.d01.hangUpSoftphoneCall());
-      await page.waitForFunction(() => window.d01?.callState === "none");
+    if (direction === "transfer") {
+      assert.equal(
+        await page.evaluate(() => window.d01.callState),
+        "active",
+        "no terminal inference while disconnected"
+      );
+      blocked = false;
     }
+    // An earlier SIP.js INVITE transaction can remain pending for 32 seconds
+    // after a lost flow. Wait for its deadline plus the next 5-second probe.
+    await page.waitForFunction(() => window.d01?.callState === "none", null, { timeout: 45000 });
+    const evidence = report.signaling
+      .slice(terminalStart)
+      .filter(
+        (e) =>
+          e.callId === dialog &&
+          e.direction === "received" &&
+          (e.line.startsWith("BYE ") || (e.line.startsWith("SIP/2.0 481 ") && / INVITE$/.test(e.cseq ?? "")))
+      );
+    assert.ok(evidence.length, "terminal evidence from this exact SIP dialog; no forced browser hangup");
+    const closed = await page.evaluate(() => ({
+      connection: window.d01Peers.at(-1).connectionState,
+      microphone: window.d01Peers
+        .at(-1)
+        .getSenders()
+        .every((s) => !s.track || s.track.readyState === "ended"),
+      remoteAudioElements: document.querySelectorAll("audio").length
+    }));
+    assert.equal(closed.connection, "closed");
+    assert.equal(closed.microphone, true);
+    assert.equal(closed.remoteAudioElements, 0);
+    assert.deepEqual(
+      (
+        await f.pool.query("select * from agent_call_slots where call_id=$1 order by agent_id", [
+          seeded.callId
+        ])
+      ).rows,
+      terminalSlots,
+      "browser terminal cleanup never releases server reservations"
+    );
+    await pass(`${direction}: confirmed remote termination closes browser media`, {
+      dialog,
+      evidence,
+      closed,
+      confirmationMs: Date.now() - terminalBegan,
+      endedWhileDisconnected: direction === "transfer"
+    });
     await f.pool.query("update call_legs set ended_at=clock_timestamp(),state='ended' where call_id=$1", [
       seeded.callId
     ]);
     await f.pool.query("update calls set state='completed',ended_at=clock_timestamp() where id=$1", [
       seeded.callId
     ]);
+    for (const uuid of [
+      seeded.agentUuid,
+      seeded.customerUuid,
+      ...(seeded.sourceUuid ? [seeded.sourceUuid] : [])
+    ])
+      await until(
+        async () => (await command(`uuid_exists ${uuid}`)) === "false",
+        "fixture terminal leg absence"
+      );
+    await f.pool.query(
+      "update call_capacity_reservations set state='released',released_at=clock_timestamp() where call_id=$1 and state<>'released'",
+      [seeded.callId]
+    );
     await f.pool.query(
       "update agent_call_slots set state='free',call_id=null,participant_id=null,reservation_id=null,reconciliation_required=false where call_id=$1",
       [seeded.callId]
@@ -619,8 +743,16 @@ try {
       .n,
     0
   );
-  report.status = report.limitations.length ? "matrix_passed_with_failed_terminal_check" : "passed";
-  if (report.limitations.length) process.exitCode = 1;
+  assert.equal(
+    (await f.pool.query("select count(*)::int n from agent_call_slots where state<>'free'")).rows[0].n,
+    0
+  );
+  assert.equal(
+    (await f.pool.query("select count(*)::int n from call_capacity_reservations where state<>'released'"))
+      .rows[0].n,
+    0
+  );
+  report.status = "passed";
 } catch (error) {
   report.status = "failed";
   report.error = error.stack;

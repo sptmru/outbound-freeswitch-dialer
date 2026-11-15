@@ -717,7 +717,7 @@ activate a provider DID.
 D01 implementation update: [controlling Desk session lifecycle](inbound-desk-sessions.md)
 records the implemented HTTP/provisioning/verification protocol and local evidence.
 The [browser recovery follow-up](inbound-desk-browser-recovery.md) adds a real
-WSS/WebRTC occupied-state matrix and records a remaining remote-BYE failure.
+WSS/WebRTC occupied-state matrix and confirmed SIP-dialog terminal recovery.
 Native enablement remains I05.
 
 A04's isolated [Desk/SIP binding prototype and selected protocol](inbound-desk-binding-prototype.md)

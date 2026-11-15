@@ -39,7 +39,7 @@ sha256sum "$ROOT_DIR"/scripts/d01-*.mjs "$ROOT_DIR"/scripts/a0{4,5}-*.mjs "$0" \
   "$ROOT_DIR"/apps/api/src/desk-sessions*.ts "$ROOT_DIR"/apps/api/src/dashboard/desk-sessions.ts \
   "$ROOT_DIR"/apps/api/src/freeswitch/provisioning.ts "$ROOT_DIR"/apps/api/src/call-admission.ts \
   "$ROOT_DIR"/apps/api/src/eligibility.ts "$ROOT_DIR"/packages/shared/src/*.ts \
-  "$ROOT_DIR"/apps/web/src/{softphone,desk-session,api,browser-media,audio-setup}.ts \
+  "$ROOT_DIR"/apps/web/src/{softphone,desk-session,api,browser-media,audio-setup,sip-dialog-recovery}.ts \
   "$ROOT_DIR"/scripts/fixtures/d01-browser/* \
   "$ROOT_DIR"/apps/api/db/migrations/*.sql "$ROOT_DIR"/tests/fixtures/inbound/cleanup.mjs > "$RUN_DIR/source-sha256.txt"
 docker run -d --name "$NET_CONTAINER" --network none --memory 32m --pids-limit 8 \

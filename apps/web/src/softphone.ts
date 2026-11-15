@@ -1,4 +1,5 @@
 import { DeskSessionController, type DeskControl } from "./desk-session";
+import { watchRecoveredDialog } from "./sip-dialog-recovery";
 import type { DeskSessionSnapshot } from "./types";
 import { useEffect, useRef, useState } from "react";
 import { Invitation, Registerer, RegistererState, SessionState, UserAgent } from "sip.js";
@@ -406,6 +407,8 @@ export function useSoftphoneRegistration(
     let recoveringTransport = false;
     let reconnectAttempts = 0;
     let registrationDetail = "";
+    let dialogRecovery: ReturnType<typeof watchRecoveredDialog> | null = null;
+    let recoveryInvitation: Invitation | null = null;
     const isCurrent = () => !cancelled && registrationGenerationRef.current === generation;
     const clearRegistrationTimer = () => {
       if (registrationTimer) {
@@ -416,6 +419,7 @@ export function useSoftphoneRegistration(
     const stopCurrentRegistration = async () => {
       if (registrationCleanupStarted) return;
       registrationCleanupStarted = true;
+      dialogRecovery?.stop();
       if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
       clearRegistrationTimer();
       const currentRegisterer = registerer;
@@ -467,6 +471,7 @@ export function useSoftphoneRegistration(
       clearRegistrationTimer();
       deskController?.setRegistered(true);
       void deskController?.heartbeat().catch(() => {});
+      dialogRecovery?.connected();
       setRuntime((current) => ({
         ...current,
         registered: true,
@@ -479,6 +484,19 @@ export function useSoftphoneRegistration(
     };
     const recoverTransport = (error: unknown) => {
       if (!isCurrent() || registrationCleanupStarted) return;
+      const invitation = invitationRef.current;
+      if (invitation && recoveryInvitation !== invitation) {
+        dialogRecovery?.stop();
+        recoveryInvitation = invitation;
+        dialogRecovery = watchRecoveredDialog(
+          invitation,
+          () => isCurrent() && invitationRef.current === invitation,
+          () => {
+            void stopInvitation(invitation);
+          }
+        );
+      }
+      dialogRecovery?.disconnected();
       clearRegistrationTimer();
       deskController?.setRegistered(false);
       void deskController?.heartbeat().catch(() => {});
@@ -605,8 +623,9 @@ export function useSoftphoneRegistration(
 
               const incomingCallLabel = invitation.remoteIdentity.displayName || "Outbound Dialer Test";
               invitationRef.current = invitation;
+              const ownsInvitation = () => isCurrent() && invitationRef.current === invitation;
               invitation.stateChange.addListener((state) => {
-                if (!isCurrent()) {
+                if (!ownsInvitation()) {
                   return;
                 }
                 if (state === SessionState.Established) {
@@ -618,10 +637,15 @@ export function useSoftphoneRegistration(
                     error: null,
                     incomingCallLabel
                   }));
-                  void attachRemoteAudio(invitation, isCurrent);
+                  void attachRemoteAudio(invitation, ownsInvitation);
                   startBrowserMediaTelemetry(invitation);
                 }
                 if (state === SessionState.Terminated) {
+                  if (recoveryInvitation === invitation) {
+                    dialogRecovery?.stop();
+                    dialogRecovery = null;
+                    recoveryInvitation = null;
+                  }
                   finalizeBrowserMediaTelemetry();
                   invitationRef.current = null;
                   clearRemoteAudio();
@@ -631,8 +655,8 @@ export function useSoftphoneRegistration(
                 }
               });
 
-              void acceptInvitation(invitation, incomingCallLabel, isCurrent).catch((error: unknown) => {
-                if (!isCurrent()) {
+              void acceptInvitation(invitation, incomingCallLabel, ownsInvitation).catch((error: unknown) => {
+                if (!ownsInvitation()) {
                   void invitation.reject().catch(() => undefined);
                   return;
                 }
