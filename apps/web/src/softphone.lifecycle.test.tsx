@@ -10,10 +10,15 @@ const mocks = vi.hoisted(() => ({
   register: vi.fn(),
   registerers: [] as Array<{ stateListener?: (state: string) => void }>,
   start: vi.fn(),
+  reconnect: vi.fn(),
   stop: vi.fn(),
   submitTelemetry: vi.fn(),
   unregister: vi.fn(),
-  userAgents: [] as Array<{ options: { delegate?: { onInvite?: (invitation: never) => void } } }>
+  userAgents: [] as Array<{
+    options: {
+      delegate?: { onInvite?: (invitation: never) => void; onDisconnect?: (error?: Error) => void };
+    };
+  }>
 }));
 
 vi.mock("./api", () => ({
@@ -35,7 +40,9 @@ vi.mock("sip.js", () => {
       return { user: "agent" };
     }
 
-    options: { delegate?: { onInvite?: (invitation: never) => void } };
+    options: {
+      delegate?: { onInvite?: (invitation: never) => void; onDisconnect?: (error?: Error) => void };
+    };
 
     constructor(options: { delegate?: { onInvite?: (invitation: never) => void } }) {
       this.options = options;
@@ -44,6 +51,10 @@ vi.mock("sip.js", () => {
 
     start() {
       return mocks.start();
+    }
+
+    reconnect() {
+      return mocks.reconnect();
     }
 
     stop() {
@@ -93,6 +104,7 @@ describe("softphone registration lifecycle", () => {
     mocks.registerers.length = 0;
     mocks.userAgents.length = 0;
     mocks.start.mockResolvedValue(undefined);
+    mocks.reconnect.mockResolvedValue(undefined);
     mocks.stop.mockResolvedValue(undefined);
     mocks.register.mockResolvedValue(undefined);
     mocks.unregister.mockResolvedValue(undefined);
@@ -100,7 +112,92 @@ describe("softphone registration lifecycle", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
+  });
+
+  it("preserves an established call on transport loss and confirms a refresh without a new Registered event", async () => {
+    setGetUserMedia(async () => mediaStream());
+    const { result, unmount } = renderHook(() => useSoftphoneRegistration(user));
+    await waitFor(() => expect(mocks.register).toHaveBeenCalledTimes(1));
+    act(() => mocks.registerers[0].stateListener?.("Registered"));
+    let changed: ((state: string) => void) | undefined;
+    const invitation = {
+      state: "Established",
+      invite: vi.fn().mockResolvedValue(undefined),
+      accept: vi.fn().mockResolvedValue(undefined),
+      bye: vi.fn().mockResolvedValue(undefined),
+      reject: vi.fn().mockResolvedValue(undefined),
+      remoteIdentity: { displayName: "Existing call" },
+      request: { getHeader: () => undefined },
+      stateChange: {
+        addListener: (listener: (state: string) => void) => {
+          changed = listener;
+        }
+      }
+    };
+    await act(async () => {
+      mocks.userAgents[0].options.delegate?.onInvite?.(invitation as never);
+    });
+    act(() => changed?.("Established"));
+    expect(result.current.callState).toBe("active");
+    vi.useFakeTimers();
+    act(() => mocks.userAgents[0].options.delegate?.onDisconnect?.(new Error("WSS lost")));
+    expect(result.current.registered).toBe(false);
+    expect(result.current.callState).toBe("active");
+    expect(mocks.stop).not.toHaveBeenCalled();
+    expect(invitation.bye).not.toHaveBeenCalled();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+    expect(mocks.reconnect).toHaveBeenCalledTimes(1);
+    const refreshed = mocks.register.mock.calls[1][0] as { requestDelegate: { onAccept: () => void } };
+    act(() => refreshed.requestDelegate.onAccept());
+    expect(result.current.registered).toBe(true);
+    expect(result.current.callState).toBe("active");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(12000);
+    });
+    expect(mocks.reconnect).toHaveBeenCalledTimes(1);
+    unmount();
+    const calls = mocks.register.mock.calls.length;
+    act(() => refreshed.requestDelegate.onAccept());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(20000);
+    });
+    expect(mocks.register).toHaveBeenCalledTimes(calls);
+    expect(invitation.bye).toHaveBeenCalledTimes(1);
+  });
+
+  it("bounds failed reconnect attempts and preserves media after exhaustion and registration failure", async () => {
+    setGetUserMedia(async () => mediaStream());
+    const { result, unmount } = renderHook(() => useSoftphoneRegistration(user));
+    await waitFor(() => expect(mocks.register).toHaveBeenCalledTimes(1));
+    const invitation = {
+      state: "Established",
+      invite: vi.fn().mockResolvedValue(undefined),
+      accept: vi.fn().mockResolvedValue(undefined),
+      bye: vi.fn().mockResolvedValue(undefined),
+      reject: vi.fn().mockResolvedValue(undefined),
+      remoteIdentity: { displayName: "Existing call" },
+      request: { getHeader: () => undefined },
+      stateChange: { addListener: vi.fn() }
+    };
+    await act(async () => {
+      mocks.userAgents[0].options.delegate?.onInvite?.(invitation as never);
+    });
+    vi.useFakeTimers();
+    mocks.reconnect.mockRejectedValue(new Error("offline"));
+    act(() => mocks.userAgents[0].options.delegate?.onDisconnect?.(new Error("WSS lost")));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60000);
+    });
+    expect(mocks.reconnect).toHaveBeenCalledTimes(5);
+    expect(result.current.error).toBe("Reconnect attempts exhausted");
+    act(() => mocks.registerers[0].stateListener?.("Terminated"));
+    expect(invitation.bye).not.toHaveBeenCalled();
+    expect(mocks.stop).not.toHaveBeenCalled();
+    unmount();
   });
 
   it("D01 native Desk uses generation credentials, verifies after REGISTER and leaves its own binding", async () => {
@@ -172,6 +269,21 @@ describe("softphone registration lifecycle", () => {
       },
       video: false
     });
+    unmount();
+  });
+
+  it("keeps a Registered event that arrives before the initial register promise resolves", async () => {
+    setGetUserMedia(async () => mediaStream());
+    const request = deferred<void>();
+    mocks.register.mockReturnValue(request.promise);
+    const { result, unmount } = renderHook(() => useSoftphoneRegistration(user));
+    await waitFor(() => expect(mocks.register).toHaveBeenCalled());
+    act(() => mocks.registerers[0].stateListener?.("Registered"));
+    await act(async () => {
+      request.resolve();
+      await request.promise;
+    });
+    expect(result.current.registered).toBe(true);
     unmount();
   });
 

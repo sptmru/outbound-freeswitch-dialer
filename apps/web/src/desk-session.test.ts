@@ -27,6 +27,29 @@ const deferred = <T>() => {
   return { promise, resolve };
 };
 describe("D01 browser Desk lifecycle (HTTP/SIP registration simulated)", () => {
+  it("transport loss immediately clears local readiness and fences a previously successful heartbeat", async () => {
+    const gate = deferred<DeskSessionResponse>();
+    const changed = vi.fn();
+    const api = {
+      create: vi.fn().mockResolvedValue(created),
+      update: vi.fn().mockReturnValue(gate.promise),
+      leave: vi.fn()
+    };
+    const controller = new DeskSessionController({ campaignId: null, expectedRevision: null }, changed, api);
+    await controller.start();
+    controller.setRegistered(true);
+    const heartbeat = controller.heartbeat();
+    await vi.waitFor(() => expect(api.update).toHaveBeenCalled());
+    controller.setRegistered(false);
+    expect(changed).toHaveBeenLastCalledWith(
+      expect.objectContaining({ ready: false, endpointVerified: false })
+    );
+    gate.resolve({ revision: "2", session: { ...s, revision: "2", ready: true, endpointVerified: true } });
+    await heartbeat;
+    expect(changed).toHaveBeenLastCalledWith(
+      expect.objectContaining({ ready: false, endpointVerified: false })
+    );
+  });
   it("enters unready, serializes campaign/registration heartbeats and leaves only its generation", async () => {
     const changed = vi.fn();
     const api = {

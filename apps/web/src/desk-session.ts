@@ -55,6 +55,8 @@ export class DeskSessionController {
   }
   setRegistered(registered: boolean) {
     this.registered = registered;
+    if (!registered && !this.closed && this.session)
+      this.changed({ ...this.session, ready: false, endpointVerified: false });
   }
   selectCampaign(id: string | null) {
     this.campaignId = id;
@@ -100,7 +102,7 @@ export class DeskSessionController {
     this.session = result.session;
     if (!this.closed)
       this.changed(
-        this.session && new Date(this.session.expiresAt).getTime() <= Date.now()
+        this.session && (!this.registered || new Date(this.session.expiresAt).getTime() <= Date.now())
           ? { ...this.session, ready: false, endpointVerified: false }
           : this.session
       );

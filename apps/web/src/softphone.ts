@@ -402,6 +402,10 @@ export function useSoftphoneRegistration(
     let registrationTimer: number | null = null;
     let userAgent: UserAgent | null = null;
     let registrationCleanupStarted = false;
+    let reconnectTimer: number | null = null;
+    let recoveringTransport = false;
+    let reconnectAttempts = 0;
+    let registrationDetail = "";
     const isCurrent = () => !cancelled && registrationGenerationRef.current === generation;
     const clearRegistrationTimer = () => {
       if (registrationTimer) {
@@ -412,6 +416,7 @@ export function useSoftphoneRegistration(
     const stopCurrentRegistration = async () => {
       if (registrationCleanupStarted) return;
       registrationCleanupStarted = true;
+      if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
       clearRegistrationTimer();
       const currentRegisterer = registerer;
       const currentUserAgent = userAgent;
@@ -436,6 +441,13 @@ export function useSoftphoneRegistration(
         return;
       }
       clearRegistrationTimer();
+      deskController?.setRegistered(false);
+      void deskController?.heartbeat().catch(() => {});
+      // Registration is signaling evidence, not authority to terminate media.
+      if (invitationRef.current) {
+        setRuntime((current) => ({ ...current, registered: false, state: "failed", detail, error }));
+        return;
+      }
       invitationRef.current = null;
       clearRemoteAudio();
       void stopCurrentRegistration();
@@ -445,6 +457,70 @@ export function useSoftphoneRegistration(
         }
         return toRegistrationFailureRuntime(current, detail, error);
       });
+    };
+    const confirmRegistration = () => {
+      if (!isCurrent() || registrationCleanupStarted) return;
+      recoveringTransport = false;
+      reconnectAttempts = 0;
+      if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+      clearRegistrationTimer();
+      deskController?.setRegistered(true);
+      void deskController?.heartbeat().catch(() => {});
+      setRuntime((current) => ({
+        ...current,
+        registered: true,
+        microphoneAllowed: true,
+        state: "registered",
+        label: "Softphone registered",
+        detail: registrationDetail,
+        error: null
+      }));
+    };
+    const recoverTransport = (error: unknown) => {
+      if (!isCurrent() || registrationCleanupStarted) return;
+      clearRegistrationTimer();
+      deskController?.setRegistered(false);
+      void deskController?.heartbeat().catch(() => {});
+      setRuntime((current) => ({
+        ...current,
+        registered: false,
+        state: "registering",
+        detail: "Reconnecting call signaling",
+        error: error instanceof Error ? error.message : "SIP transport disconnected"
+      }));
+      if (recoveringTransport) return;
+      recoveringTransport = true;
+      reconnectAttempts = 0;
+      const retry = () => {
+        if (!isCurrent() || registrationCleanupStarted || !recoveringTransport) return;
+        if (++reconnectAttempts > 5) {
+          recoveringTransport = false;
+          setRuntime((current) => ({
+            ...current,
+            registered: false,
+            state: "failed",
+            detail: "Call signaling could not reconnect",
+            error: "Reconnect attempts exhausted"
+          }));
+          return;
+        }
+        reconnectTimer = window.setTimeout(async () => {
+          reconnectTimer = null;
+          if (!isCurrent() || registrationCleanupStarted || !recoveringTransport) return;
+          try {
+            await userAgent?.reconnect();
+            if (!isCurrent() || registrationCleanupStarted || !recoveringTransport) return;
+            // SIP.js may remain Registered across transport loss and therefore
+            // omit a stateChange on refresh. The accepted response also confirms it.
+            await registerer?.register({ requestDelegate: { onAccept: confirmRegistration } });
+          } catch {
+            // Transport errors can also invoke onDisconnect; this loop owns retries.
+          }
+          if (isCurrent() && recoveringTransport) retry();
+        }, 2000);
+      };
+      retry();
     };
 
     async function register() {
@@ -503,6 +579,7 @@ export function useSoftphoneRegistration(
           return;
         }
         iceServersRef.current = provisioning.iceServers;
+        registrationDetail = `${provisioning.sipUsername}@${provisioning.domain}`;
         const uri = UserAgent.makeURI(provisioning.sipUri);
         if (!uri) {
           throw new Error("Invalid SIP provisioning URI");
@@ -571,6 +648,10 @@ export function useSoftphoneRegistration(
               if (!isCurrent()) {
                 return;
               }
+              if (deskController || invitationRef.current) {
+                recoverTransport(error);
+                return;
+              }
               failRegistration(
                 "SIP transport disconnected",
                 error instanceof Error ? error.message : "WebSocket connection to FreeSWITCH closed",
@@ -601,21 +682,12 @@ export function useSoftphoneRegistration(
 
           deskController?.setRegistered(state === RegistererState.Registered);
           if (state === RegistererState.Registered) {
-            void deskController?.heartbeat().catch(() => {});
-            clearRegistrationTimer();
-            setRuntime((current) => ({
-              ...current,
-              registered: true,
-              microphoneAllowed: true,
-              state: "registered",
-              label: "Softphone registered",
-              detail: `${provisioning.sipUsername}@${provisioning.domain}`,
-              error: null
-            }));
+            confirmRegistration();
             return;
           }
 
           if (state === RegistererState.Unregistered || state === RegistererState.Terminated) {
+            if (recoveringTransport) return;
             if (state === RegistererState.Terminated) {
               failRegistration(
                 "SIP registration terminated",
@@ -687,7 +759,7 @@ export function useSoftphoneRegistration(
 
         setRuntime((current) => ({
           ...current,
-          registered: false,
+          registered: current.state === "registered" && current.registered,
           microphoneAllowed: true,
           state: current.state === "registered" ? current.state : "registering",
           label: current.state === "registered" ? current.label : "Registration sent",
@@ -699,6 +771,13 @@ export function useSoftphoneRegistration(
         if (!isCurrent()) {
           mediaStream?.getTracks().forEach((track) => track.stop());
           await stopSoftphoneRegistration(registerer, userAgent);
+          return;
+        }
+        if (invitationRef.current) {
+          failRegistration(
+            "SIP registration failed",
+            error instanceof Error ? error.message : "Registration failed"
+          );
           return;
         }
         clearRegistrationTimer();

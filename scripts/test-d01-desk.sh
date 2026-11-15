@@ -9,6 +9,12 @@ FS_CONTAINER="outbound-d01-fs-$(basename "$RUN_DIR")"
 PG_CONTAINER="outbound-d01-pg-$(basename "$RUN_DIR")"
 NET_CONTAINER="outbound-d01-net-$(basename "$RUN_DIR")"
 NODE_BIN="$(command -v node)"
+PROBE="$ROOT_DIR/scripts/d01-desk-probe.mjs"
+PROBE_TIMEOUT=300
+if [[ "${1:-}" == "--browser" ]]; then
+  PROBE="$ROOT_DIR/scripts/d01-browser-probe.mjs"
+  PROBE_TIMEOUT=600
+fi
 cleanup() {
   result=$?
   trap - EXIT
@@ -28,11 +34,13 @@ chmod 777 "$RUN_DIR/socket"
 cd "$ROOT_DIR"
 npm --workspace @outbound-dialer/shared run build
 node node_modules/typescript/bin/tsc -p apps/api/tsconfig.test.json
-"$NODE_BIN" "$ROOT_DIR/scripts/d01-desk-probe.mjs" render "$RUN_DIR"
+"$NODE_BIN" "$PROBE" render "$RUN_DIR"
 sha256sum "$ROOT_DIR"/scripts/d01-*.mjs "$ROOT_DIR"/scripts/a0{4,5}-*.mjs "$0" \
   "$ROOT_DIR"/apps/api/src/desk-sessions*.ts "$ROOT_DIR"/apps/api/src/dashboard/desk-sessions.ts \
   "$ROOT_DIR"/apps/api/src/freeswitch/provisioning.ts "$ROOT_DIR"/apps/api/src/call-admission.ts \
   "$ROOT_DIR"/apps/api/src/eligibility.ts "$ROOT_DIR"/packages/shared/src/*.ts \
+  "$ROOT_DIR"/apps/web/src/{softphone,desk-session,api,browser-media,audio-setup}.ts \
+  "$ROOT_DIR"/scripts/fixtures/d01-browser/* \
   "$ROOT_DIR"/apps/api/db/migrations/*.sql "$ROOT_DIR"/tests/fixtures/inbound/cleanup.mjs > "$RUN_DIR/source-sha256.txt"
 docker run -d --name "$NET_CONTAINER" --network none --memory 32m --pids-limit 8 \
   --cap-drop ALL --entrypoint sleep "$IMAGE" 3600 > "$RUN_DIR/net-id.txt"
@@ -50,4 +58,4 @@ docker run -d --name "$FS_CONTAINER" --network "container:$NET_CONTAINER" --memo
   -nonat -nf -conf /a02 -log /a02 -db /a02 -run /a02 > "$RUN_DIR/fs-id.txt"
 docker inspect "$FS_CONTAINER" "$PG_CONTAINER" "$NET_CONTAINER" --format '{{.Name}} {{json .HostConfig.NetworkMode}} {{json .HostConfig.PortBindings}}' > "$RUN_DIR/isolation.txt"
 PID="$(docker inspect "$NET_CONTAINER" --format '{{.State.Pid}}')"
-timeout 300 nsenter --net="/proc/$PID/ns/net" "$NODE_BIN" "$ROOT_DIR/scripts/d01-desk-probe.mjs" probe "$RUN_DIR"
+timeout "$PROBE_TIMEOUT" nsenter --net="/proc/$PID/ns/net" "$NODE_BIN" "$PROBE" probe "$RUN_DIR"

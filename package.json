@@ -35,7 +35,8 @@
     "test:executor:freeswitch": "bash scripts/test-c03-executor.sh",
     "test:cleanup:freeswitch": "bash scripts/test-c06-cleanup.sh",
     "test:supervisor:freeswitch": "bash scripts/test-c07-supervisor.sh",
-    "test:desk:freeswitch": "bash scripts/test-d01-desk.sh"
+    "test:desk:freeswitch": "bash scripts/test-d01-desk.sh",
+    "test:desk:browser": "bash scripts/test-d01-desk.sh --browser"
   },
   "engines": {
     "node": ">=22"
