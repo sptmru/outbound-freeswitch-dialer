@@ -98,7 +98,7 @@ function add(
 }
 
 const adminErrors = [400, 401, 403, 500];
-const agentErrors = [400, 401, 500];
+const agentErrors = [400, 401, 403, 500];
 const callParams = params("callId", "Call identifier");
 const campaignParams = params("campaignId", "Campaign identifier");
 const contactParams = params("contactId", "Contact identifier");
@@ -661,7 +661,7 @@ add(
   "POST",
   "/agent/manual-dial/start",
   "Start manual call",
-  "Starts an authorized manual outbound call and returns refreshed Agent Desk state.",
+  "Starts an authorized legacy manual outbound call and returns refreshed Agent Desk state. V1 intent returns 409 coordination_unavailable until shared admission is integrated; native work rejects ambiguous legacy requests with legacy_initiator_required.",
   {
     body: ref("StartManualCallRequest"),
     success: ref("AgentDeskResponse"),
@@ -672,7 +672,7 @@ add(
   "POST",
   "/agent/call-next",
   "Call next lead",
-  "Selects and starts the next callable lead in the requested campaign.",
+  "Selects and starts the next callable lead in the legacy outbound campaign. V1 manual/automatic intent returns 409 coordination_unavailable until C04/C05; missing intent never authorizes native offer dismissal.",
   {
     body: ref("StartNextCallRequest"),
     success: ref("AgentDeskResponse"),
@@ -683,7 +683,7 @@ add(
   "POST",
   "/agent/leads/:contactId/call",
   "Call selected lead",
-  "Starts a call to a specific contact when it is eligible.",
+  "Starts a legacy call to an eligible contact. V1 intent returns 409 coordination_unavailable until shared admission is integrated; native work rejects ambiguous legacy requests with legacy_initiator_required.",
   {
     params: contactParams,
     body: ref("StartLeadCallRequest"),
@@ -990,6 +990,8 @@ export const manualOpenApiSchemas: JsonSchema[] = [
     ...object(
       {
         message: { type: "string", description: "Human-readable error message" },
+        code: ref("CoordinationErrorCode"),
+        revision: { anyOf: [{ type: "string" }, { type: "null" }] },
         issues: {
           type: "array",
           description: "Structured Zod validation issues, present for validation failures",

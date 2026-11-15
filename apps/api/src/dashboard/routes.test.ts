@@ -2035,7 +2035,7 @@ describe("dashboard route helpers", () => {
           url,
           headers: { authorization: `Bearer ${token}` },
           payload: {
-            campaignId: selectedCampaignId,
+            ...(!url.includes("/leads/") ? { campaignId: selectedCampaignId } : {}),
             ...(url.includes("manual-dial") ? { phoneNumber: "+14155550100" } : {})
           }
         });

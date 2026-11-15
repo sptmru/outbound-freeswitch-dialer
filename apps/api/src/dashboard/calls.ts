@@ -165,6 +165,7 @@ type CreateDialerCallFailureReason =
   | "maintenance"
   | "no_callable_contacts"
   | "session_revoked"
+  | "legacy_initiator_required"
   | "supervisor_session";
 
 type CreateDialerCallResult =
@@ -302,6 +303,25 @@ export async function createDialerCall(
     if (agentState.availability_status === "paused") {
       await client.query("rollback");
       return rejectCallStart("agent_paused");
+    }
+    // Compatibility boundary only, not C01 admission. Native writers must remain
+    // disabled until every start path uses the common gate. Never interpret an
+    // ambiguous legacy request as permission to dismiss or bypass native work.
+    const coordinatedWork = await client.query(
+      `select 1 where
+        exists(select 1 from agent_desk_sessions where agent_id=$1 and revoked_at is null)
+        or exists(select 1 from call_offers where agent_id=$1 and state='pending')
+        or exists(select 1 from agent_auto_next_intents where agent_id=$1 and closed_at is null)
+        or exists(select 1 from call_transfers where recipient_agent_id=$1 and closed_at is null)
+        or exists(select 1 from call_participants where agent_id=$1 and origin='native' and left_at is null)
+        or exists(select 1 from agent_call_slots s left join calls c on c.id=s.call_id
+          where s.agent_id=$1 and s.state<>'free' and (s.generation>1 or c.direction='inbound'
+            or exists(select 1 from call_participants p where p.call_id=s.call_id and p.origin='native')))`,
+      [input.agentId]
+    );
+    if (coordinatedWork.rowCount) {
+      await client.query("rollback");
+      return rejectCallStart("legacy_initiator_required");
     }
     effectiveCallerId = resolveOutboundCallerId(agentState.caller_id, config.SIP_TRUNK_CALLER_ID);
     const activeCall = await client.query<{ id: string }>(
@@ -504,6 +524,9 @@ export async function createDialerCall(
 }
 
 export function createDialerCallFailureMessage(reason: CreateDialerCallFailureReason): string {
+  if (reason === "legacy_initiator_required") {
+    return "Refresh Agent Desk before starting a call; coordinated calling is unavailable in this version";
+  }
   if (reason === "active_call") {
     return "An active call is already in progress";
   }

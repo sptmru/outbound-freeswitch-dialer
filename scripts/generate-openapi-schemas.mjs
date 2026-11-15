@@ -9,7 +9,7 @@ const outputPath = resolve(repoRoot, "apps/api/src/generated/shared-openapi-sche
 const checkOnly = process.argv.includes("--check");
 
 const generated = createGenerator({
-  path: resolve(repoRoot, "packages/shared/src/index.ts"),
+  path: resolve(repoRoot, "packages/shared/src/**/*.ts"),
   tsconfig: resolve(repoRoot, "packages/shared/tsconfig.json"),
   type: "*",
   expose: "export"

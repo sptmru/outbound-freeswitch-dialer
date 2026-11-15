@@ -636,6 +636,12 @@ as a completed dependency; this link does not enable product transfers.
 
 ## 9. API and UI
 
+B05 selects the [v1 shared API/transition contract](inbound-api-contracts.md).
+Its future operations are cataloged separately from live OpenAPI paths; valid
+coordinated start requests fail closed until C04/C05 integrate admission. Legacy
+starts cannot silently dismiss native work. This contract does not mount the new
+Desk/offer/transfer/admin endpoints or enable product ingress/media.
+
 Preserve `/agent/desk`, `/agent/events`, `/agent/call-next`, `/agent/manual-dial/start`,
 `/agent/leads/:contactId/call`, and existing controls. All creation paths share admission,
 but explicit manual and automatic starts use different priority policies.

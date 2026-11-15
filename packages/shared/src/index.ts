@@ -1,3 +1,6 @@
+export * from "./call-coordination.js";
+import type { DeskCoordination, ManualStartIntent, OutboundStartIntent } from "./call-coordination.js";
+
 export const callStates = [
   "created",
   "agent_ringing",
@@ -119,6 +122,8 @@ export interface LeadSummary {
 }
 
 export interface AgentDeskResponse {
+  /** Absent on legacy servers. Never infer a free slot or permission from absence. */
+  coordination?: DeskCoordination;
   user: PublicUser;
   availability: {
     status: AgentAvailabilityStatus;
@@ -811,15 +816,18 @@ export interface SuppressContactRequest {
 export interface StartManualCallRequest {
   phoneNumber: string;
   campaignId?: string;
+  intent?: ManualStartIntent;
 }
 
 export interface StartNextCallRequest {
   campaignId?: string;
+  intent?: OutboundStartIntent;
 }
 
 export interface StartLeadCallRequest {
   confirmCompletedLead?: boolean;
   confirmRetryWait?: boolean;
+  intent?: ManualStartIntent;
 }
 
 export interface CallEndClientContext {

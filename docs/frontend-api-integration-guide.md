@@ -894,3 +894,19 @@ Before enabling real calls:
 - [ ] Supervisor listen mode captures no microphone.
 - [ ] Join mode requires explicit confirmation.
 - [ ] Realistic call-path testing covers registration, ringback/early media, two-way audio, DTMF, hangup, voicemail, reconnect, and duplicate-click prevention.
+
+## Inbound and transfer contract v1 (B05)
+
+See [Call coordination API contract v1](inbound-api-contracts.md) for the exact
+Desk/session/offer/transfer/admin types, revisions, idempotency rules, transitions
+and conservative legacy behavior. The optional `AgentDeskResponse.coordination`
+separates manual-start eligibility from automatic inbound priority.
+
+These are contract foundations, not enabled call flows. `/docs/json` keeps live
+operations in `paths` and future operations in `x-planned-call-coordination` with
+`status: "contract-only"`. Do not generate an executable client from the planned
+catalog without the corresponding C/D/E/F/G implementation and enablement gates.
+Existing start routes return 409 `coordination_unavailable` for v1 `intent` until
+shared admission is integrated. Missing intent remains legacy-only and cannot
+silently dismiss pending native work; 409 `legacy_initiator_required` requires a
+Desk refresh and compatible server. Never retry automatic work as manual.

@@ -4,6 +4,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import sharedOpenApiSchemas from "./generated/shared-openapi-schemas.json" with { type: "json" };
 import { getDocumentedRouteSchema, manualOpenApiSchemas } from "./openapi-routes.js";
 import { SESSION_COOKIE_NAME } from "./security.js";
+import { plannedCallCoordinationCatalog } from "./call-coordination-openapi.js";
 
 export type ApiDocumentationAccess =
   { allowed: true } | { allowed: false; statusCode: 401 | 403; message: string };
@@ -29,6 +30,10 @@ export async function registerApiDocumentation(
   }
 
   await app.register(swagger, {
+    transformObject: (document) => ({
+      ...("openapiObject" in document ? document.openapiObject : document.swaggerObject),
+      "x-planned-call-coordination": plannedCallCoordinationCatalog()
+    }),
     refResolver: {
       buildLocalReference: (schema, _baseUri, _fragment, index) =>
         typeof schema.$id === "string" ? schema.$id : `schema-${index}`

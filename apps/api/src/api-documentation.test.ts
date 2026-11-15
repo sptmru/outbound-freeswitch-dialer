@@ -11,6 +11,10 @@ import { registerHealthRoutes } from "./health.js";
 import { createLiveEventHub, registerLiveEventRoutes } from "./live-events.js";
 import { registerMetrics } from "./metrics.js";
 import { documentedRouteKeys } from "./openapi-routes.js";
+import {
+  plannedCallCoordinationCatalog,
+  plannedCallCoordinationOperations
+} from "./call-coordination-openapi.js";
 
 test("serves an admin-only OpenAPI catalog with route groups and auth schemes", async () => {
   const app = Fastify();
@@ -143,6 +147,27 @@ test("documents every registered API route with request and response contracts",
   assert.ok(document.components.schemas.CallDetailResponse.properties.timeline);
   assert.ok(document.components.schemas.AgentDeskResponse.properties.activeCall);
   assert.ok(document.components.schemas.ErrorResponse.properties.message);
+
+  // B05.4: future contracts are inspectable, without advertising live handlers.
+  const planned = plannedCallCoordinationCatalog();
+  const exposed = app.swagger() as unknown as Record<string, unknown>;
+  assert.deepEqual(exposed["x-planned-call-coordination"], planned);
+  assert.equal(planned.status, "contract-only");
+  assert.equal(plannedCallCoordinationOperations.length, 20);
+  for (const operation of plannedCallCoordinationOperations) {
+    assert.equal(document.paths[operation.path], undefined, "Contract-only paths must not be mounted");
+    assert.ok(document.components.schemas[operation.response], operation.response);
+    if (operation.request) assert.ok(document.components.schemas[operation.request], operation.request);
+    assert.equal(operation.role, operation.path.startsWith("/admin/") ? "admin" : "authenticated");
+  }
+  const accept = document.components.schemas.AcceptCallOfferResponse;
+  assert.deepEqual(accept.properties.status, { type: "string", enum: ["connecting"] });
+  await SwaggerParser.validate({
+    openapi: "3.1.0",
+    info: { title: "B05 planned contract", version: "1" },
+    paths: planned.paths,
+    components: document.components
+  } as never);
 
   await app.close();
 });

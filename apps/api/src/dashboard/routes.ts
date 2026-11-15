@@ -48,9 +48,7 @@ import {
   type RetentionRunResponse,
   type SendDtmfRequest,
   type SoftphoneProvisioningResponse,
-  type StartLeadCallRequest,
   type StartManualCallRequest,
-  type StartNextCallRequest,
   type SupervisorSession,
   type SuppressContactRequest,
   type SuppressionImportResponse,
@@ -62,6 +60,11 @@ import {
   type UpsertCallAvmdReviewRequest
 } from "@outbound-dialer/shared";
 import { z } from "zod";
+import {
+  startNextCallSchema,
+  startLeadCallSchema,
+  startManualCallSchema
+} from "../call-coordination-contracts.js";
 import { requireUser } from "../auth/routes.js";
 import { setAgentAvailability } from "../agent-availability.js";
 import type { AppConfig } from "../config.js";
@@ -159,14 +162,13 @@ const manualDialValidationSchema = z.object({
   campaignId: z.guid().optional()
 }) satisfies z.ZodType<StartManualCallRequest>;
 
-const startNextCallSchema = z.object({
-  campaignId: z.guid().optional()
-}) satisfies z.ZodType<StartNextCallRequest>;
-
-const startLeadCallSchema = z.object({
-  confirmCompletedLead: z.boolean().optional(),
-  confirmRetryWait: z.boolean().optional()
-}) satisfies z.ZodType<StartLeadCallRequest>;
+function rejectCoordinatedStart(reply: FastifyReply): void {
+  reply.code(409).send({
+    message: "Coordinated calling is unavailable in this version",
+    code: "coordination_unavailable",
+    revision: null
+  });
+}
 
 const callEndClientContextSchema = z.object({
   initiator: z.literal("agent_desk_hangup_button"),
@@ -1046,7 +1048,8 @@ export function registerDashboardRoutes(
     }
 
     const publicUser = toPublicUser(user);
-    const input = manualDialValidationSchema.parse(request.body);
+    const input = startManualCallSchema.parse(request.body);
+    if (input.intent) return rejectCoordinatedStart(reply);
     const validation = await validateDialableNumber(pool, config, input.phoneNumber, input.campaignId);
     if (!validation.allowed) {
       if (validation.reason.toLowerCase().includes("suppression")) {
@@ -1095,7 +1098,10 @@ export function registerDashboardRoutes(
         })
     });
     if (!created.ok) {
-      return reply.code(409).send({ message: createDialerCallFailureMessage(created.reason) });
+      return reply.code(409).send({
+        message: createDialerCallFailureMessage(created.reason),
+        ...(created.reason === "legacy_initiator_required" ? { code: created.reason, revision: null } : {})
+      });
     }
 
     return buildAgentDeskResponse(pool, publicUser, campaign.id, contactRetryPolicy);
@@ -1108,6 +1114,7 @@ export function registerDashboardRoutes(
     }
 
     const input = startNextCallSchema.parse(request.body ?? {});
+    if (input.intent) return rejectCoordinatedStart(reply);
     const publicUser = toPublicUser(user);
     const campaign = await getAgentCampaignForDialerAction(pool, input.campaignId, contactRetryPolicy);
     if (!campaign) {
@@ -1134,7 +1141,10 @@ export function registerDashboardRoutes(
         })
     });
     if (!created.ok) {
-      return reply.code(409).send({ message: createDialerCallFailureMessage(created.reason) });
+      return reply.code(409).send({
+        message: createDialerCallFailureMessage(created.reason),
+        ...(created.reason === "legacy_initiator_required" ? { code: created.reason, revision: null } : {})
+      });
     }
 
     return buildAgentDeskResponse(pool, publicUser, campaign.id, contactRetryPolicy);
@@ -1149,6 +1159,7 @@ export function registerDashboardRoutes(
     const publicUser = toPublicUser(user);
     const params = z.object({ contactId: z.guid() }).parse(request.params);
     const input = startLeadCallSchema.parse(request.body ?? {});
+    if (input.intent) return rejectCoordinatedStart(reply);
     const agent = await ensureAgentForUser(pool, config, publicUser);
     const created = await createDialerCall(pool, config, {
       actorUserId: publicUser.id,
@@ -1170,7 +1181,10 @@ export function registerDashboardRoutes(
         })
     });
     if (!created.ok) {
-      return reply.code(409).send({ message: createDialerCallFailureMessage(created.reason) });
+      return reply.code(409).send({
+        message: createDialerCallFailureMessage(created.reason),
+        ...(created.reason === "legacy_initiator_required" ? { code: created.reason, revision: null } : {})
+      });
     }
 
     return buildAgentDeskResponse(pool, publicUser, created.campaignId, contactRetryPolicy);

@@ -57,3 +57,30 @@ export type {
   UpdateAdminSystemSettingsRequest,
   UpsertCallAvmdReviewRequest
 } from "@outbound-dialer/shared";
+
+export type {
+  DeskCoordination,
+  DeskSessionSnapshot,
+  AcceptCallOfferResponse,
+  DeferredAutoNextIntentSnapshot,
+  DeskMutationRequest,
+  CreateDeskSessionRequest,
+  UpdateDeskSessionRequest,
+  DeskSessionResponse,
+  CallOfferSnapshot,
+  TransferSnapshot,
+  AutoNextIntentSnapshot,
+  ManualStartIntent,
+  AutomaticStartIntent,
+  OutboundStartIntent,
+  CreateTransferRequest,
+  TransferTargetsResponse,
+  CoordinationMutationResponse,
+  CoordinationErrorResponse,
+  SaveInboundNumberRequest,
+  SaveInboundQueueRequest,
+  SaveInboundFlowRequest,
+  InboundNumbersResponse,
+  InboundQueuesResponse,
+  InboundFlowsResponse
+} from "@outbound-dialer/shared";

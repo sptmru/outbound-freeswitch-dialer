@@ -1,4 +1,664 @@
 {
+  "DeskRevision": {
+    "$id": "DeskRevision",
+    "type": "string",
+    "description": "B05 v1 contract. Availability of types does not enable the C/D/E/F/G handlers."
+  },
+  "BindingGeneration": { "$id": "BindingGeneration", "type": "string" },
+  "OfferState": {
+    "$id": "OfferState",
+    "type": "string",
+    "enum": ["pending", "accepted", "ignored", "expired", "declined", "canceled", "failed"]
+  },
+  "TransferState": {
+    "$id": "TransferState",
+    "type": "string",
+    "enum": [
+      "offered",
+      "connecting",
+      "switching",
+      "uncertain",
+      "completed",
+      "declined",
+      "expired",
+      "canceled",
+      "failed"
+    ]
+  },
+  "OperationState": {
+    "$id": "OperationState",
+    "type": "string",
+    "enum": ["pending", "executing", "uncertain", "succeeded", "failed", "canceled"]
+  },
+  "AutoNextIntentState": {
+    "$id": "AutoNextIntentState",
+    "type": "string",
+    "enum": ["pending", "deferred", "started", "canceled"]
+  },
+  "InboundPhase": {
+    "$id": "InboundPhase",
+    "type": "string",
+    "enum": [
+      "received",
+      "queued",
+      "connecting",
+      "agent_connected",
+      "fallback",
+      "audio_playing",
+      "forwarding",
+      "completed",
+      "failed",
+      "canceled"
+    ]
+  },
+  "InteractiveSlotState": {
+    "$id": "InteractiveSlotState",
+    "type": "string",
+    "enum": ["free", "reserved", "connecting", "active", "releasing", "uncertain"]
+  },
+  "DeskMutationRequest": {
+    "$id": "DeskMutationRequest",
+    "type": "object",
+    "properties": {
+      "deskSessionId": { "type": "string" },
+      "expectedRevision": { "$ref": "DeskRevision#" },
+      "bindingGeneration": { "$ref": "BindingGeneration#" },
+      "idempotencyKey": { "type": "string" }
+    },
+    "required": ["deskSessionId", "expectedRevision", "bindingGeneration", "idempotencyKey"],
+    "additionalProperties": false,
+    "description": "Server-derived actor/route/resource scope; client must not supply an actor or SIP destination."
+  },
+  "ManualStartIntent": {
+    "$id": "ManualStartIntent",
+    "type": "object",
+    "properties": {
+      "deskSessionId": { "type": "string" },
+      "expectedRevision": { "$ref": "DeskRevision#" },
+      "bindingGeneration": { "$ref": "BindingGeneration#" },
+      "idempotencyKey": { "type": "string" },
+      "startReason": { "type": "string", "const": "manual" }
+    },
+    "required": ["bindingGeneration", "deskSessionId", "expectedRevision", "idempotencyKey", "startReason"],
+    "additionalProperties": false
+  },
+  "AutomaticStartIntent": {
+    "$id": "AutomaticStartIntent",
+    "type": "object",
+    "properties": {
+      "deskSessionId": { "type": "string" },
+      "expectedRevision": { "$ref": "DeskRevision#" },
+      "bindingGeneration": { "$ref": "BindingGeneration#" },
+      "idempotencyKey": { "type": "string" },
+      "startReason": { "type": "string", "const": "automatic" },
+      "sourceCallId": { "type": "string" }
+    },
+    "required": [
+      "bindingGeneration",
+      "deskSessionId",
+      "expectedRevision",
+      "idempotencyKey",
+      "sourceCallId",
+      "startReason"
+    ],
+    "additionalProperties": false
+  },
+  "OutboundStartIntent": {
+    "$id": "OutboundStartIntent",
+    "anyOf": [{ "$ref": "ManualStartIntent#" }, { "$ref": "AutomaticStartIntent#" }]
+  },
+  "CreateDeskSessionRequest": {
+    "$id": "CreateDeskSessionRequest",
+    "type": "object",
+    "properties": {
+      "idempotencyKey": { "type": "string" },
+      "expectedRevision": {
+        "anyOf": [{ "$ref": "DeskRevision#" }, { "type": "null" }],
+        "description": "null means no current controller; a takeover must name the current revision."
+      },
+      "campaignId": { "type": ["string", "null"] }
+    },
+    "required": ["idempotencyKey", "expectedRevision", "campaignId"],
+    "additionalProperties": false
+  },
+  "UpdateDeskSessionRequest": {
+    "$id": "UpdateDeskSessionRequest",
+    "type": "object",
+    "properties": {
+      "deskSessionId": { "type": "string" },
+      "expectedRevision": { "$ref": "DeskRevision#" },
+      "bindingGeneration": { "$ref": "BindingGeneration#" },
+      "idempotencyKey": { "type": "string" },
+      "campaignId": { "type": ["string", "null"] },
+      "ready": { "type": "boolean" }
+    },
+    "required": [
+      "bindingGeneration",
+      "campaignId",
+      "deskSessionId",
+      "expectedRevision",
+      "idempotencyKey",
+      "ready"
+    ],
+    "additionalProperties": false
+  },
+  "DeskSessionSnapshot": {
+    "$id": "DeskSessionSnapshot",
+    "type": "object",
+    "properties": {
+      "id": { "type": "string" },
+      "revision": { "$ref": "DeskRevision#" },
+      "bindingGeneration": { "$ref": "BindingGeneration#" },
+      "campaignId": { "type": ["string", "null"] },
+      "endpointVerified": { "type": "boolean" },
+      "ready": { "type": "boolean" },
+      "expiresAt": { "type": "string" }
+    },
+    "required": [
+      "id",
+      "revision",
+      "bindingGeneration",
+      "campaignId",
+      "endpointVerified",
+      "ready",
+      "expiresAt"
+    ],
+    "additionalProperties": false
+  },
+  "DeskSessionResponse": {
+    "$id": "DeskSessionResponse",
+    "type": "object",
+    "properties": {
+      "revision": { "$ref": "DeskRevision#" },
+      "session": { "anyOf": [{ "$ref": "DeskSessionSnapshot#" }, { "type": "null" }] }
+    },
+    "required": ["revision", "session"],
+    "additionalProperties": false
+  },
+  "CallOfferSnapshot": {
+    "$id": "CallOfferSnapshot",
+    "type": "object",
+    "properties": {
+      "id": { "type": "string" },
+      "callId": { "type": "string" },
+      "kind": { "type": "string", "enum": ["inbound", "transfer"] },
+      "transferId": { "type": ["string", "null"] },
+      "state": { "$ref": "OfferState#" },
+      "deadlineAt": { "type": "string" },
+      "campaignId": { "type": "string" },
+      "callingNumber": { "type": "string" },
+      "closureReason": { "type": ["string", "null"] }
+    },
+    "required": [
+      "id",
+      "callId",
+      "kind",
+      "transferId",
+      "state",
+      "deadlineAt",
+      "campaignId",
+      "callingNumber",
+      "closureReason"
+    ],
+    "additionalProperties": false
+  },
+  "TransferSnapshot": {
+    "$id": "TransferSnapshot",
+    "type": "object",
+    "properties": {
+      "id": { "type": "string" },
+      "callId": { "type": "string" },
+      "sourceAgentId": { "type": "string" },
+      "recipientAgentId": { "type": "string" },
+      "state": { "$ref": "TransferState#" },
+      "deadlineAt": { "type": "string" }
+    },
+    "required": ["id", "callId", "sourceAgentId", "recipientAgentId", "state", "deadlineAt"],
+    "additionalProperties": false
+  },
+  "DeferredAutoNextIntentSnapshot": {
+    "$id": "DeferredAutoNextIntentSnapshot",
+    "type": "object",
+    "properties": {
+      "id": { "type": "string" },
+      "sourceCallId": { "type": "string" },
+      "state": { "type": "string", "const": "deferred" },
+      "reason": { "type": "string", "const": "incoming_pending" },
+      "callId": { "type": "null" }
+    },
+    "required": ["id", "sourceCallId", "state", "reason", "callId"],
+    "additionalProperties": false
+  },
+  "AutoNextIntentSnapshot": {
+    "$id": "AutoNextIntentSnapshot",
+    "anyOf": [
+      {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "sourceCallId": { "type": "string" },
+          "state": { "type": "string", "const": "pending" },
+          "reason": { "type": "null" },
+          "callId": { "type": "null" }
+        },
+        "required": ["id", "sourceCallId", "state", "reason", "callId"],
+        "additionalProperties": false
+      },
+      { "$ref": "DeferredAutoNextIntentSnapshot#" },
+      {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "sourceCallId": { "type": "string" },
+          "state": { "type": "string", "const": "started" },
+          "reason": { "type": "null" },
+          "callId": { "type": "string" }
+        },
+        "required": ["id", "sourceCallId", "state", "reason", "callId"],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "sourceCallId": { "type": "string" },
+          "state": { "type": "string", "const": "canceled" },
+          "reason": { "type": "string" },
+          "callId": { "type": "null" }
+        },
+        "required": ["id", "sourceCallId", "state", "reason", "callId"],
+        "additionalProperties": false
+      }
+    ]
+  },
+  "CoordinationActionAvailability": {
+    "$id": "CoordinationActionAvailability",
+    "type": "object",
+    "properties": { "allowed": { "type": "boolean" }, "reason": { "type": ["string", "null"] } },
+    "required": ["allowed", "reason"],
+    "additionalProperties": false
+  },
+  "DeskCoordination": {
+    "$id": "DeskCoordination",
+    "type": "object",
+    "properties": {
+      "contractVersion": { "type": "number", "const": 1 },
+      "revision": { "$ref": "DeskRevision#" },
+      "session": { "anyOf": [{ "$ref": "DeskSessionSnapshot#" }, { "type": "null" }] },
+      "slot": {
+        "type": "object",
+        "properties": {
+          "state": { "$ref": "InteractiveSlotState#" },
+          "callId": { "type": ["string", "null"] },
+          "reservationId": { "type": ["string", "null"] },
+          "generation": { "type": "string" }
+        },
+        "required": ["state", "callId", "reservationId", "generation"],
+        "additionalProperties": false
+      },
+      "offer": { "anyOf": [{ "$ref": "CallOfferSnapshot#" }, { "type": "null" }] },
+      "transfer": { "anyOf": [{ "$ref": "TransferSnapshot#" }, { "type": "null" }] },
+      "autoNextIntent": { "anyOf": [{ "$ref": "AutoNextIntentSnapshot#" }, { "type": "null" }] },
+      "actions": {
+        "type": "object",
+        "properties": {
+          "manualStart": { "$ref": "CoordinationActionAvailability#" },
+          "autoNext": { "$ref": "CoordinationActionAvailability#" },
+          "accept": { "$ref": "CoordinationActionAvailability#" },
+          "ignore": { "$ref": "CoordinationActionAvailability#" },
+          "transfer": { "$ref": "CoordinationActionAvailability#" }
+        },
+        "required": ["manualStart", "autoNext", "accept", "ignore", "transfer"],
+        "additionalProperties": false
+      }
+    },
+    "required": [
+      "contractVersion",
+      "revision",
+      "session",
+      "slot",
+      "offer",
+      "transfer",
+      "autoNextIntent",
+      "actions"
+    ],
+    "additionalProperties": false
+  },
+  "CreateTransferRequest": {
+    "$id": "CreateTransferRequest",
+    "type": "object",
+    "properties": {
+      "deskSessionId": { "type": "string" },
+      "expectedRevision": { "$ref": "DeskRevision#" },
+      "bindingGeneration": { "$ref": "BindingGeneration#" },
+      "idempotencyKey": { "type": "string" },
+      "recipientAgentId": { "type": "string" }
+    },
+    "required": [
+      "bindingGeneration",
+      "deskSessionId",
+      "expectedRevision",
+      "idempotencyKey",
+      "recipientAgentId"
+    ],
+    "additionalProperties": false
+  },
+  "TransferTargetsResponse": {
+    "$id": "TransferTargetsResponse",
+    "type": "object",
+    "properties": {
+      "revision": { "$ref": "DeskRevision#" },
+      "items": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "agentId": { "type": "string" },
+            "name": { "type": "string" },
+            "available": { "type": "boolean" },
+            "reason": { "type": ["string", "null"] }
+          },
+          "required": ["agentId", "name", "available", "reason"],
+          "additionalProperties": false
+        }
+      }
+    },
+    "required": ["revision", "items"],
+    "additionalProperties": false
+  },
+  "AcceptCallOfferResponse": {
+    "$id": "AcceptCallOfferResponse",
+    "type": "object",
+    "properties": {
+      "status": { "type": "string", "const": "connecting" },
+      "revision": { "$ref": "DeskRevision#" },
+      "callId": { "type": "string" },
+      "operationId": { "type": "string" },
+      "offerId": { "type": "string" }
+    },
+    "required": ["status", "revision", "callId", "operationId", "offerId"],
+    "additionalProperties": false,
+    "description": "Acceptance is a reservation/connection attempt, never a confirmed bridge."
+  },
+  "CoordinationMutationResponse": {
+    "$id": "CoordinationMutationResponse",
+    "anyOf": [
+      { "$ref": "AcceptCallOfferResponse#" },
+      {
+        "type": "object",
+        "properties": {
+          "status": { "type": "string", "const": "started" },
+          "revision": { "$ref": "DeskRevision#" },
+          "callId": { "type": "string" },
+          "operationId": { "type": "string" }
+        },
+        "required": ["status", "revision", "callId", "operationId"],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "status": { "type": "string", "const": "deferred" },
+          "revision": { "$ref": "DeskRevision#" },
+          "reason": { "type": "string", "const": "incoming_pending" },
+          "intent": { "$ref": "DeferredAutoNextIntentSnapshot#" }
+        },
+        "required": ["status", "revision", "reason", "intent"],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "status": { "type": "string", "const": "applied" },
+          "revision": { "$ref": "DeskRevision#" }
+        },
+        "required": ["status", "revision"],
+        "additionalProperties": false
+      }
+    ]
+  },
+  "CoordinationErrorCode": {
+    "$id": "CoordinationErrorCode",
+    "type": "string",
+    "enum": [
+      "coordination_unavailable",
+      "legacy_initiator_required",
+      "revision_conflict",
+      "idempotency_conflict",
+      "not_controller",
+      "slot_occupied",
+      "offer_closed",
+      "offer_expired",
+      "not_owner",
+      "endpoint_unavailable",
+      "capacity_exhausted"
+    ]
+  },
+  "CoordinationErrorResponse": {
+    "$id": "CoordinationErrorResponse",
+    "type": "object",
+    "properties": {
+      "message": { "type": "string" },
+      "code": { "$ref": "CoordinationErrorCode#" },
+      "revision": {
+        "anyOf": [{ "$ref": "DeskRevision#" }, { "type": "null" }],
+        "description": "Null when rejected before an authoritative snapshot was read. Refetch Desk."
+      }
+    },
+    "required": ["message", "code", "revision"],
+    "additionalProperties": false
+  },
+  "InboundQueueConfiguration": {
+    "$id": "InboundQueueConfiguration",
+    "type": "object",
+    "properties": {
+      "offerTimeoutMs": { "type": "number" },
+      "queueTimeoutMs": { "type": "number" },
+      "connectTimeoutMs": { "type": "number" },
+      "transferTimeoutMs": { "type": "number" },
+      "maxWaitingCalls": { "type": "number" },
+      "overflowPolicy": { "type": "string", "enum": ["reject", "flow"] },
+      "overflowFlowVersionId": { "type": ["string", "null"] }
+    },
+    "required": [
+      "offerTimeoutMs",
+      "queueTimeoutMs",
+      "connectTimeoutMs",
+      "transferTimeoutMs",
+      "maxWaitingCalls",
+      "overflowPolicy",
+      "overflowFlowVersionId"
+    ],
+    "additionalProperties": false
+  },
+  "InboundFlowAction": {
+    "$id": "InboundFlowAction",
+    "anyOf": [
+      {
+        "type": "object",
+        "properties": {
+          "type": { "type": "string", "const": "play_audio" },
+          "recordingId": { "type": "string" },
+          "timeoutMs": { "type": "number" }
+        },
+        "required": ["type", "recordingId", "timeoutMs"],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "type": { "type": "string", "const": "forward_external" },
+          "target": { "type": "string" },
+          "timeoutMs": { "type": "number" }
+        },
+        "required": ["type", "target", "timeoutMs"],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": { "type": { "type": "string", "const": "hangup" } },
+        "required": ["type"],
+        "additionalProperties": false
+      }
+    ]
+  },
+  "InboundFlowDefinition": {
+    "$id": "InboundFlowDefinition",
+    "type": "object",
+    "properties": {
+      "flowTimeoutMs": { "type": "number" },
+      "actions": { "type": "array", "items": { "$ref": "InboundFlowAction#" } }
+    },
+    "required": ["flowTimeoutMs", "actions"],
+    "additionalProperties": false
+  },
+  "InboundAdminMutation": {
+    "$id": "InboundAdminMutation",
+    "type": "object",
+    "properties": {
+      "idempotencyKey": { "type": "string" },
+      "expectedRevision": { "anyOf": [{ "$ref": "DeskRevision#" }, { "type": "null" }] }
+    },
+    "required": ["idempotencyKey", "expectedRevision"],
+    "additionalProperties": false
+  },
+  "SaveInboundNumberRequest": {
+    "$id": "SaveInboundNumberRequest",
+    "type": "object",
+    "properties": {
+      "idempotencyKey": { "type": "string" },
+      "expectedRevision": { "anyOf": [{ "$ref": "DeskRevision#" }, { "type": "null" }] },
+      "label": { "type": "string" },
+      "did": { "type": "string" },
+      "queueId": { "type": "string" },
+      "enabled": { "type": "boolean" }
+    },
+    "required": ["did", "enabled", "expectedRevision", "idempotencyKey", "label", "queueId"],
+    "additionalProperties": false
+  },
+  "SaveInboundQueueRequest": {
+    "$id": "SaveInboundQueueRequest",
+    "type": "object",
+    "properties": {
+      "idempotencyKey": { "type": "string" },
+      "expectedRevision": { "anyOf": [{ "$ref": "DeskRevision#" }, { "type": "null" }] },
+      "name": { "type": "string" },
+      "campaignId": { "type": "string" },
+      "waitingRecordingId": { "type": ["string", "null"] },
+      "noAnswerFlowVersionId": { "type": ["string", "null"] },
+      "configuration": { "$ref": "InboundQueueConfiguration#" }
+    },
+    "required": [
+      "campaignId",
+      "configuration",
+      "expectedRevision",
+      "idempotencyKey",
+      "name",
+      "noAnswerFlowVersionId",
+      "waitingRecordingId"
+    ],
+    "additionalProperties": false
+  },
+  "SaveInboundFlowRequest": {
+    "$id": "SaveInboundFlowRequest",
+    "type": "object",
+    "properties": {
+      "idempotencyKey": { "type": "string" },
+      "expectedRevision": { "anyOf": [{ "$ref": "DeskRevision#" }, { "type": "null" }] },
+      "campaignId": { "type": "string" },
+      "name": { "type": "string" },
+      "definition": { "$ref": "InboundFlowDefinition#" }
+    },
+    "required": ["campaignId", "definition", "expectedRevision", "idempotencyKey", "name"],
+    "additionalProperties": false
+  },
+  "InboundAppliedState": {
+    "$id": "InboundAppliedState",
+    "type": "object",
+    "properties": {
+      "desiredRevision": { "type": "string" },
+      "appliedRevision": { "type": ["string", "null"] },
+      "status": { "type": "string", "enum": ["pending", "applied", "error"] },
+      "error": { "type": ["string", "null"] }
+    },
+    "required": ["desiredRevision", "appliedRevision", "status", "error"],
+    "additionalProperties": false
+  },
+  "InboundNumberSnapshot": {
+    "$id": "InboundNumberSnapshot",
+    "type": "object",
+    "properties": {
+      "label": { "type": "string" },
+      "id": { "type": "string" },
+      "revision": { "type": "string" },
+      "did": { "type": "string" },
+      "queueId": { "type": "string" },
+      "enabled": { "type": "boolean" },
+      "apply": { "$ref": "InboundAppliedState#" }
+    },
+    "required": ["label", "id", "revision", "did", "queueId", "enabled", "apply"],
+    "additionalProperties": false
+  },
+  "InboundQueueSnapshot": {
+    "$id": "InboundQueueSnapshot",
+    "type": "object",
+    "properties": {
+      "id": { "type": "string" },
+      "revision": { "type": "string" },
+      "name": { "type": "string" },
+      "campaignId": { "type": "string" },
+      "waitingRecordingId": { "type": ["string", "null"] },
+      "noAnswerFlowVersionId": { "type": ["string", "null"] },
+      "configuration": { "$ref": "InboundQueueConfiguration#" },
+      "apply": { "$ref": "InboundAppliedState#" }
+    },
+    "required": [
+      "id",
+      "revision",
+      "name",
+      "campaignId",
+      "waitingRecordingId",
+      "noAnswerFlowVersionId",
+      "configuration",
+      "apply"
+    ],
+    "additionalProperties": false
+  },
+  "InboundFlowSnapshot": {
+    "$id": "InboundFlowSnapshot",
+    "type": "object",
+    "properties": {
+      "campaignId": { "type": "string" },
+      "id": { "type": "string" },
+      "revision": { "type": "string" },
+      "name": { "type": "string" },
+      "versionId": { "type": "string" },
+      "definition": { "$ref": "InboundFlowDefinition#" }
+    },
+    "required": ["campaignId", "id", "revision", "name", "versionId", "definition"],
+    "additionalProperties": false
+  },
+  "InboundNumbersResponse": {
+    "$id": "InboundNumbersResponse",
+    "type": "object",
+    "properties": { "items": { "type": "array", "items": { "$ref": "InboundNumberSnapshot#" } } },
+    "required": ["items"],
+    "additionalProperties": false
+  },
+  "InboundQueuesResponse": {
+    "$id": "InboundQueuesResponse",
+    "type": "object",
+    "properties": { "items": { "type": "array", "items": { "$ref": "InboundQueueSnapshot#" } } },
+    "required": ["items"],
+    "additionalProperties": false
+  },
+  "InboundFlowsResponse": {
+    "$id": "InboundFlowsResponse",
+    "type": "object",
+    "properties": { "items": { "type": "array", "items": { "$ref": "InboundFlowSnapshot#" } } },
+    "required": ["items"],
+    "additionalProperties": false
+  },
   "CallState": {
     "$id": "CallState",
     "type": "string",
@@ -177,6 +837,10 @@
     "$id": "AgentDeskResponse",
     "type": "object",
     "properties": {
+      "coordination": {
+        "$ref": "DeskCoordination#",
+        "description": "Absent on legacy servers. Never infer a free slot or permission from absence."
+      },
       "user": { "$ref": "PublicUser#" },
       "availability": {
         "type": "object",
@@ -2138,14 +2802,18 @@
   "StartManualCallRequest": {
     "$id": "StartManualCallRequest",
     "type": "object",
-    "properties": { "phoneNumber": { "type": "string" }, "campaignId": { "type": "string" } },
+    "properties": {
+      "phoneNumber": { "type": "string" },
+      "campaignId": { "type": "string" },
+      "intent": { "$ref": "ManualStartIntent#" }
+    },
     "required": ["phoneNumber"],
     "additionalProperties": false
   },
   "StartNextCallRequest": {
     "$id": "StartNextCallRequest",
     "type": "object",
-    "properties": { "campaignId": { "type": "string" } },
+    "properties": { "campaignId": { "type": "string" }, "intent": { "$ref": "OutboundStartIntent#" } },
     "additionalProperties": false
   },
   "StartLeadCallRequest": {
@@ -2153,7 +2821,8 @@
     "type": "object",
     "properties": {
       "confirmCompletedLead": { "type": "boolean" },
-      "confirmRetryWait": { "type": "boolean" }
+      "confirmRetryWait": { "type": "boolean" },
+      "intent": { "$ref": "ManualStartIntent#" }
     },
     "additionalProperties": false
   },
