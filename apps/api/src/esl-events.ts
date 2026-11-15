@@ -1,3 +1,4 @@
+import { resolveCustomerHangupOutcome } from "./call-outcomes.js";
 import net from "node:net";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
@@ -13,6 +14,7 @@ import {
   repairFinalizedCallTransaction
 } from "./call-finalization.js";
 import { sendFreeSwitchApiCommand } from "./esl.js";
+import { isCoordinatedCall, persistCoordinatedCallEvent } from "./call-cleanup.js";
 import {
   configureFreeSwitchEventQueueMetrics,
   recordFreeSwitchEslReconnect,
@@ -332,6 +334,33 @@ async function persistFreeSwitchEvent(
   logger?: Pick<Logger, "info">
 ): Promise<void> {
   const eventName = frame.headers["event-name"];
+  const concreteCallId =
+    frame.headers["outbound-dialer-call-id"] ??
+    frame.headers["variable_outbound_dialer_call_id"] ??
+    frame.headers["variable_voicemail_drop_call_id"];
+  if (
+    eventName &&
+    concreteCallId &&
+    isUuid(concreteCallId) &&
+    (await persistCoordinatedCallEvent(pool, {
+      callId: concreteCallId,
+      legUuid:
+        frame.headers["outbound-dialer-customer-leg-uuid"] ??
+        frame.headers["unique-id"] ??
+        frame.headers["variable_uuid"] ??
+        null,
+      eventName,
+      eventUuid: getFreeSwitchEventUuid(frame),
+      eventAt: parseFreeSwitchEventTimestamp(frame.headers),
+      hangupCause: frame.headers["hangup-cause"],
+      playback: frame.headers["event-subclass"]?.startsWith(VOICEMAIL_PLAYBACK_EVENT_PREFIX)
+        ? (frame.headers["event-subclass"].slice(VOICEMAIL_PLAYBACK_EVENT_PREFIX.length) as
+            "started" | "completed" | "failed")
+        : undefined,
+      raw: { headers: frame.headers, body: frame.body }
+    }))
+  )
+    return;
   if (eventName === "BACKGROUND_JOB") {
     const jobUuid = frame.headers["job-uuid"]?.trim();
     if (jobUuid && isUuid(jobUuid) && isFailedBackgroundJob(frame)) {
@@ -1705,6 +1734,9 @@ export async function reconcileActiveCalls(
   let errors = 0;
   for (const call of result.rows) {
     try {
+      // Native H01 recovery must resolve old senders and concrete legs. The
+      // legacy uuid_exists heuristic cannot establish either guarantee.
+      if (await isCoordinatedCall(pool, call.call_id)) continue;
       const customerExists = await freeSwitchUuidExists(config, call.customer_leg_uuid, sendApiCommand);
       if (isVoicemailDropActiveState(call.state)) {
         if (customerExists) {
@@ -2196,24 +2228,6 @@ function mapHangupCauseToOutcome(hangupCause?: string): string {
     return "busy";
   }
   if (["NO_ANSWER", "NO_USER_RESPONSE", "CALL_REJECTED"].includes(normalized)) {
-    return "not_answered";
-  }
-  return "failed";
-}
-
-function resolveCustomerHangupOutcome(input: {
-  answered: boolean;
-  hangupCause?: string;
-  voicemailDetected: boolean;
-}): "busy" | "customer_hung_up" | "failed" | "not_answered" | "voicemail_detected" {
-  const normalized = input.hangupCause?.toUpperCase() ?? "";
-  if (input.answered) {
-    return input.voicemailDetected ? "voicemail_detected" : "customer_hung_up";
-  }
-  if (normalized === "USER_BUSY") {
-    return "busy";
-  }
-  if (["NO_ANSWER", "NO_USER_RESPONSE", "CALL_REJECTED", "ORIGINATOR_CANCEL"].includes(normalized)) {
     return "not_answered";
   }
   return "failed";

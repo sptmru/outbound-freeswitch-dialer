@@ -69,6 +69,13 @@ export async function finishAgentCall(queryable: Queryable, agentId: string): Pr
           updated_at = now()
       where id = $1
         and not exists (
+          select 1 from agent_call_slots slot
+          where slot.agent_id = agents.id and slot.state <> 'free'
+            and (not slot.reconciliation_required or exists (
+              select 1 from call_participants p where p.call_id=slot.call_id and p.origin='native'
+            ))
+        )
+        and not exists (
           select 1
           from calls active_call
           where active_call.agent_id = agents.id

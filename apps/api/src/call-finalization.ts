@@ -1,6 +1,8 @@
 import type { CallOutcome, CallState } from "@outbound-dialer/shared";
 import type pg from "pg";
 import { finishAgentCall } from "./agent-availability.js";
+import { ADMISSION_LOCK_NAMESPACE } from "./call-admission.js";
+import { isCoordinatedCall } from "./call-cleanup.js";
 
 type TerminalCallState = Extract<CallState, "canceled" | "completed" | "failed">;
 type TerminalContactStatus = "completed" | "new";
@@ -61,6 +63,10 @@ export async function lockCallOwnerAgent(
   callId: string,
   userId?: string
 ): Promise<LockedCallOwner> {
+  // Legacy lifecycle writers serialize with native admission before any agent
+  // or call row lock. The cutover marker is intentionally not required to drain
+  // old feature-off calls. Native lifecycle uses withCallAdmission instead.
+  await client.query("select pg_advisory_xact_lock($1,0)", [ADMISSION_LOCK_NAMESPACE]);
   const owner = userId
     ? await client.query<{ agent_id: string | null }>(
         `
@@ -99,6 +105,13 @@ export async function finalizeCallTransaction(
   const client = await pool.connect();
   try {
     await client.query("begin");
+    await client.query("select pg_advisory_xact_lock($1,0)", [ADMISSION_LOCK_NAMESPACE]);
+    if (await isCoordinatedCall(client, input.callId)) {
+      // Watchdog/repair/API completion has no concrete cleanup evidence. Native
+      // events and C03 reconciliation must retain unresolved occupancy instead.
+      await client.query("rollback");
+      return { agentId: null, contactId: null, outcome: null, status: "not_applicable" };
+    }
     const owner = await lockCallOwnerAgent(client, input.callId);
     if (!owner.found) {
       await client.query("rollback");

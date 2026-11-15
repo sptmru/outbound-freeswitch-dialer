@@ -32,7 +32,8 @@
     "test:prototype:budgets": "bash scripts/test-a06-budgets.sh",
     "test:inbound:db": "node scripts/run-inbound-db.mjs",
     "test:inbound:db:isolated": "bash scripts/test-inbound-db.sh",
-    "test:executor:freeswitch": "bash scripts/test-c03-executor.sh"
+    "test:executor:freeswitch": "bash scripts/test-c03-executor.sh",
+    "test:cleanup:freeswitch": "bash scripts/test-c06-cleanup.sh"
   },
   "engines": {
     "node": ">=22"

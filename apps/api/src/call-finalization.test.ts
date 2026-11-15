@@ -53,6 +53,9 @@ describe("transactional call finalization", () => {
       queries.map((query) => commandName(query.sql)),
       [
         "begin",
+        "admission_gate",
+        "native_fence",
+        "admission_gate",
         "find_owner",
         "lock_agent",
         "lock_call",
@@ -296,6 +299,8 @@ function rows<T>(items: T[]): { rows: T[]; rowCount: number } {
 }
 
 function commandName(sql: string): string {
+  if (sql.includes("as coordinated from calls c")) return "native_fence";
+  if (sql.includes("pg_advisory_xact_lock")) return "admission_gate";
   if (sql === "begin" || sql === "commit" || sql === "rollback") return sql;
   if (sql === "select agent_id from calls where id = $1") return "find_owner";
   if (sql.includes("select id from agents") && sql.includes("for update")) return "lock_agent";

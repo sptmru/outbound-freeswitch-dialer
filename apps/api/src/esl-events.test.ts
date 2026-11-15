@@ -165,7 +165,7 @@ describe("FreeSWITCH event helpers", () => {
       const legStateUpdate = queries.find((query) => query.sql.includes("update call_legs"));
       assert.match(legStateUpdate?.sql ?? "", /when state = 'ended' or \$3 = 'ended' then 'ended'/);
       assert.match(legStateUpdate?.sql ?? "", /when state = 'answered' or \$3 = 'answered' then 'answered'/);
-      assert.equal(queries[0]?.sql, "begin");
+      assert.equal(queries.find((query) => query.sql === "begin")?.sql, "begin");
       const callLockIndex = queries.findIndex(
         (query) => query.sql === "select id from calls where id = $1 for update"
       );

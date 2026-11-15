@@ -79,7 +79,7 @@ test("voicemail playback events use FreeSWITCH comma-separated event headers", a
   for (const kind of ["started", "completed", "failed"]) {
     assert.ok(
       dialplan.includes(
-        `Event-Subclass=outbound_dialer::voicemail_playback_${kind},Outbound-Dialer-Call-ID=\${voicemail_drop_call_id},Outbound-Dialer-Customer-Leg-UUID=\${uuid}`
+        `Event-Name=CUSTOM,Event-Subclass=outbound_dialer::voicemail_playback_${kind},Outbound-Dialer-Call-ID=\${voicemail_drop_call_id},Outbound-Dialer-Customer-Leg-UUID=\${uuid}`
       ),
       kind
     );

@@ -279,11 +279,11 @@ describe("call lifecycle", () => {
     assert.doesNotMatch(claim?.sql ?? "", /ended_at\s*=/);
     assert.doesNotMatch(claim?.sql ?? "", /outcome\s*=/);
     assert.ok(clientQueries.some((query) => query.sql.includes("'voicemail_drop_requested'")));
-    assert.ok(!clientQueries.some((query) => query.sql.includes("update call_legs")));
-    assert.ok(!clientQueries.some((query) => query.sql.includes("update agents")));
+    assert.ok(clientQueries.some((query) => query.sql.includes("update call_legs")));
+    assert.ok(clientQueries.some((query) => query.sql.includes("update agents")));
     assert.ok(!clientQueries.some((query) => query.sql.includes("update contacts")));
-    assert.ok(poolQueries.some((query) => query.sql.includes("update call_legs")));
-    assert.ok(poolQueries.some((query) => query.sql.includes("update agents")));
+    assert.ok(!poolQueries.some((query) => query.sql.includes("update call_legs")));
+    assert.ok(!poolQueries.some((query) => query.sql.includes("update agents")));
   });
 
   it("treats a repeated voicemail drop request as idempotent", async () => {

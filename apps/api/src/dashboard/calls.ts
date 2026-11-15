@@ -18,6 +18,7 @@ import {
 } from "../esl.js";
 import { lockUserMediaAction } from "../user-media-lock.js";
 import { lockCampaignVoicemail } from "./recordings.js";
+import { isCoordinatedCall } from "../call-cleanup.js";
 
 interface LockedCallableContact {
   id: string;
@@ -942,6 +943,8 @@ export async function dropVoicemailForCall(
   if (!row) {
     return { ok: false, statusCode: 404, message: "Active call not found" };
   }
+  if (await isCoordinatedCall(pool, callId))
+    return { ok: false, statusCode: 409, message: "Voicemail drop is not available for this call" };
   if (isVoicemailDropInProgressOrCompleted(row.state, row.outcome)) {
     return { ok: true };
   }
@@ -959,6 +962,11 @@ export async function dropVoicemailForCall(
   let claimed: VoicemailDropCallRow | null = null;
   try {
     await client.query("begin");
+    await client.query("select pg_advisory_xact_lock($1,0)", [ADMISSION_LOCK_NAMESPACE]);
+    if (await isCoordinatedCall(client, callId)) {
+      await client.query("rollback");
+      return { ok: false, statusCode: 409, message: "Voicemail drop is not available for this call" };
+    }
     if (!row.campaign_id) {
       await client.query("rollback");
       return { ok: false, statusCode: 409, message: "No voicemail is configured for this campaign" };
@@ -1146,8 +1154,21 @@ async function releaseAgentAfterVoicemailDropTransfer(
     return;
   }
 
-  await pool.query(
-    `
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const owner = await lockCallOwnerAgent(client, callId);
+    const current = await client.query(
+      `select id from calls where id=$1 and ended_at is null
+      and state in ('voicemail_drop_requested','voicemail_playback_started','agent_released') for update`,
+      [callId]
+    );
+    if (!owner.found || !current.rowCount || (await isCoordinatedCall(client, callId))) {
+      await client.query("rollback");
+      return;
+    }
+    await client.query(
+      `
       insert into call_events (
         call_id, agent_id, event_type, state, api_command_name,
         agent_leg_uuid, customer_leg_uuid, raw_json
@@ -1155,10 +1176,10 @@ async function releaseAgentAfterVoicemailDropTransfer(
       values ($1, $2, 'agent_released', 'agent_released', 'uuid_kill', $3, $4, $5::jsonb)
       on conflict do nothing
     `,
-    [callId, call.agent_id, call.agent_leg_uuid, call.customer_leg_uuid, JSON.stringify(releaseResult)]
-  );
-  await pool.query(
-    `
+      [callId, call.agent_id, call.agent_leg_uuid, call.customer_leg_uuid, JSON.stringify(releaseResult)]
+    );
+    await client.query(
+      `
       update calls
       set state = 'agent_released',
           agent_released_at = coalesce(agent_released_at, now()),
@@ -1167,19 +1188,26 @@ async function releaseAgentAfterVoicemailDropTransfer(
         and ended_at is null
         and state in ('voicemail_drop_requested', 'voicemail_playback_started', 'agent_released')
     `,
-    [callId]
-  );
-  await pool.query(
-    `
+      [callId]
+    );
+    await client.query(
+      `
       update call_legs
       set state = 'ended',
           ended_at = coalesce(ended_at, now())
       where call_id = $1
-        and type = 'agent'
+        and type = 'agent' and freeswitch_uuid = $2
     `,
-    [callId]
-  );
-  await finishAgentCall(pool, call.agent_id);
+      [callId, call.agent_leg_uuid]
+    );
+    await finishAgentCall(client, call.agent_id);
+    await client.query("commit");
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 interface VoicemailDropCallRow {
@@ -1329,9 +1357,16 @@ export async function endDialerCall(
   callId: string,
   endRequest: Omit<CallEndRequestAudit, "previousCallState">
 ): Promise<boolean> {
+  // No legacy uuid_kill or optimistic terminal release for native participants.
+  if (await isCoordinatedCall(pool, callId)) return false;
   const client = await pool.connect();
   try {
     await client.query("begin");
+    await client.query("select pg_advisory_xact_lock($1,0)", [ADMISSION_LOCK_NAMESPACE]);
+    if (await isCoordinatedCall(client, callId)) {
+      await client.query("rollback");
+      return false;
+    }
     const owner = await lockCallOwnerAgent(client, callId, userId);
     if (!owner.found) {
       await client.query("rollback");

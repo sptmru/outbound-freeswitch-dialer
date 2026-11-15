@@ -654,7 +654,10 @@ and DB/API verification for the three existing manual routes. The production
 bootstrap still fails coordinated starts closed until a native execution adapter
 and the rollout gates are installed. [C05 durable auto-next](inbound-auto-next.md)
 adds source-idempotent automatic admission, queue priority and cancellation through
-the same staged execution seam. Legacy starts
+the same staged execution seam. [C06 concrete cleanup](inbound-call-cleanup.md)
+adds reservation snapshots, exact-leg terminal handling and uncertainty-safe
+background release; native hangup/voicemail control integration remains open.
+Legacy starts
 share admission serialization and cannot silently dismiss native work. This contract does not mount the new
 Desk/offer/transfer/admin endpoints or enable product ingress/media.
 

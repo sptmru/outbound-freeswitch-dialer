@@ -42,8 +42,8 @@ export async function discoverAdmissionResources(client: pg.PoolClient, input: A
   ).rows;
   const participants = (
     await client.query(
-      `select id,call_id,agent_id,role from call_participants
-     where call_id=any($1::uuid[]) and left_at is null order by id`,
+      `select id,call_id,agent_id,role,left_at from call_participants
+     where call_id=any($1::uuid[]) order by id`,
       [callIds]
     )
   ).rows;
