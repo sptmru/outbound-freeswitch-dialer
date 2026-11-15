@@ -245,6 +245,11 @@ C02 adds internal [shared capacity bundles, queue return permits and confirmed r
 under that gate; actual path migration, FS hard safeguards and enablement remain
 with their owning tasks.
 
+C07 has a [partial eligibility migration and explicit supervisor blocker](inbound-eligibility.md).
+Pause/campaign/readiness invalidation has controlled PostgreSQL evidence; native
+supervisor execution/capacity and its FS matrix remain unfinished. C07 stays open
+and does not satisfy D01's dependency or authorize cutover.
+
 ### 5.2. Agent Slot and Fencing
 
 One `agent_call_slots` row per agent changes from `free` to `reserved` with a new

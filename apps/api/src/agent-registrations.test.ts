@@ -74,6 +74,8 @@ describe("agent registration reconciliation", () => {
             : []
         })
       } as unknown as pg.Pool;
+      pool.connect = async () =>
+        ({ query: pool.query.bind(pool), release: () => undefined }) as unknown as pg.PoolClient;
       stop = startAgentRegistrationReconciler(
         {
           ...config,
@@ -140,6 +142,8 @@ Total items returned: 2
         return Promise.resolve({ rowCount: 2, rows: [] });
       }
     } as unknown as pg.Pool;
+    pool.connect = async () =>
+      ({ query: pool.query.bind(pool), release: () => undefined }) as unknown as pg.PoolClient;
 
     const changed = await reconcileAgentRegistrations(config, pool, async (_config, command) => {
       assert.equal(command, "sofia status profile internal-webrtc reg");
@@ -151,7 +155,7 @@ Total items returned: 2
     });
 
     assert.equal(changed, 2);
-    assert.equal(queries.length, 5);
+    assert.ok(queries.some((q) => q.sql.includes("pg_advisory_xact_lock")));
     const update = queries.find((query) => query.sql.includes("update agents"));
     assert.deepEqual(update?.params, [["agent_qmj4ws"]]);
     assert.match(update?.sql ?? "", /set registered = sip_username = any\(\$1::text\[\]\)/);
@@ -181,6 +185,8 @@ Total items returned: 2
         return Promise.resolve({ rowCount: 1, rows: [] });
       }
     } as unknown as pg.Pool;
+    pool.connect = async () =>
+      ({ query: pool.query.bind(pool), release: () => undefined }) as unknown as pg.PoolClient;
 
     const changed = await reconcileAgentRegistrations(config, pool, async () => ({
       body: "Total items returned: 0\n",
@@ -204,6 +210,8 @@ Total items returned: 2
         return Promise.resolve({ rowCount: 1, rows: [] });
       }
     } as unknown as pg.Pool;
+    pool.connect = async () =>
+      ({ query: pool.query.bind(pool), release: () => undefined }) as unknown as pg.PoolClient;
 
     await assert.rejects(
       reconcileAgentRegistrations(config, pool, async () => {

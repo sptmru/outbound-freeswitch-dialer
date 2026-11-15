@@ -1,5 +1,6 @@
 import type pg from "pg";
 import type { AgentAvailabilityStatus } from "@outbound-dialer/shared";
+import { cancelPendingAgentWork, lockEligibilityAgents, withEligibilityTransaction } from "./eligibility.js";
 
 export interface AgentAvailability {
   status: AgentAvailabilityStatus;
@@ -14,17 +15,6 @@ interface AgentAvailabilityRow {
 }
 
 export async function getAgentAvailability(queryable: Queryable, userId: string): Promise<AgentAvailability> {
-  await queryable.query(
-    `
-      update agents
-      set availability_status = 'available',
-          wrap_up_until = null,
-          updated_at = now()
-      where user_id = $1
-        and availability_status = 'wrap_up'
-    `,
-    [userId]
-  );
   const result = await queryable.query<AgentAvailabilityRow>(
     `
       select availability_status, wrap_up_until
@@ -38,12 +28,26 @@ export async function getAgentAvailability(queryable: Queryable, userId: string)
 }
 
 export async function setAgentAvailability(
-  queryable: Queryable,
+  pool: pg.Pool,
   agentId: string,
-  status: Exclude<AgentAvailabilityStatus, "wrap_up">
+  status: Exclude<AgentAvailabilityStatus, "wrap_up">,
+  actor?: { userId: string; authVersion: number }
 ): Promise<AgentAvailability | null> {
-  const result = await queryable.query<AgentAvailabilityRow>(
-    `
+  return withEligibilityTransaction(pool, async (client) => {
+    await lockEligibilityAgents(client, [agentId]);
+    if (
+      actor &&
+      !(
+        await client.query(
+          `select 1 from agents a join users u on u.id=a.user_id
+       where a.id=$1 and u.id=$2 and u.is_active and u.auth_version=$3`,
+          [agentId, actor.userId, actor.authVersion]
+        )
+      ).rowCount
+    )
+      return null;
+    const result = await client.query<AgentAvailabilityRow>(
+      `
       update agents
       set availability_status = $2,
           wrap_up_until = null,
@@ -51,9 +55,11 @@ export async function setAgentAvailability(
       where id = $1
       returning availability_status, wrap_up_until
     `,
-    [agentId, status]
-  );
-  return result.rows[0] ? mapAgentAvailability(result.rows[0]) : null;
+      [agentId, status]
+    );
+    if (status === "paused") await cancelPendingAgentWork(client, [agentId], "paused");
+    return result.rows[0] ? mapAgentAvailability(result.rows[0]) : null;
+  });
 }
 
 export async function finishAgentCall(queryable: Queryable, agentId: string): Promise<void> {
@@ -89,7 +95,7 @@ export async function finishAgentCall(queryable: Queryable, agentId: string): Pr
 
 function mapAgentAvailability(row: AgentAvailabilityRow | undefined): AgentAvailability {
   return {
-    status: row?.availability_status ?? "available",
-    wrapUpUntil: row?.wrap_up_until?.toISOString() ?? null
+    status: row?.availability_status === "wrap_up" ? "available" : (row?.availability_status ?? "available"),
+    wrapUpUntil: row?.availability_status === "wrap_up" ? null : (row?.wrap_up_until?.toISOString() ?? null)
   };
 }

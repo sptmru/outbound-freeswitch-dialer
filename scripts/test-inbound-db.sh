@@ -29,7 +29,7 @@ mkdir "$RUN_DIR/socket"
 chmod 777 "$RUN_DIR/socket"
 git rev-parse HEAD > "$RUN_DIR/base-revision.txt"
 printf '%s\n' "$PG_STORAGE" > "$RUN_DIR/storage.txt"
-sha256sum tests/fixtures/inbound/* apps/api/src/inbound*.ts apps/api/src/agent-call-slots*.ts apps/api/src/call-admission*.ts apps/api/src/native-call-control*.ts apps/api/src/call-cleanup*.ts apps/api/src/call-finalization*.ts apps/api/src/call-outcomes.ts apps/api/src/agent-availability*.ts apps/api/src/esl-events*.ts apps/api/src/call-capacity*.ts apps/api/src/call-control-pools*.ts apps/api/src/manual-outbound*.ts apps/api/src/auto-next*.ts apps/api/src/call-executor*.ts apps/api/src/call-command-transport*.ts apps/api/src/desk-slots-schema.integration.test.ts apps/api/src/call-participation*.ts apps/api/src/durable-call-work*.ts apps/api/src/call-coordination*.ts apps/api/src/dashboard/calls.ts apps/api/src/dashboard/routes.ts packages/shared/src/*.ts apps/api/src/call-observability.ts apps/api/src/dashboard/browser-media.ts apps/api/src/dashboard/recordings.ts apps/api/src/dashboard/phone.ts apps/api/db/migrations/*.sql scripts/*inbound-db* > "$RUN_DIR/source-sha256.txt"
+sha256sum apps/api/src/eligibility*.ts apps/api/src/dashboard/supervisor*.ts apps/api/src/agent-registrations*.ts apps/api/src/auth/routes.ts tests/fixtures/inbound/* apps/api/src/inbound*.ts apps/api/src/agent-call-slots*.ts apps/api/src/call-admission*.ts apps/api/src/native-call-control*.ts apps/api/src/call-cleanup*.ts apps/api/src/call-finalization*.ts apps/api/src/call-outcomes.ts apps/api/src/agent-availability*.ts apps/api/src/esl-events*.ts apps/api/src/call-capacity*.ts apps/api/src/call-control-pools*.ts apps/api/src/manual-outbound*.ts apps/api/src/auto-next*.ts apps/api/src/call-executor*.ts apps/api/src/call-command-transport*.ts apps/api/src/desk-slots-schema.integration.test.ts apps/api/src/call-participation*.ts apps/api/src/durable-call-work*.ts apps/api/src/call-coordination*.ts apps/api/src/dashboard/calls.ts apps/api/src/dashboard/routes.ts packages/shared/src/*.ts apps/api/src/call-observability.ts apps/api/src/dashboard/browser-media.ts apps/api/src/dashboard/recordings.ts apps/api/src/dashboard/phone.ts apps/api/db/migrations/*.sql scripts/*inbound-db* > "$RUN_DIR/source-sha256.txt"
 docker image inspect "$PG_IMAGE" --format '{{.Id}} {{json .RepoDigests}}' > "$RUN_DIR/image.txt"
 docker run -d --name "$PG_CONTAINER" --network none --memory 512m --cpus 2 --pids-limit 128 \
   "${storage_args[@]}" \
@@ -48,5 +48,5 @@ docker inspect "$PG_CONTAINER" --format '{{.HostConfig.NetworkMode}} {{json .Hos
 export TEST_DATABASE_URL="postgresql://postgres@localhost/inbound_test?host=$RUN_DIR/socket"
 unset DATABASE_URL
 export INBOUND_TEST_ARTIFACTS="$RUN_DIR"
-timeout 120 npm run test:inbound:db > "$RUN_DIR/result.txt" 2>&1 || { cat "$RUN_DIR/result.txt"; exit 1; }
+timeout 240 npm run test:inbound:db > "$RUN_DIR/result.txt" 2>&1 || { cat "$RUN_DIR/result.txt"; exit 1; }
 cat "$RUN_DIR/result.txt"

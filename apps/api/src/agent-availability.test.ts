@@ -4,12 +4,12 @@ import type pg from "pg";
 import { finishAgentCall, getAgentAvailability, setAgentAvailability } from "./agent-availability.js";
 
 describe("agent availability", () => {
-  it("clears legacy wrap-up before returning desk availability", async () => {
+  it("projects legacy wrap-up as available without a read-side mutation", async () => {
     const queries: Array<{ params: readonly unknown[]; sql: string }> = [];
     const pool = queryPool((sql, params) => {
       queries.push({ sql, params });
       if (sql.includes("select availability_status")) {
-        return rows([{ availability_status: "available", wrap_up_until: null }]);
+        return rows([{ availability_status: "wrap_up", wrap_up_until: new Date() }]);
       }
       return rows([]);
     });
@@ -17,8 +17,8 @@ describe("agent availability", () => {
     const availability = await getAgentAvailability(pool, "user-1");
 
     assert.deepEqual(availability, { status: "available", wrapUpUntil: null });
-    assert.match(queries[0]?.sql ?? "", /availability_status = 'wrap_up'/);
-    assert.doesNotMatch(queries[0]?.sql ?? "", /wrap_up_until <= now\(\)/);
+    assert.equal(queries.length, 1);
+    assert.match(queries[0]?.sql ?? "", /select availability_status/);
   });
 
   it("allows pausing while an interactive call is active", async () => {
@@ -77,8 +77,14 @@ describe("agent availability", () => {
 function queryPool(
   handler: (sql: string, params: readonly unknown[]) => pg.QueryResult<pg.QueryResultRow>
 ): pg.Pool {
+  const query = (sql: string, params: readonly unknown[] = []) => Promise.resolve(handler(sql, params));
   return {
-    query: (sql: string, params: readonly unknown[] = []) => Promise.resolve(handler(sql, params))
+    query,
+    connect: async () => ({
+      query: (sql: string, params: readonly unknown[] = []) =>
+        sql.includes("update agents") ? query(sql, params) : Promise.resolve(rows([])),
+      release: () => undefined
+    })
   } as unknown as pg.Pool;
 }
 

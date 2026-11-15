@@ -1,3 +1,4 @@
+import { lockEligibilityAgents, withEligibilityTransaction } from "./eligibility.js";
 import { resolveCustomerHangupOutcome } from "./call-outcomes.js";
 import net from "node:net";
 import { mkdir } from "node:fs/promises";
@@ -1603,13 +1604,22 @@ async function persistAgentRegistrationEvent(
     return;
   }
 
-  const result = await pool.query<{
-    id: string;
-    user_id: string;
-    last_registered_at: Date | null;
-    last_unregistered_at: Date | null;
-  }>(
-    `
+  const result = await withEligibilityTransaction(pool, async (client) => {
+    const affected = await client.query<{ id: string }>(
+      "select id from agents where sip_username=$1 order by id",
+      [registrationEvent.sipUsername]
+    );
+    await lockEligibilityAgents(
+      client,
+      affected.rows.map((a) => a.id)
+    );
+    return client.query<{
+      id: string;
+      user_id: string;
+      last_registered_at: Date | null;
+      last_unregistered_at: Date | null;
+    }>(
+      `
       update agents
       set registered = $2,
           last_registered_at = case when $2 then now() else last_registered_at end,
@@ -1632,8 +1642,9 @@ async function persistAgentRegistrationEvent(
       where sip_username = $1
       returning id, user_id, last_registered_at, last_unregistered_at
     `,
-    [registrationEvent.sipUsername, registrationEvent.registered]
-  );
+      [registrationEvent.sipUsername, registrationEvent.registered]
+    );
+  });
   for (const agent of result.rows) {
     logger?.info(
       {

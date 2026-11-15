@@ -1,3 +1,4 @@
+import { ADMISSION_LOCK_NAMESPACE } from "../call-admission.js";
 import { basename, extname } from "node:path";
 import { execFile } from "node:child_process";
 import { stat } from "node:fs/promises";
@@ -222,6 +223,7 @@ export class RecordingAssignmentError extends Error {
 // All assignment changes, deletion, and drop claims take this lock before row locks.
 // It is released before any filesystem or FreeSWITCH operation.
 export async function lockCampaignVoicemail(client: pg.PoolClient, campaignId: string): Promise<void> {
+  await client.query("select pg_advisory_xact_lock($1,0)", [ADMISSION_LOCK_NAMESPACE]);
   await client.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [
     `outbound-dialer-campaign-voicemail:${campaignId}`
   ]);

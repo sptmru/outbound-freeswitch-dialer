@@ -149,7 +149,6 @@ export class CallAdmission {
         when not u.is_active then 'session_revoked'
         when c.status <> 'active' then 'campaign_unavailable'
         when a.availability_status='paused' then 'paused'
-        when a.availability_status='wrap_up' and a.wrap_up_until > clock_timestamp() then 'wrap_up'
         when d.id is null or d.revoked_at is not null or d.expires_at <= clock_timestamp() then 'not_controller'
         when d.campaign_id is distinct from c.id or d.revision <> $5::bigint then 'revision_conflict'
         when d.binding_generation <> $6::bigint or not d.ready or d.verified_generation is distinct from d.binding_generation

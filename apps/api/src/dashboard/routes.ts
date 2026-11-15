@@ -576,7 +576,10 @@ export function registerDashboardRoutes(
     const input = updateAgentAvailabilitySchema.parse(request.body);
     const publicUser = toPublicUser(user);
     const agent = await ensureAgentForUser(pool, config, publicUser);
-    const availability = await setAgentAvailability(pool, agent.id, input.status);
+    const availability = await setAgentAvailability(pool, agent.id, input.status, {
+      userId: user.id,
+      authVersion: user.auth_version
+    });
     if (!availability) {
       return reply.code(409).send({ message: "Agent availability could not be updated" });
     }

@@ -23,6 +23,8 @@ import {
   refreshDeletedAgentRegistrations as refreshFreeSwitchDeletedAgentRegistrations,
   type AgentRegistrationRefreshResult
 } from "../freeswitch/provisioning.js";
+import { ADMISSION_LOCK_NAMESPACE } from "../call-admission.js";
+import { cancelPendingAgentWork } from "../eligibility.js";
 import { lockUserMediaAction } from "../user-media-lock.js";
 
 const loginSchema = z.object({
@@ -196,6 +198,10 @@ async function updateUser(
   let deactivated = false;
   try {
     await client.query("begin");
+    await client.query("set local lock_timeout='250ms'");
+    await client.query("set local statement_timeout='500ms'");
+    await client.query("set local idle_in_transaction_session_timeout='1000ms'");
+    await client.query("select pg_advisory_xact_lock($1,0)", [ADMISSION_LOCK_NAMESPACE]);
     await lockUserMediaAction(client, userId);
     const current = await client.query<{
       id: string;
@@ -291,6 +297,21 @@ async function updateUser(
         [userId]
       );
     }
+    if (revokeSessions) {
+      const affected = await client.query<{ id: string }>(
+        "select id from agents where user_id=$1 order by id",
+        [userId]
+      );
+      await client.query(
+        "update agent_desk_sessions set ready=false,revoked_at=coalesce(revoked_at,clock_timestamp()) where agent_id=any($1::uuid[]) and revoked_at is null",
+        [affected.rows.map((a) => a.id)]
+      );
+      await cancelPendingAgentWork(
+        client,
+        affected.rows.map((a) => a.id),
+        "session_revoked"
+      );
+    }
     if (deactivated) {
       const agents = await client.query<{ sip_username: string }>(
         "select sip_username from agents where user_id = $1",
@@ -356,6 +377,10 @@ async function deleteUser(
   let deletedAgentSipUsernames: string[] = [];
   try {
     await client.query("begin");
+    await client.query("set local lock_timeout='250ms'");
+    await client.query("set local statement_timeout='500ms'");
+    await client.query("set local idle_in_transaction_session_timeout='1000ms'");
+    await client.query("select pg_advisory_xact_lock($1,0)", [ADMISSION_LOCK_NAMESPACE]);
     await lockUserMediaAction(client, userId);
     const user = await client.query("select id from users where id = $1 for update", [userId]);
     if (!user.rowCount) {

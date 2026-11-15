@@ -18,6 +18,7 @@ const commands = [
       "--test-concurrency=1",
       "apps/api/dist-test/inbound-harness.integration.test.js",
       "apps/api/dist-test/call-admission.integration.test.js",
+      "apps/api/dist-test/eligibility.integration.test.js",
       "apps/api/dist-test/call-capacity.integration.test.js",
       "apps/api/dist-test/call-executor.integration.test.js",
       "apps/api/dist-test/manual-outbound.integration.test.js",
@@ -35,7 +36,7 @@ const commands = [
 for (const [command, args] of commands) {
   const code = await new Promise((resolve, reject) => {
     const child = spawn(command, args, { stdio: "inherit" });
-    const timer = setTimeout(() => child.kill("SIGKILL"), 90000);
+    const timer = setTimeout(() => child.kill("SIGKILL"), 180000);
     child.once("error", (error) => {
       clearTimeout(timer);
       reject(error);

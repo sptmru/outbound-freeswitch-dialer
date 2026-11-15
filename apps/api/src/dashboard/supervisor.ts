@@ -15,6 +15,7 @@ import { createFreeSwitchUuid, originateSupervisorEavesdrop, sendFreeSwitchApiCo
 import { provisionAgentDirectory, reloadAgentDirectories } from "../freeswitch/provisioning.js";
 import { lockUserMediaAction, lockUserMediaSession, unlockUserMediaSession } from "../user-media-lock.js";
 import { buildSoftphoneIceServers } from "../users.js";
+import { ADMISSION_LOCK_NAMESPACE } from "../call-admission.js";
 
 type SendApiCommand = typeof sendFreeSwitchApiCommand;
 type OriginateSupervisor = typeof originateSupervisorEavesdrop;
@@ -235,6 +236,7 @@ export async function startSupervisorSession(
     sendApiCommand?: SendApiCommand;
   } = {}
 ): Promise<SupervisorSession> {
+  await requireLegacySupervisorProtocol(pool);
   const sendApiCommand = dependencies.sendApiCommand ?? sendFreeSwitchApiCommand;
   const endpoint = await requireSupervisorEndpoint(pool, input.actorUserId);
   await requireSupervisorRegistration(config, endpoint.sip_username, sendApiCommand);
@@ -247,6 +249,21 @@ export async function startSupervisorSession(
   const client = await pool.connect();
   try {
     await client.query("begin");
+    await client.query("set local lock_timeout='250ms'");
+    await client.query("set local statement_timeout='500ms'");
+    await client.query("set local idle_in_transaction_session_timeout='1000ms'");
+    // Starts participate in maintenance before admission/media. Native supervisor
+    // commands need the C03 adapter; never fall back to this legacy sender.
+    await client.query(
+      "insert into system_settings(key,value_json) values('ops.call_start_paused','false') on conflict(key) do nothing"
+    );
+    const maintenance = await client.query(
+      "select value_json='true'::jsonb as paused from system_settings where key='ops.call_start_paused' for share"
+    );
+    if (maintenance.rows[0]?.paused)
+      throw new SupervisorActionError("Call starts are paused for maintenance", 409);
+    await client.query("select pg_advisory_xact_lock($1,0)", [ADMISSION_LOCK_NAMESPACE]);
+    await requireLegacySupervisorProtocol(client);
     await lockUserMediaAction(client, input.actorUserId);
     const actor = await client.query(
       "select 1 from users where id = $1 and is_active = true and role = 'admin'",
@@ -268,6 +285,21 @@ export async function startSupervisorSession(
     if (ownedActiveCall.rowCount) {
       throw new SupervisorActionError("Finish your own Agent Desk call before monitoring another call", 409);
     }
+    // calls.agent_id alone misses a pre-SIP reservation or transfer recipient.
+    const slot = await client.query(
+      `select 1 from agent_call_slots s join agents a on a.id=s.agent_id
+       where a.user_id=$1 and s.state<>'free' and
+       (s.call_id is not null or not s.reconciliation_required) limit 1`,
+      [input.actorUserId]
+    );
+    if (slot.rowCount)
+      throw new SupervisorActionError("Finish your own Agent Desk call before monitoring another call", 409);
+    const freshCall = await requireMonitorableCall(client, input.callId, input.actorUserId);
+    if (
+      freshCall.agent_leg_uuid !== call.agent_leg_uuid ||
+      freshCall.customer_leg_uuid !== call.customer_leg_uuid
+    )
+      throw new SupervisorActionError("Call media changed; refresh before monitoring", 409);
     const result = await client.query<SupervisorSessionRow>(
       `
         insert into call_supervisor_sessions (
@@ -337,6 +369,7 @@ export async function updateSupervisorSessionMode(
     sendApiCommand?: SendApiCommand;
   } = {}
 ): Promise<SupervisorSession> {
+  await requireLegacySupervisorProtocol(pool);
   const sendApiCommand = dependencies.sendApiCommand ?? sendFreeSwitchApiCommand;
   return withUserMediaSessionLock(pool, input.actorUserId, async (client) => {
     const current = await requireOwnedSupervisorSession(client, input.sessionId, input.actorUserId);
@@ -426,6 +459,7 @@ export async function stopSupervisorSession(
   input: { actorUserId: string; sessionId: string },
   sendApiCommand: SendApiCommand = sendFreeSwitchApiCommand
 ): Promise<void> {
+  await requireLegacySupervisorProtocol(pool);
   await withUserMediaSessionLock(pool, input.actorUserId, async (client) => {
     const current = await requireOwnedSupervisorSession(client, input.sessionId, input.actorUserId);
     let exists: boolean;
@@ -454,6 +488,13 @@ export async function stopSupervisorSession(
       [input.sessionId, input.actorUserId, current.supervisor_leg_uuid]
     );
   });
+}
+
+async function requireLegacySupervisorProtocol(db: Queryable) {
+  const native = await db.query(
+    "select 1 from call_admission_migration where not reconciliation_required and reconciled_at is not null"
+  );
+  if (native.rowCount) throw new SupervisorActionError("Live monitoring is temporarily unavailable", 409);
 }
 
 export async function persistSupervisorFreeSwitchEvent(

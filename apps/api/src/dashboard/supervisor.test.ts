@@ -302,13 +302,23 @@ function rows<T>(items: T[]) {
 function poolWithQuery(
   query: (sql: string, params?: readonly unknown[]) => Promise<{ rowCount: number; rows: unknown[] }>
 ): pg.Pool {
+  const domainQuery = async (sql: string, params?: readonly unknown[]) => {
+    if (
+      sql.startsWith("set local ") ||
+      sql.includes("call_admission_migration") ||
+      sql.includes("agent_call_slots") ||
+      sql.includes("system_settings")
+    )
+      return rows([]);
+    return query(sql, params);
+  };
   const clientQuery = async (sql: string, params?: readonly unknown[]) => {
     if (sql.includes("pg_advisory_unlock")) return rows([{ unlocked: true }]);
     if (sql.includes("pg_advisory_lock") || sql.includes("pg_advisory_xact_lock")) return rows([]);
-    return query(sql, params);
+    return domainQuery(sql, params);
   };
   return {
-    query,
+    query: domainQuery,
     connect: async () => ({ query: clientQuery, release: () => undefined })
   } as unknown as pg.Pool;
 }

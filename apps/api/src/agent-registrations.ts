@@ -1,6 +1,7 @@
 import type pg from "pg";
 import type { AppConfig } from "./config.js";
 import { sendFreeSwitchApiCommand } from "./esl.js";
+import { lockEligibilityAgents, withEligibilityTransaction } from "./eligibility.js";
 
 interface Logger {
   info: (value: unknown, message?: string) => void;
@@ -70,15 +71,21 @@ export async function reconcileAgentRegistrations(
     );
     const databaseUsernames = databaseRegistrations.rows.map((row) => row.sip_username);
     const driftCount = symmetricDifferenceSize(databaseUsernames, registeredAgentUsernames);
-    const result = await pool.query<{
-      id: string;
-      user_id: string;
-      sip_username: string;
-      registered: boolean;
-      last_registered_at: Date | null;
-      last_unregistered_at: Date | null;
-    }>(
-      `
+    const result = await withEligibilityTransaction(pool, async (client) => {
+      const affected = await client.query<{ id: string }>("select id from agents order by id");
+      await lockEligibilityAgents(
+        client,
+        affected.rows.map((a) => a.id)
+      );
+      return client.query<{
+        id: string;
+        user_id: string;
+        sip_username: string;
+        registered: boolean;
+        last_registered_at: Date | null;
+        last_unregistered_at: Date | null;
+      }>(
+        `
         update agents
         set registered = sip_username = any($1::text[]),
             last_registered_at = case
@@ -119,8 +126,9 @@ export async function reconcileAgentRegistrations(
            )
         returning id, user_id, sip_username, registered, last_registered_at, last_unregistered_at
       `,
-      [registeredAgentUsernames]
-    );
+        [registeredAgentUsernames]
+      );
+    });
     const changedAgents = result.rowCount ?? 0;
     for (const agent of result.rows) {
       logger?.info(

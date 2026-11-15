@@ -910,28 +910,33 @@ describe("FreeSWITCH event helpers", () => {
       }
     });
 
-    assert.equal(queries.length, 1);
-    assert.match(queries[0]?.sql ?? "", /update agents/);
-    assert.match(queries[0]?.sql ?? "", /set registered = \$2/);
-    assert.match(queries[0]?.sql ?? "", /last_unregistered_at/);
-    assert.match(queries[0]?.sql ?? "", /when \$2 and status = 'offline' then 'ready'/);
-    assert.match(queries[0]?.sql ?? "", /when not \$2/);
-    assert.match(queries[0]?.sql ?? "", /then 'offline'/);
-    assert.deepEqual(queries[0]?.params, ["agent1000", false]);
+    const update = queries.find((q) => q.sql.includes("update agents"));
+    assert.ok(queries.some((q) => q.sql.includes("pg_advisory_xact_lock")));
+    assert.match(update?.sql ?? "", /update agents/);
+    assert.match(update?.sql ?? "", /set registered = \$2/);
+    assert.match(update?.sql ?? "", /last_unregistered_at/);
+    assert.match(update?.sql ?? "", /when \$2 and status = 'offline' then 'ready'/);
+    assert.match(update?.sql ?? "", /when not \$2/);
+    assert.match(update?.sql ?? "", /then 'offline'/);
+    assert.deepEqual(update?.params, ["agent1000", false]);
   });
 
   it("logs persisted registration events with identifiers and no raw SIP credentials", async () => {
     for (const eventSubclass of ["sofia::register", "sofia::unregister", "sofia::expire"]) {
       const entries: unknown[] = [];
-      const pool = createQueryPool(() =>
-        rows([
-          {
-            id: "agent-1",
-            user_id: "user-1",
-            last_registered_at: null,
-            last_unregistered_at: null
-          }
-        ])
+      const pool = createQueryPool((sql) =>
+        rows(
+          sql.includes("update agents")
+            ? [
+                {
+                  id: "agent-1",
+                  user_id: "user-1",
+                  last_registered_at: null,
+                  last_unregistered_at: null
+                }
+              ]
+            : []
+        )
       );
       await __testing.persistFreeSwitchEvent(
         config,
@@ -1332,8 +1337,10 @@ describe("FreeSWITCH event helpers", () => {
 function createQueryPool(
   handler: (sql: string, params: readonly unknown[]) => { rows: unknown[]; rowCount: number }
 ): pg.Pool {
+  const query = (sql: string, params: readonly unknown[] = []) => Promise.resolve(handler(sql, params));
   return {
-    query: (sql: string, params: readonly unknown[] = []) => Promise.resolve(handler(sql, params))
+    query,
+    connect: async () => ({ query, release: () => undefined })
   } as unknown as pg.Pool;
 }
 

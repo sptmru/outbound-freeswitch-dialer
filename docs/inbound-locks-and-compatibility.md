@@ -183,3 +183,12 @@ Local validation on 2026-11-14, Node.js `v23.7.0`, Prettier `3.9.5`:
 - No U/DB/B/FS/L/P suite was run: there is no changed application behavior and A01 requires source review. In particular, no database race, real call, provider, billing or rollback drill is claimed.
 
 The complete review can be copied into the issue as a text artifact without committing or pushing repository files. Preserve source provenance and label the artifact as local source-review evidence.
+
+## C07 migration progress — 2026-11-15
+
+The [C07 eligibility inventory and handoff](inbound-eligibility.md) records the
+implemented admission-before-media/agent/audio edges, mutation race evidence, and
+remaining supervisor execution/capacity and enabled-writer inventory obligations.
+This is partial implementation; C07 and this inventory's enabled-protocol gate
+remain open. The old supervisor session media lock is still restricted to the
+legacy feature-off path. Do not mark S1–S7 collectively passed from this slice.
