@@ -238,6 +238,10 @@ across ESL, file processing, network, or user interaction. Telemetry and ordinar
 reads do not take it. Measure transaction duration/contention under load before
 considering campaign-level sharding and revising the lock graph.
 
+C01 now supplies the internal [ordered SQL admission and fenced slot protocol](inbound-admission.md),
+including PostgreSQL race/revalidation checks. Legacy writers are not migrated or
+enabled by this module; C02–C07 and the later runtime/cutover gates remain required.
+
 ### 5.2. Agent Slot and Fencing
 
 One `agent_call_slots` row per agent changes from `free` to `reserved` with a new

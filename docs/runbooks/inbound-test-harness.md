@@ -281,3 +281,12 @@ reviewed workflow/artifact wiring instead of a hosted run. Hosted execution and
 hosted artifact upload/download remain unverified, not reported as passed.
 Actions stays disabled; the issue and tracker can be closed under that explicit
 scope amendment. Provider, target-storage and I01–I05 gates remain separate.
+
+## C01 admission database tests
+
+The dedicated runner and DB-backed API gate include [C01 admission](../inbound-admission.md).
+Its SQL participants use actual product tables, distinct Node/PG processes and
+server-observed lock barriers. Reports `c01-*-report.json` include persisted
+slots/operations, eligibility, fencing and lock-order results. Reconciliation and
+cleanup evidence in these fixtures are simulated SQL; no media/provider or legacy
+path-migration acceptance is implied. Containers/schemas/workers are disposable.
