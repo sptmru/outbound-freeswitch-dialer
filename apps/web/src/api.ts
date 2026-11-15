@@ -204,7 +204,8 @@ export async function fetchSupervisorProvisioning(): Promise<SoftphoneProvisioni
 
 export async function startSupervisorSession(callId: string): Promise<SupervisorSession> {
   return apiFetch<SupervisorSession>(`/admin/live-calls/${encodeURIComponent(callId)}/supervisor`, {
-    method: "POST"
+    method: "POST",
+    headers: { "Idempotency-Key": crypto.randomUUID() }
   });
 }
 
@@ -214,13 +215,15 @@ export async function updateSupervisorMode(
 ): Promise<SupervisorSession> {
   return apiFetch<SupervisorSession>(`/admin/supervisor-sessions/${encodeURIComponent(sessionId)}`, {
     method: "PATCH",
+    headers: { "Idempotency-Key": crypto.randomUUID() },
     body: JSON.stringify({ mode })
   });
 }
 
 export async function stopSupervisorSession(sessionId: string): Promise<void> {
   return apiFetch<void>(`/admin/supervisor-sessions/${encodeURIComponent(sessionId)}`, {
-    method: "DELETE"
+    method: "DELETE",
+    headers: { "Idempotency-Key": crypto.randomUUID() }
   });
 }
 

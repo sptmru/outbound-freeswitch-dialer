@@ -3,6 +3,13 @@ import { createReadStream, createWriteStream } from "node:fs";
 import { mkdir, stat, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
+import { withEligibilityTransaction, lockEligibilityAgents, cancelPendingAgentWork } from "../eligibility.js";
+import {
+  admitSupervisorMutation,
+  SupervisorCoordinationError,
+  supervisorEndpointRoute,
+  type SupervisorMutation
+} from "../supervisor-coordination.js";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type pg from "pg";
@@ -428,8 +435,72 @@ export function registerDashboardRoutes(
   pool: pg.Pool,
   runtimeSettings = new RuntimeSettingsService(pool, config),
   manualOutbound?: { wakeExecutor(operationId: string): Promise<void> },
-  nativeControls?: { wakeExecutor(operationId: string): Promise<void> }
+  nativeControls?: { wakeExecutor(operationId: string): Promise<void> },
+  nativeSupervisor?: { wakeExecutor(operationId: string): Promise<void> }
 ): void {
+  async function coordinatedSupervisor(
+    request: FastifyRequest,
+    user: { id: string },
+    input: Pick<SupervisorMutation, "action" | "callId" | "sessionId" | "mode">
+  ) {
+    const marker = await pool.query(
+      "select 1 from call_admission_migration where not reconciliation_required and reconciled_at is not null"
+    );
+    if (!marker.rowCount) return null;
+    if (!nativeSupervisor || !config.FREESWITCH_ESL_ENABLED)
+      throw new SupervisorActionError("Live monitoring is temporarily unavailable", 409);
+    const authenticated = await requireUser(request, config, pool);
+    if (!authenticated || authenticated.id !== user.id)
+      throw new SupervisorActionError("Administrator access changed; sign in again", 409);
+    const key = z.guid().parse(request.headers["idempotency-key"]);
+    let endpoint: SupervisorMutation["endpoint"];
+    const replay = (
+      await pool.query("select 1 from call_operations where idempotency_scope=$1 and idempotency_key=$2", [
+        `supervisor:${user.id}`,
+        key
+      ])
+    ).rowCount;
+    if (input.action !== "stop" && !replay) {
+      const row = (
+        await pool.query("select sip_username from admin_supervisor_endpoints where user_id=$1", [user.id])
+      ).rows[0];
+      if (!row) throw new SupervisorActionError("Supervisor phone is unavailable", 409);
+      try {
+        const contact = await sendFreeSwitchApiCommand(
+          config,
+          `sofia_contact internal-webrtc/${row.sip_username}@${config.FREESWITCH_DOMAIN}`
+        );
+        endpoint = { sipUsername: row.sip_username, route: supervisorEndpointRoute(contact.body) };
+      } catch {
+        throw new SupervisorActionError("Supervisor phone must have one verified registration", 409);
+      }
+    }
+    try {
+      const result = await admitSupervisorMutation(pool, {
+        ...input,
+        key,
+        actorUserId: user.id,
+        actorAuthVersion: authenticated.auth_version,
+        endpoint
+      });
+      // A retry can wake/reconcile the same durable identity; it never enqueues a new command.
+      try {
+        await nativeSupervisor.wakeExecutor(result.rootId);
+      } catch {
+        request.log.warn({ operationId: result.rootId }, "Supervisor wake failed; durable work retained");
+      }
+      return result.session;
+    } catch (error) {
+      if (
+        error instanceof SupervisorCoordinationError ||
+        error instanceof CapacityError ||
+        error instanceof AdmissionError ||
+        error instanceof ExecutionError
+      )
+        throw new SupervisorActionError(error.message, 409);
+      throw error;
+    }
+  }
   async function nativeControl(
     request: FastifyRequest,
     reply: FastifyReply,
@@ -660,10 +731,12 @@ export function registerDashboardRoutes(
       if (!user) return;
       const params = z.object({ callId: z.guid() }).parse(request.params);
       try {
-        const session = await startSupervisorSession(pool, config, {
-          actorUserId: user.id,
-          callId: params.callId
-        });
+        const session =
+          (await coordinatedSupervisor(request, user, { action: "start", callId: params.callId })) ??
+          (await startSupervisorSession(pool, config, {
+            actorUserId: user.id,
+            callId: params.callId
+          }));
         await appendAdminAuditMetadata(pool, request.id, {
           action: "supervisor_started",
           callId: params.callId,
@@ -688,11 +761,17 @@ export function registerDashboardRoutes(
       const params = supervisorSessionParamsSchema.parse(request.params);
       const input = updateSupervisorSessionSchema.parse(request.body);
       try {
-        const session = await updateSupervisorSessionMode(pool, config, {
-          actorUserId: user.id,
-          mode: input.mode,
-          sessionId: params.sessionId
-        });
+        const session =
+          (await coordinatedSupervisor(request, user, {
+            action: "mode",
+            sessionId: params.sessionId,
+            mode: input.mode
+          })) ??
+          (await updateSupervisorSessionMode(pool, config, {
+            actorUserId: user.id,
+            mode: input.mode,
+            sessionId: params.sessionId
+          }));
         await appendAdminAuditMetadata(pool, request.id, {
           action: "supervisor_mode_changed",
           callId: session.callId,
@@ -714,10 +793,11 @@ export function registerDashboardRoutes(
     if (!user) return;
     const params = supervisorSessionParamsSchema.parse(request.params);
     try {
-      await stopSupervisorSession(pool, config, {
-        actorUserId: user.id,
-        sessionId: params.sessionId
-      });
+      if (!(await coordinatedSupervisor(request, user, { action: "stop", sessionId: params.sessionId })))
+        await stopSupervisorSession(pool, config, {
+          actorUserId: user.id,
+          sessionId: params.sessionId
+        });
       await appendAdminAuditMetadata(pool, request.id, {
         action: "supervisor_stopped",
         supervisorSessionId: params.sessionId
@@ -1491,8 +1571,17 @@ export function registerDashboardRoutes(
 
       const params = campaignParamsSchema.parse(request.params);
       const input = updateCampaignSchema.parse(request.body);
-      const result = await pool.query(
-        `
+      const result = await withEligibilityTransaction(pool, async (client) => {
+        await client.query("select id from campaigns where id=$1 for update", [params.campaignId]);
+        const selected = (
+          await client.query<{ agent_id: string }>(
+            "select agent_id from agent_desk_sessions where campaign_id=$1 and revoked_at is null order by agent_id",
+            [params.campaignId]
+          )
+        ).rows.map((a) => a.agent_id);
+        await lockEligibilityAgents(client, selected);
+        const result = await client.query(
+          `
           update campaigns
           set name = $2,
               status = $3,
@@ -1503,16 +1592,25 @@ export function registerDashboardRoutes(
               updated_at = now()
           where id = $1
         `,
-        [
-          params.campaignId,
-          input.name,
-          input.status,
-          input.manualDialingEnabled,
-          input.callRecordingEnabled,
-          input.earlyMediaAvmdEnabled,
-          input.autoAdvanceToNextLeadEnabled
-        ]
-      );
+          [
+            params.campaignId,
+            input.name,
+            input.status,
+            input.manualDialingEnabled,
+            input.callRecordingEnabled,
+            input.earlyMediaAvmdEnabled,
+            input.autoAdvanceToNextLeadEnabled
+          ]
+        );
+
+        if (input.status !== "active") await cancelPendingAgentWork(client, selected, "campaign_unavailable");
+        if (input.autoAdvanceToNextLeadEnabled === false)
+          await client.query(
+            "update agent_auto_next_intents set state='canceled',reason='automatic_disabled',closed_at=clock_timestamp() where campaign_id=$1 and state in ('pending','deferred')",
+            [params.campaignId]
+          );
+        return result;
+      });
 
       if (!result.rowCount) {
         return reply.code(404).send({ message: "Campaign not found" });

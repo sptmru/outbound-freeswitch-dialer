@@ -1,4 +1,5 @@
 import { lockEligibilityAgents, withEligibilityTransaction } from "./eligibility.js";
+import { persistSupervisorJob, persistCoordinatedSupervisorEvent } from "./supervisor-coordination.js";
 import { resolveCustomerHangupOutcome } from "./call-outcomes.js";
 import net from "node:net";
 import { mkdir } from "node:fs/promises";
@@ -342,11 +343,16 @@ async function persistFreeSwitchEvent(
   const eventName = frame.headers["event-name"];
   if (
     eventName === "BACKGROUND_JOB" &&
-    (await persistNativeCommandJob(pool, {
+    ((await persistNativeCommandJob(pool, {
       jobUuid: frame.headers["job-uuid"] ?? "",
       body: frame.body,
       headers: frame.headers
-    }))
+    })) ||
+      (await persistSupervisorJob(pool, {
+        jobUuid: frame.headers["job-uuid"] ?? "",
+        body: frame.body,
+        headers: frame.headers
+      })))
   )
     return;
   const concreteCallId =
@@ -399,6 +405,14 @@ async function persistFreeSwitchEvent(
 
   const supervisorSessionId = frame.headers["variable_outbound_dialer_supervisor_session_id"];
   if (eventName && supervisorSessionId && isUuid(supervisorSessionId)) {
+    if (
+      await persistCoordinatedSupervisorEvent(pool, {
+        eventName,
+        sessionId: supervisorSessionId,
+        supervisorLegUuid: frame.headers["unique-id"] ?? frame.headers["variable_uuid"] ?? null
+      })
+    )
+      return;
     await persistSupervisorFreeSwitchEvent(pool, {
       eventName,
       sessionId: supervisorSessionId,

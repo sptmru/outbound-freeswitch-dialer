@@ -139,7 +139,7 @@ function buildAgentBridgeOriginateCommand(config: AppConfig, input: OriginateAge
   return `originate {${agentVariables}}user/${input.sipUsername}@${config.FREESWITCH_DOMAIN} &bridge({${customerVariables}}${customerDialString})`;
 }
 
-function buildSupervisorEavesdropOriginateCommand(
+export function buildSupervisorEavesdropOriginateCommand(
   config: AppConfig,
   input: OriginateSupervisorEavesdropInput
 ): string {

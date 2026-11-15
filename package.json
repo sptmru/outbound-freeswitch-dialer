@@ -33,7 +33,8 @@
     "test:inbound:db": "node scripts/run-inbound-db.mjs",
     "test:inbound:db:isolated": "bash scripts/test-inbound-db.sh",
     "test:executor:freeswitch": "bash scripts/test-c03-executor.sh",
-    "test:cleanup:freeswitch": "bash scripts/test-c06-cleanup.sh"
+    "test:cleanup:freeswitch": "bash scripts/test-c06-cleanup.sh",
+    "test:supervisor:freeswitch": "bash scripts/test-c07-supervisor.sh"
   },
   "engines": {
     "node": ">=22"

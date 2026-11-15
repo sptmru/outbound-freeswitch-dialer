@@ -58,6 +58,7 @@ DB/API boundary.
 - SIP.js browser provisioning and registration only on Agent Desk, with remote audio cleanup and registration reconciliation.
 - Backend-owned agent-first originate/bridge, suppression and campaign authorization before originate, DTMF, hangup, and active-call eligibility.
 - Dedicated admin supervisor SIP identities and separate `eavesdrop` legs for listen-only, agent whisper, and two-party join, with server-enforced mode variables, no DTMF escalation, current-leg event correlation, and fail-closed mode replacement.
+- [C07 shared eligibility and native supervisor coordination](inbound-eligibility.md): durable fixed command identities, generation-specific cleanup, endpoint exclusion and counted capacity, with isolated PostgreSQL/FreeSWITCH evidence. Native execution remains staged until I05 bootstrap/enablement.
 - Transactional next-contact claim using `FOR UPDATE SKIP LOCKED` and uniqueness guards against duplicate interactive calls.
 - Explicit call/leg/event persistence, originate watchdog, automatic outcome mapping, and contact lifecycle updates.
 - ESL frame unwrapping, custom-event subscription, agent registration updates, recording/AVMD startup, and reconnect retry.

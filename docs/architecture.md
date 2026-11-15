@@ -145,6 +145,16 @@ Agent Desk and next-contact selection use the same ordering: never-attempted con
 6. ESL answer/bridge/hangup and background-job failure events update only the session whose current supervisor UUID/job UUID matches. Ending the supervisor leg never ends the agent/customer bridge.
 7. Agent Desk refetches on `call_supervisor_sessions` notifications and shows the strongest active mode. Admin mutations receive normal request audit records enriched with the target call/session/mode.
 
+The flow above describes the feature-off sender. [C07's native protocol](inbound-eligibility.md)
+adds UUID `Idempotency-Key` headers to these mutations, ordered common admission
+and one C02 supervisor channel permit per session. C03 stores fixed command/leg
+identities before ESL; per-generation evidence survives mode replacement. A new
+mode waits for both fixed hangup-job completion and old-leg COMPLETE/DESTROY.
+ACKs and absent probes retain uncertainty and occupancy. Native sends hold no
+session user-media lock. Legacy event/failure projections cannot write native
+sessions. The production bootstrap still lacks the staged native adapter; I05
+owns wiring/drain/enablement, and G04 owns transfer-aware supervision.
+
 The separate leg minimizes blast radius but does not prove what either party heard. Listen/whisper direction, join mixing, recording contents, reconnect behavior, and device permissions require a controlled target-environment call matrix before production acceptance.
 
 ## Voicemail Drop Flow

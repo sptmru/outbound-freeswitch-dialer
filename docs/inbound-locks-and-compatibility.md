@@ -184,11 +184,19 @@ Local validation on 2026-11-14, Node.js `v23.7.0`, Prettier `3.9.5`:
 
 The complete review can be copied into the issue as a text artifact without committing or pushing repository files. Preserve source provenance and label the artifact as local source-review evidence.
 
-## C07 migration progress — 2026-11-15
+## C07 protocol and inventory completion — 2026-11-15
 
-The [C07 eligibility inventory and handoff](inbound-eligibility.md) records the
-implemented admission-before-media/agent/audio edges, mutation race evidence, and
-remaining supervisor execution/capacity and enabled-writer inventory obligations.
-This is partial implementation; C07 and this inventory's enabled-protocol gate
-remain open. The old supervisor session media lock is still restricted to the
-legacy feature-off path. Do not mark S1–S7 collectively passed from this slice.
+The [C07 protocol, current writer inventory and acceptance evidence](inbound-eligibility.md)
+supersede the historical migration obligations above for the completed C07 slice.
+Eligibility/auth/campaign/audio/release writers acquire admission before lower
+ranked locks. Native supervisor uses C03 durable operations and C02 capacity,
+with exact per-generation leg evidence and cleanup before replacement. Native
+execution does not hold the legacy session media lock over ESL. Legacy senders
+are excluded after reconciliation and legacy supervisor projections are fenced.
+
+PostgreSQL barriers cover eligibility/admission, supervisor/Desk, maintenance/
+supervisor and audio/release in both commit orders and with either first writer
+rolled back. The isolated FS lab covers actual native HTTP/C03 start, listen/
+whisper/join replacement, capacity and endpoint exclusion, obsolete events and
+stop. This does not mark the entire future S1–S7 matrix passed: transfer, binding,
+provider, load, recovery and production acceptance retain their owning tasks.

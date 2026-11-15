@@ -245,10 +245,11 @@ C02 adds internal [shared capacity bundles, queue return permits and confirmed r
 under that gate; actual path migration, FS hard safeguards and enablement remain
 with their owning tasks.
 
-C07 has a [partial eligibility migration and explicit supervisor blocker](inbound-eligibility.md).
-Pause/campaign/readiness invalidation has controlled PostgreSQL evidence; native
-supervisor execution/capacity and its FS matrix remain unfinished. C07 stays open
-and does not satisfy D01's dependency or authorize cutover.
+C07 supplies the [eligibility/supervisor protocol and completed writer inventory](inbound-eligibility.md).
+Controlled PostgreSQL schedules verify eligibility, endpoint exclusion, capacity
+and mixed locks. An isolated product-schema FreeSWITCH lab verifies supervisor
+replacement and RTP directions. Native adapters remain staged; D01 owns controller/
+binding lifecycle and I05 owns bootstrap, drain and production enablement.
 
 ### 5.2. Agent Slot and Fencing
 

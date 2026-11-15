@@ -1,3 +1,5 @@
+import { lockEligibilityAgents, cancelPendingAgentWork } from "../eligibility.js";
+import { ADMISSION_LOCK_NAMESPACE } from "../call-admission.js";
 import type pg from "pg";
 import type {
   AdminCampaignListResponse,
@@ -55,6 +57,9 @@ export async function deleteCampaign(
   const client = await pool.connect();
   try {
     await client.query("begin");
+    await client.query("set local lock_timeout='250ms'");
+    await client.query("set local statement_timeout='500ms'");
+    await client.query("select pg_advisory_xact_lock($1,0)", [ADMISSION_LOCK_NAMESPACE]);
     const campaign = await client.query("select id from campaigns where id = $1 for update", [campaignId]);
     if (!campaign.rowCount) {
       await client.query("rollback");
@@ -77,6 +82,14 @@ export async function deleteCampaign(
       return "active_call";
     }
 
+    const selected = (
+      await client.query(
+        "select agent_id from agent_desk_sessions where campaign_id=$1 and revoked_at is null order by agent_id",
+        [campaignId]
+      )
+    ).rows.map((r) => r.agent_id);
+    await lockEligibilityAgents(client, selected);
+    await cancelPendingAgentWork(client, selected, "campaign_unavailable");
     await client.query("update campaigns set status = 'archived', updated_at = now() where id = $1", [
       campaignId
     ]);
@@ -97,6 +110,9 @@ export async function resetCampaignLeads(
   const client = await pool.connect();
   try {
     await client.query("begin");
+    await client.query("set local lock_timeout='250ms'");
+    await client.query("set local statement_timeout='500ms'");
+    await client.query("select pg_advisory_xact_lock($1,0)", [ADMISSION_LOCK_NAMESPACE]);
     const campaign = await client.query("select id from campaigns where id = $1 for update", [campaignId]);
     if (!campaign.rowCount) {
       await client.query("rollback");

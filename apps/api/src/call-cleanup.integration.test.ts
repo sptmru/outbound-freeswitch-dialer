@@ -346,7 +346,11 @@ test("C06 migration 031 upgrades an occupied 030 slot and fences participation A
       alter table call_participants drop column slot_reservation_id cascade,drop column slot_generation cascade;
       delete from schema_migrations where filename='031_participant_slot_cleanup.sql'`);
     const s = await f.seed();
-    const oldHistory = (await f.pool.query("select * from schema_migrations order by filename")).rows;
+    const oldHistory = (
+      await f.pool.query(
+        "select * from schema_migrations where filename<'031_participant_slot_cleanup.sql' order by filename"
+      )
+    ).rows;
     await runMigrations(f.pool);
     const p = (await f.pool.query("select * from call_participants where id=$1", [s.participantId])).rows[0];
     assert.equal(p.slot_reservation_id, s.slot.reservationId);

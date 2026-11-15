@@ -513,6 +513,7 @@ export async function persistSupervisorFreeSwitchEvent(
        set state = 'active', connected_at = coalesce(connected_at, now()), updated_at = now()
        where id = $1
          and supervisor_leg_uuid = $2
+         and coordination_protocol='legacy'
          and state = 'connecting'`,
       [input.sessionId, input.supervisorLegUuid]
     );
@@ -530,6 +531,7 @@ export async function persistSupervisorFreeSwitchEvent(
            updated_at = now()
        where id = $1
          and supervisor_leg_uuid = $2
+         and coordination_protocol='legacy'
          and state in ('connecting', 'active')`,
       [input.sessionId, input.supervisorLegUuid, input.hangupCause ?? null]
     );
@@ -548,7 +550,8 @@ export async function persistSupervisorBackgroundJobFailure(
          failure_reason = left($2, 1000),
          updated_at = now()
      where originate_job_uuid = $1
-       and state = 'connecting'`,
+       and coordination_protocol='legacy'
+         and state = 'connecting'`,
     [jobUuid, error]
   );
 }
@@ -653,7 +656,7 @@ async function requireOwnedSupervisorSession(
   const result = await pool.query<SupervisorSessionRow>(
     `select id, call_id, mode, state, started_at, connected_at, ended_at, failure_reason, supervisor_leg_uuid, updated_at
      from call_supervisor_sessions
-     where id = $1 and actor_user_id = $2
+     where id = $1 and actor_user_id = $2 and coordination_protocol='legacy'
      limit 1`,
     [sessionId, actorUserId]
   );
@@ -686,7 +689,7 @@ async function failSupervisorSession(
          ended_at = coalesce(ended_at, now()),
          failure_reason = left($2, 1000),
          updated_at = now()
-     where id = $1
+     where id = $1 and coordination_protocol='legacy'
        and ($3::uuid is null or supervisor_leg_uuid = $3)`,
     [sessionId, error instanceof Error ? error.message : String(error), supervisorLegUuid ?? null]
   );

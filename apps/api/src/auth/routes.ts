@@ -220,6 +220,9 @@ async function updateUser(
       return "not_found";
     }
 
+    await client.query("select user_id from admin_supervisor_endpoints where user_id=$1 for update", [
+      userId
+    ]);
     deactivated = existing.is_active && input.isActive === false;
     const supervisorAccessRemoved = deactivated || (existing.role === "admin" && input.role === "agent");
     const revokeSessions = Boolean(input.password) || deactivated;
@@ -227,11 +230,10 @@ async function updateUser(
       const activeCalls = await client.query(
         `
           select 1
-          from calls
-          join agents on agents.id = calls.agent_id
-          where agents.user_id = $1
-            and calls.ended_at is null
-            and calls.state not in ('completed', 'failed', 'canceled', 'agent_released')
+          from agents a left join agent_call_slots s on s.agent_id=a.id
+          where a.user_id=$1 and ((s.state<>'free' and (s.call_id is not null or exists(select 1 from call_admission_migration where not reconciliation_required and reconciled_at is not null))) or exists(
+            select 1 from calls where calls.agent_id=a.id and calls.ended_at is null
+            and calls.state not in ('completed','failed','canceled','agent_released')))
           limit 1
         `,
         [userId]
@@ -299,9 +301,11 @@ async function updateUser(
     }
     if (revokeSessions) {
       const affected = await client.query<{ id: string }>(
-        "select id from agents where user_id=$1 order by id",
+        "select id from agents where user_id=$1 order by id for update",
         [userId]
       );
+      for (const agent of affected.rows)
+        await client.query("select agent_id from agent_call_slots where agent_id=$1 for update", [agent.id]);
       await client.query(
         "update agent_desk_sessions set ready=false,revoked_at=coalesce(revoked_at,clock_timestamp()) where agent_id=any($1::uuid[]) and revoked_at is null",
         [affected.rows.map((a) => a.id)]
@@ -388,14 +392,16 @@ async function deleteUser(
       return "not_found";
     }
 
+    await client.query("select user_id from admin_supervisor_endpoints where user_id=$1 for update", [
+      userId
+    ]);
     const activeCalls = await client.query(
       `
         select 1
-        from calls
-        join agents on agents.id = calls.agent_id
-        where agents.user_id = $1
-          and calls.ended_at is null
-          and calls.state not in ('completed', 'failed', 'canceled', 'agent_released')
+        from agents a left join agent_call_slots s on s.agent_id=a.id
+        where a.user_id=$1 and ((s.state<>'free' and (s.call_id is not null or exists(select 1 from call_admission_migration where not reconciliation_required and reconciled_at is not null))) or exists(
+          select 1 from calls where calls.agent_id=a.id and calls.ended_at is null
+          and calls.state not in ('completed','failed','canceled','agent_released')))
         limit 1
       `,
       [userId]
@@ -426,6 +432,18 @@ async function deleteUser(
     );
     deletedAgentSipUsernames = endpoints.rows.map((endpoint) => endpoint.sip_username);
 
+    const affected = (
+      await client.query<{ id: string }>("select id from agents where user_id=$1 order by id for update", [
+        userId
+      ])
+    ).rows.map((a) => a.id);
+    for (const agentId of affected)
+      await client.query("select agent_id from agent_call_slots where agent_id=$1 for update", [agentId]);
+    await client.query(
+      "update agent_desk_sessions set ready=false,revoked_at=coalesce(revoked_at,clock_timestamp()) where agent_id=any($1::uuid[]) and revoked_at is null",
+      [affected]
+    );
+    await cancelPendingAgentWork(client, affected, "user_access_changed");
     await client.query(
       "update users set is_active = false, auth_version = auth_version + 1, updated_at = now() where id = $1",
       [userId]

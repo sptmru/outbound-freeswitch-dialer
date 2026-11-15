@@ -61,7 +61,7 @@ export async function discoverAdmissionResources(client: pg.PoolClient, input: A
       [callIds]
     )
   ).rows;
-  const agentIds = sorted(
+  const baseAgentIds = sorted(
     [
       ...(input.agentIds ?? []),
       ...calls.map((r) => r.agent_id),
@@ -70,8 +70,12 @@ export async function discoverAdmissionResources(client: pg.PoolClient, input: A
     ].filter(Boolean)
   );
   const agents = (
-    await client.query(`select id,user_id from agents where id=any($1::uuid[]) order by id`, [agentIds])
+    await client.query(
+      `select id,user_id from agents where id=any($1::uuid[]) or user_id=any($2::uuid[]) order by id`,
+      [baseAgentIds, sorted([...(input.userIds ?? []), ...supervisors.map((r) => r.actor_user_id)])]
+    )
   ).rows;
+  const agentIds = sorted([...baseAgentIds, ...agents.map((r) => r.id)]);
   return {
     callIds,
     agentIds,
