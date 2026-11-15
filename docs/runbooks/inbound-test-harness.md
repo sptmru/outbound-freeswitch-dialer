@@ -7,6 +7,12 @@ paths; passing this harness does not satisfy their acceptance criteria.
 
 ## Commands and evidence levels
 
+C03 adds `npm run test:executor:freeswitch` for isolated real FreeSWITCH command
+faults and critical hangup. See [the executor protocol and evidence boundaries](../inbound-command-execution.md).
+`INBOUND_PG_STORAGE=tmpfs npm run test:inbound:db:isolated` explicitly selects
+memory-backed DB storage for bounded process/pool load tests; the default remains
+volume storage. Neither proves target disk durability or production acceptance.
+
 | Command                                                                          | Prerequisites                                                                                 | Evidence / boundaries                                                                                                                                                                             |
 | -------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `node --test tests/inbound-harness.test.mjs`                                     | Node >=22, `npm ci`                                                                           | U: URL/runner safety, ledger invariant failures, deterministic event replay, local SIP source guard and CI wiring                                                                                 |

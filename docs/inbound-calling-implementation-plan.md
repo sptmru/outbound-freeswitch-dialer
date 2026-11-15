@@ -293,6 +293,10 @@ connection holds the per-call execution lock through validation, ESL, and result
 persistence, but **no transaction stays open during ESL**. Replacement, reconciliation,
 and release follow the same protocol. Worker TTL is not execution serialization.
 
+C03 supplies the internal [durable executor, protected pools and failure protocol](inbound-command-execution.md).
+Its isolated DB/FS checks do not migrate legacy producers or enable routing;
+C04–C07, D–H and acceptance gates retain their integration/media/deployment work.
+
 On lost lock connection or ambiguous outcome, stop new actions and retain `uncertain`.
 PostgreSQL fencing tokens do not automatically fence FreeSWITCH. The prototype must
 establish how old workers stop and in-flight commands resolve before reuse. A momentary

@@ -3,6 +3,13 @@ set -euo pipefail
 # Creates its own database. No .env, published ports, application DB or external calls.
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
+PG_STORAGE="${INBOUND_PG_STORAGE:-volume}"
+storage_args=()
+case "$PG_STORAGE" in
+  volume) ;;
+  tmpfs) storage_args=(--tmpfs /var/lib/postgresql/data:rw,size=256m,mode=0700) ;;
+  *) echo 'INBOUND_PG_STORAGE must be volume or tmpfs' >&2; exit 1 ;;
+esac
 PG_IMAGE="postgres@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73"
 RUN_DIR="$(mktemp -d /tmp/outbound-inbound-db.XXXXXXXX)"
 PG_CONTAINER="outbound-inbound-db-$(basename "$RUN_DIR")"
@@ -21,9 +28,11 @@ trap cleanup EXIT
 mkdir "$RUN_DIR/socket"
 chmod 777 "$RUN_DIR/socket"
 git rev-parse HEAD > "$RUN_DIR/base-revision.txt"
-sha256sum tests/fixtures/inbound/* apps/api/src/inbound*.ts apps/api/src/agent-call-slots*.ts apps/api/src/call-admission*.ts apps/api/src/call-capacity*.ts apps/api/src/desk-slots-schema.integration.test.ts apps/api/src/call-participation*.ts apps/api/src/durable-call-work*.ts apps/api/src/call-coordination*.ts apps/api/src/dashboard/calls.ts apps/api/src/dashboard/routes.ts packages/shared/src/*.ts apps/api/src/call-observability.ts apps/api/src/dashboard/browser-media.ts apps/api/src/dashboard/recordings.ts apps/api/src/dashboard/phone.ts apps/api/db/migrations/*.sql scripts/*inbound-db* > "$RUN_DIR/source-sha256.txt"
+printf '%s\n' "$PG_STORAGE" > "$RUN_DIR/storage.txt"
+sha256sum tests/fixtures/inbound/* apps/api/src/inbound*.ts apps/api/src/agent-call-slots*.ts apps/api/src/call-admission*.ts apps/api/src/call-capacity*.ts apps/api/src/call-control-pools*.ts apps/api/src/call-executor*.ts apps/api/src/call-command-transport*.ts apps/api/src/desk-slots-schema.integration.test.ts apps/api/src/call-participation*.ts apps/api/src/durable-call-work*.ts apps/api/src/call-coordination*.ts apps/api/src/dashboard/calls.ts apps/api/src/dashboard/routes.ts packages/shared/src/*.ts apps/api/src/call-observability.ts apps/api/src/dashboard/browser-media.ts apps/api/src/dashboard/recordings.ts apps/api/src/dashboard/phone.ts apps/api/db/migrations/*.sql scripts/*inbound-db* > "$RUN_DIR/source-sha256.txt"
 docker image inspect "$PG_IMAGE" --format '{{.Id}} {{json .RepoDigests}}' > "$RUN_DIR/image.txt"
 docker run -d --name "$PG_CONTAINER" --network none --memory 512m --cpus 2 --pids-limit 128 \
+  "${storage_args[@]}" \
   --mount "type=bind,src=$RUN_DIR/socket,dst=/db-socket" \
   -e POSTGRES_HOST_AUTH_METHOD=trust -e POSTGRES_DB=inbound_test "$PG_IMAGE" \
   -c unix_socket_directories=/var/run/postgresql,/db-socket -c listen_addresses= > "$RUN_DIR/pg-id.txt"

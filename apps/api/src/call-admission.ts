@@ -131,6 +131,10 @@ export class CallAdmission {
     if (!this.open) throw new AdmissionError("transaction_closed");
     if (!this.resources.callIds.includes(callId.toLowerCase())) throw new AdmissionError("call_not_locked");
   }
+  // Executor intent participates in the same open, ordered admission transaction.
+  assertExecutionCall(callId: string) {
+    this.assertCall(callId);
+  }
   async eligibility(input: AdmissionEligibility): Promise<EligibilityResult> {
     this.assertAgent(input.agentId);
     if (

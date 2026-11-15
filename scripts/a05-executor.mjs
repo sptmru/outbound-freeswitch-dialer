@@ -33,7 +33,7 @@ export async function tryReuse(db, key) {
 
 // Real TCP relay controls when bytes reach FS, independently of the worker/DB session.
 // It is fault injection, not the proposed production executor or an authority gate.
-async function relay() {
+export async function relay() {
   let incoming;
   let upstream;
   let pending;
