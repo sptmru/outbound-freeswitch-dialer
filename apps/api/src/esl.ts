@@ -175,9 +175,10 @@ export function canOriginateCustomerLeg(config: AppConfig): boolean {
 
 export async function sendFreeSwitchApiCommand(
   config: AppConfig,
-  command: string
+  command: string,
+  timeoutMilliseconds = 5_000
 ): Promise<EslCommandResponse> {
-  return sendFreeSwitchCommand(config, `api ${command}`);
+  return sendFreeSwitchCommand(config, `api ${command}`, timeoutMilliseconds);
 }
 
 export async function sendFreeSwitchBgapiCommand(

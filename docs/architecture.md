@@ -243,3 +243,9 @@ Retention does not implement legal hold. Audit retention and legal-hold rules re
 - Backup code does not prove off-host delivery or RPO/RTO; a clean-host drill must supply evidence.
 - Retry defaults are technical defaults, not legal approval.
 - Firewall rules and host-port changes are not implemented by this scope and must be reviewed independently.
+
+D03 adds [durable ingress capture/discovery/import](inbound-durable-ingress.md)
+through an independent FS-local SQLite journal and a Unix control socket. It
+creates pre-queue `received`/terminal history with original route/deadline and
+post-commit sequence ACKs. Capture defaults off and still refuses before answer;
+D04 queue/admission ACK and I01–I05 acceptance/activation remain separate.

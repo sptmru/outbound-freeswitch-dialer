@@ -14,6 +14,7 @@ const policy = { trustedCidrs: "127.0.0.2/32", preAdmission: 8, trunk: 40, waitS
 const route = (): InboundRoute => ({
   id: randomUUID(),
   queue_id: randomUUID(),
+  campaign_id: randomUUID(),
   normalized_did: "+12025550100",
   enabled: true,
   desired_revision: "1",

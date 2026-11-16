@@ -77,6 +77,8 @@ services:
       DEFAULT_PHONE_COUNTRY_CODE: ${DEFAULT_PHONE_COUNTRY_CODE:-US}
       SIP_USERNAME_PREFIX: ${SIP_USERNAME_PREFIX:-agent}
       FREESWITCH_GENERATED_CONFIG_DIR: /var/lib/outbound-dialer/freeswitch
+      FREESWITCH_INGRESS_ENABLED: ${FREESWITCH_INGRESS_ENABLED:-false}
+      FREESWITCH_INGRESS_SOCKET: ${FREESWITCH_INGRESS_SOCKET:-/var/lib/outbound-dialer/ingress/agent.sock}
       FREESWITCH_INBOUND_CONFIG_ENABLED: ${FREESWITCH_INBOUND_CONFIG_ENABLED:-false}
       FREESWITCH_INBOUND_TRUSTED_CIDRS: ${FREESWITCH_INBOUND_TRUSTED_CIDRS:-}
       FREESWITCH_INBOUND_PRE_ADMISSION_LIMIT: ${FREESWITCH_INBOUND_PRE_ADMISSION_LIMIT:-8}
@@ -136,6 +138,7 @@ services:
       - "${API_PUBLIC_PORT:-3000}:3000"
     volumes:
       - freeswitch_generated:/var/lib/outbound-dialer/freeswitch
+      - ingress_journal:/var/lib/outbound-dialer/ingress
       - ../freeswitch/recordings:/var/lib/freeswitch/storage/recordings
       - pcap_storage:/var/lib/outbound-dialer/pcaps
       - pcap_socket:/run/outbound-dialer-pcap
@@ -292,6 +295,8 @@ services:
       FREESWITCH_ESL_PASSWORD: ${FREESWITCH_ESL_PASSWORD}
       FREESWITCH_ESL_ACL: ${FREESWITCH_ESL_ACL}
       FREESWITCH_CONFIG_DIR: ${FREESWITCH_CONFIG_DIR}
+      FREESWITCH_INGRESS_ENABLED: ${FREESWITCH_INGRESS_ENABLED:-false}
+      FREESWITCH_INGRESS_SOCKET: ${FREESWITCH_INGRESS_SOCKET:-/var/lib/outbound-dialer/ingress/agent.sock}
       FREESWITCH_INBOUND_CONFIG_ENABLED: ${FREESWITCH_INBOUND_CONFIG_ENABLED:-false}
       FREESWITCH_MAX_SESSIONS: ${FREESWITCH_MAX_SESSIONS:-80}
       FREESWITCH_SESSIONS_PER_SECOND: ${FREESWITCH_SESSIONS_PER_SECOND:-20}
@@ -321,6 +326,33 @@ services:
       - freeswitch_generated:/var/lib/outbound-dialer/freeswitch
       - freeswitch_logs:/var/log/freeswitch
       - ../freeswitch/recordings:/var/lib/freeswitch/storage/recordings
+
+  ingress-journal:
+    image: outbound-dialer-api:${APP_VERSION:-local}
+    restart: unless-stopped
+    init: true
+    pids_limit: 32
+    mem_limit: 128m
+    logging: *default-logging
+    network_mode: host
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment:
+      FREESWITCH_INGRESS_ENABLED: ${FREESWITCH_INGRESS_ENABLED:-false}
+      FREESWITCH_INGRESS_JOURNAL_SLOTS: ${FREESWITCH_INGRESS_JOURNAL_SLOTS:-128}
+      FREESWITCH_INGRESS_SOCKET: ${FREESWITCH_INGRESS_SOCKET:-/var/lib/outbound-dialer/ingress/agent.sock}
+      FREESWITCH_ESL_PASSWORD: ${FREESWITCH_ESL_PASSWORD}
+      FREESWITCH_ESL_PORT: ${FREESWITCH_ESL_PORT:-8021}
+    # Single local owner across crashes/restarts. No TTL-based lock stealing.
+    command:
+      [
+        "sh",
+        "-c",
+        "mkdir -p /var/lib/outbound-dialer/ingress && exec flock -n /var/lib/outbound-dialer/ingress/agent.lock node apps/api/dist/ingress-agent.js"
+      ]
+    volumes:
+      - ingress_journal:/var/lib/outbound-dialer/ingress
 
   pcap-capture:
     image: outbound-dialer-pcap:${APP_VERSION:-local}
@@ -616,6 +648,7 @@ networks:
     internal: true
 
 volumes:
+  ingress_journal:
   postgres_data:
   freeswitch_generated:
   freeswitch_logs:

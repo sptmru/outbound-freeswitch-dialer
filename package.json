@@ -37,10 +37,11 @@
     "test:supervisor:freeswitch": "bash scripts/test-c07-supervisor.sh",
     "test:desk:freeswitch": "bash scripts/test-d01-desk.sh",
     "test:desk:browser": "bash scripts/test-d01-desk.sh --browser",
-    "test:config:freeswitch": "bash scripts/test-d02-config.sh"
+    "test:config:freeswitch": "bash scripts/test-d02-config.sh",
+    "test:ingress:freeswitch": "bash scripts/test-d03-ingress.sh"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=22.13.0"
   },
   "overrides": {
     "@fastify/static": "10.1.2",

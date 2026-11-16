@@ -15,8 +15,10 @@ export interface InboundRoute {
   enabled: boolean;
   desired_revision: string;
   queue_id: string;
+  campaign_id: string;
   queue_revision: string;
   queue_timeout_ms: number;
+  queue_snapshot?: Record<string, unknown>;
 }
 export interface InboundPolicy {
   trustedCidrs: string;
@@ -78,6 +80,7 @@ export async function renderInboundConfiguration(routes: InboundRoute[], policy:
     if (
       !/^[0-9a-f-]{36}$/.test(route.id) ||
       !/^[0-9a-f-]{36}$/.test(route.queue_id) ||
+      !/^[0-9a-f-]{36}$/.test(route.campaign_id) ||
       !/^\+[1-9][0-9]{6,14}$/.test(route.normalized_did) ||
       !/^[1-9][0-9]*$/.test(route.desired_revision) ||
       !/^[1-9][0-9]*$/.test(route.queue_revision) ||
@@ -90,17 +93,20 @@ export async function renderInboundConfiguration(routes: InboundRoute[], policy:
       throw new Error("Invalid or duplicate inbound route");
     dids.add(route.normalized_did);
   }
-  const [bundle, routeTemplate] = await Promise.all([
+  const [bundle, routeTemplate, ingressScript] = await Promise.all([
     readFile(new URL("public.xml.tpl", templateRoot), "utf8"),
-    readFile(new URL("route.xml.tpl", templateRoot), "utf8")
+    readFile(new URL("route.xml.tpl", templateRoot), "utf8"),
+    readFile(new URL("outbound-ingress.lua", templateRoot), "utf8")
   ]);
   // Hash includes templates and policy: a binary/policy change is a new desired revision.
   const hash = createHash("sha256")
-    .update(JSON.stringify({ ordered, policy, cidrs, bundle, routeTemplate }))
+    .update(JSON.stringify({ ordered, policy, cidrs, bundle, routeTemplate, ingressScript }))
     .digest("hex");
   const action = (app: string, data: string) => `    <action application="${app}" data="${data}"/>`;
   const renderedRoutes = ordered
     .map((route) => {
+      const routeData = Buffer.from(JSON.stringify(route.queue_snapshot ?? {})).toString("base64url");
+      if (routeData.length > 4096) throw new Error("Ingress route snapshot exceeds bound");
       const actions = route.enabled
         ? [
             action("set", "limit_ignore_transfer=true"),
@@ -116,8 +122,13 @@ export async function renderInboundConfiguration(routes: InboundRoute[], policy:
             action("set", `outbound_dialer_route_revision=${route.desired_revision}`),
             action("set", `outbound_dialer_queue_id=${route.queue_id}`),
             action("set", `outbound_dialer_queue_revision=${route.queue_revision}`),
-            // D03 owns durable capture/commit/ack and the admission continuation. No
-            // answer/park/audio is safe before it exists. Do not call the A03 lab agent.
+            action("set", "outbound_dialer_ingress_protocol=d03-v1"),
+            action("set", `outbound_dialer_number_id=${route.id}`),
+            action("set", `outbound_dialer_campaign_id=${route.campaign_id}`),
+            action("set", `outbound_dialer_queue_timeout_ms=${route.queue_timeout_ms}`),
+            action("set", `outbound_dialer_route_data=${routeData}`),
+            action("lua", "$${conf_dir}/scripts/outbound-ingress.lua"),
+            // D04 owns queue admission and the post-commit continuation.
             action("respond", "503 Admission unavailable"),
             action("hangup", "NORMAL_TEMPORARY_FAILURE")
           ]
@@ -214,7 +225,7 @@ export class InboundConfigurationPublisher {
       revision = state.desired_revision;
       const routes = (
         await client.query<InboundRoute>(`select n.id,n.normalized_did,n.enabled,n.desired_revision::text,n.queue_id,
-        q.desired_revision::text as queue_revision,q.queue_timeout_ms from inbound_numbers n join inbound_queues q on q.id=n.queue_id order by n.id`)
+        (to_jsonb(q)-array['applied_revision','updated_at','created_at']) as queue_snapshot,q.campaign_id,q.desired_revision::text as queue_revision,q.queue_timeout_ms from inbound_numbers n join inbound_queues q on q.id=n.queue_id order by n.id`)
       ).rows;
       const rendered = await renderInboundConfiguration(routes, inboundPolicy(this.config));
       if (state.desired_hash !== rendered.hash) {
@@ -224,6 +235,15 @@ export class InboundConfigurationPublisher {
             [rendered.hash]
           )
         ).rows[0].desired_revision;
+      }
+      // Persist ownership/configuration before FS can expose this route. This
+      // intentionally survives reload failure or loss of the later applied ACK.
+      for (const route of routes.filter((route) => route.enabled)) {
+        await client.query(
+          `insert into inbound_ingress_route_snapshots(configuration_hash,number_id,queue_id,campaign_id,snapshot)
+          values($1,$2,$3,$4,$5) on conflict do nothing`,
+          [rendered.hash, route.id, route.queue_id, route.campaign_id, route]
+        );
       }
       await alive();
       // Reapply even an unchanged revision: API/FS restart and manual disk drift

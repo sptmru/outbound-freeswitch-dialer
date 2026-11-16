@@ -103,6 +103,10 @@ ensure_module_load() {
     return
   fi
 
+  # Vanilla has required modules inside standalone XML comments. A textual
+  # match there is not an effective autoload entry.
+  sed -i "s|<!--[[:space:]]*<load module=\"${module}\"[[:space:]]*/>[[:space:]]*-->|<load module=\"${module}\"/>|g" "$modules_conf"
+
   if grep -Eq "<load module=\"${module}\"[[:space:]]*/?>" "$modules_conf"; then
     return
   fi
@@ -215,6 +219,8 @@ render "$TEMPLATE_DIR/sip_profiles/internal-webrtc.xml.tpl" "$CONFIG_DIR/sip_pro
 render "$TEMPLATE_DIR/dialplan/default/voicemail-drop.xml.tpl" "$CONFIG_DIR/dialplan/default/voicemail-drop.xml"
 render "$TEMPLATE_DIR/dialplan/agent-ingress/reject.xml.tpl" "$CONFIG_DIR/dialplan/agent-ingress/reject.xml"
 render "$TEMPLATE_DIR/dialplan/public/reject.xml.tpl" "$CONFIG_DIR/dialplan/public/reject.xml"
+mkdir -p "$CONFIG_DIR/scripts"
+cp "$TEMPLATE_DIR/inbound/outbound-ingress.lua" "$CONFIG_DIR/scripts/outbound-ingress.lua"
 render "$TEMPLATE_DIR/dialplan/agent-ingress.xml.tpl" "$CONFIG_DIR/dialplan/agent-ingress.xml"
 render "$TEMPLATE_DIR/dialplan/public.xml.tpl" "$CONFIG_DIR/dialplan/public.xml"
 # Startup restores only the previously verified bundle, never an interrupted
@@ -230,6 +236,8 @@ mv "$inbound_bundle.startup" "$inbound_bundle"
 ln -s "$inbound_bundle" "$CONFIG_DIR/dialplan/public/00-inbound.xml"
 configure_rtp_port_range
 ensure_module_load "mod_hash"
+ensure_module_load "mod_lua"
+ensure_module_load "mod_curl"
 ensure_module_load "mod_avmd"
 ensure_module_load "mod_amd"
 if [ "${FREESWITCH_AGENT_OPUS_ENABLED:-false}" = "true" ]; then

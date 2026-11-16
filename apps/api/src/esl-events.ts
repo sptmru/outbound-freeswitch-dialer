@@ -1,3 +1,4 @@
+import { isInitialIngressEvent } from "./inbound-ingress.js";
 import { lockEligibilityAgents, withEligibilityTransaction } from "./eligibility.js";
 import { persistSupervisorJob, persistCoordinatedSupervisorEvent } from "./supervisor-coordination.js";
 import { resolveCustomerHangupOutcome } from "./call-outcomes.js";
@@ -340,6 +341,7 @@ async function persistFreeSwitchEvent(
   frame: EslFrame,
   logger?: Pick<Logger, "info">
 ): Promise<void> {
+  if (isInitialIngressEvent(frame.headers)) return;
   const eventName = frame.headers["event-name"];
   if (
     eventName === "BACKGROUND_JOB" &&

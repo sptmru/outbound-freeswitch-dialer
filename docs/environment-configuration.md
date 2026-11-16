@@ -185,3 +185,16 @@ When adding or changing an environment value:
 ## Versioned inbound FreeSWITCH configuration
 
 D02 adds an opt-in configuration publisher and physical ingress guards; it does not enable product inbound. See [inbound-freeswitch-configuration.md](inbound-freeswitch-configuration.md) for the canonical variable table, shared-volume paths, desired/applied/error state, last-good recovery, and D03/I04/I05 activation boundaries. `.env.example` contains every new variable; Compose passes publisher policy to API and startup guards to FS. All replicas must share the same policy and generated-config volume.
+
+### Durable ingress (D03)
+
+`FREESWITCH_INGRESS_ENABLED=false` keeps FS-local capture/import off. Setting it
+true does not admit, answer or enqueue calls: D04 and I05 remain required.
+`FREESWITCH_INGRESS_SOCKET` defaults to
+`/var/lib/outbound-dialer/ingress/agent.sock`; API and the independent journal must
+share this mounted private socket. `FREESWITCH_INGRESS_JOURNAL_SLOTS` defaults to
+128 and accepts 1–128. Keep the `ingress_journal` volume across restarts; never
+remove unresolved evidence to make space. Capture binds loopback port 18093 only;
+there are no new host-published ports. Node 22.13+ and a compatible journal/API
+filesystem identity are required. See [protocol, retention, alarms and loss
+boundaries](inbound-durable-ingress.md). Actual deployment remains separately authorized.

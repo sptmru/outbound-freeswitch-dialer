@@ -1,3 +1,4 @@
+import { startIngressReconciler } from "./inbound-ingress.js";
 import cookie from "@fastify/cookie";
 import cors from "@fastify/cors";
 import multipart from "@fastify/multipart";
@@ -57,6 +58,7 @@ const app = Fastify({
 const pool = createPool(config);
 const runtimeSettings = new RuntimeSettingsService(pool, config);
 const liveEventHub = createLiveEventHub();
+let stopIngressReconciler: (() => void) | null = null;
 let stopFreeSwitchEventListener: (() => void) | null = null;
 let stopAgentRegistrationReconciler: (() => void) | null = null;
 let stopDatabaseLiveEventListener: (() => void) | null = null;
@@ -163,6 +165,7 @@ async function start() {
   stopRetentionScheduler = startRetentionScheduler(pool, config, app.log).stop;
   stopCallRecordingFinalizer = startCallRecordingFinalizer(pool, config.FFPROBE_PATH, app.log).stop;
   stopPcapCaptureFinalizer = startPcapCaptureFinalizer(pool, config, app.log).stop;
+  stopIngressReconciler = startIngressReconciler(pool, config, app.log);
   stopFreeSwitchEventListener = startFreeSwitchEventListener(config, pool, app.log);
   stopAgentRegistrationReconciler = startAgentRegistrationReconciler(config, pool, app.log);
   stopAgentDirectoryReconciler = startAgentDirectoryReconciler(pool, config, app.log);
@@ -174,6 +177,7 @@ const shutdown = async () => {
   stopAgentRegistrationReconciler?.();
   stopAgentDirectoryReconciler?.();
   stopInboundConfigurationReconciler?.();
+  stopIngressReconciler?.();
   stopFreeSwitchEventListener?.();
   stopCallRecordingFinalizer?.();
   stopPcapCaptureFinalizer?.();

@@ -28,6 +28,11 @@ const envSchema = z.object({
     .enum(["true", "false"])
     .default("false")
     .transform((v) => v === "true"),
+  FREESWITCH_INGRESS_ENABLED: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((v) => v === "true"),
+  FREESWITCH_INGRESS_SOCKET: z.string().default("/var/lib/outbound-dialer/ingress/agent.sock"),
   FREESWITCH_INBOUND_TRUSTED_CIDRS: z.string().default(""),
   FREESWITCH_INBOUND_PRE_ADMISSION_LIMIT: z.coerce.number().int().min(1).max(16).default(8),
   FREESWITCH_TRUNK_CHANNEL_LIMIT: z.coerce.number().int().min(2).max(80).default(40),

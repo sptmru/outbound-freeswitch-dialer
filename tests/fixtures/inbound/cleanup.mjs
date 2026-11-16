@@ -9,17 +9,19 @@ import { withCallAdmission } from "../../../apps/api/dist-test/call-admission.js
 import { reserveAgentCallSlot } from "../../../apps/api/dist-test/agent-call-slots.js";
 import { enqueueCallCommand } from "../../../apps/api/dist-test/call-executor.js";
 
-export async function cleanupFixture(config) {
+export async function cleanupFixture(config, { onPoolError } = {}) {
   const children = [];
   const transcript = [];
   const schema = `c06_${randomUUID().replaceAll("-", "")}`;
   const admin = new pg.Pool(config);
+  if (onPoolError) admin.on("error", onPoolError);
   await admin.query(`create schema ${schema}`);
   const pool = new pg.Pool({
     ...config,
     max: 8,
     options: `${config.options ?? ""} -c search_path=${schema}`
   });
+  if (onPoolError) pool.on("error", onPoolError);
   try {
     await runMigrations(pool);
   } catch (error) {

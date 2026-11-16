@@ -7,6 +7,52 @@ import { canOriginateCustomerLeg, sendFreeSwitchApiCommand } from "./esl.js";
 import { setFreeSwitchEventListenerSubscribed } from "./esl-listener-state.js";
 
 const registry = new Registry();
+const ingressUsage = new Gauge({
+  name: "outbound_dialer_ingress_journal_used",
+  help: "Retained ingress slots",
+  registers: [registry]
+});
+const ingressCapacity = new Gauge({
+  name: "outbound_dialer_ingress_journal_capacity",
+  help: "Ingress slot capacity",
+  registers: [registry]
+});
+const ingressPending = new Gauge({
+  name: "outbound_dialer_ingress_journal_pending",
+  help: "Unacknowledged ingress slots",
+  registers: [registry]
+});
+const ingressOldest = new Gauge({
+  name: "outbound_dialer_ingress_oldest_arrival_timestamp_seconds",
+  help: "Oldest retained ingress arrival",
+  registers: [registry]
+});
+const ingressCaptureFailures = new Gauge({
+  name: "outbound_dialer_ingress_capture_failures",
+  help: "Journal request failures since agent start",
+  registers: [registry]
+});
+const ingressImportFailures = new Counter({
+  name: "outbound_dialer_ingress_import_failures_total",
+  help: "Ingress import failures",
+  registers: [registry]
+});
+export function setIngressStatus(status: {
+  used: number;
+  capacity: number;
+  unacknowledged: number;
+  oldestArrivedUs: number | null;
+  failures: number;
+}) {
+  ingressUsage.set(status.used);
+  ingressCapacity.set(status.capacity);
+  ingressPending.set(Number(status.unacknowledged));
+  ingressOldest.set((status.oldestArrivedUs ?? 0) / 1000000);
+  ingressCaptureFailures.set(status.failures);
+}
+export function recordIngressImportFailure() {
+  ingressImportFailures.inc();
+}
 const requestStartedAt = new WeakMap<FastifyRequest, bigint>();
 
 collectDefaultMetrics({

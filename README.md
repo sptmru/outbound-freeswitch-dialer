@@ -69,7 +69,7 @@ docs/                     Requirements, status, guides, ADRs, and runbooks
 
 ## Local Validation
 
-Node.js 22 or newer is required.
+Node.js 22.13 or newer is required (the independent ingress journal uses `node:sqlite`).
 
 ```bash
 npm ci

@@ -171,3 +171,9 @@ The project is fully complete against this plan only when:
 ### D02 — versioned FreeSWITCH configuration
 
 [Configuration publisher and physical ingress safeguards](inbound-freeswitch-configuration.md) now render immutable DID/queue snapshots, serialize publishers and edits, atomically apply/verify revisions, retain last-good configuration and reconcile startup/drift. The product entrypoint owns public and authenticated-agent contexts and core channel/rate guards. Inbound remains disabled by default; trusted enabled routes still refuse before answer until D03 implements durable admission. Local criterion evidence and any open gates are recorded in [D02 #22](https://github.com/sptmru/outbound-freeswitch-dialer/issues/22). No provider, deployment or I05 activation is implied.
+
+D03 adds [durable ingress capture/discovery/import](inbound-durable-ingress.md)
+through an independent FS-local SQLite journal and a Unix control socket. It
+creates pre-queue `received`/terminal history with original route/deadline and
+post-commit sequence ACKs. Capture defaults off and still refuses before answer;
+D04 queue/admission ACK and I01–I05 acceptance/activation remain separate.

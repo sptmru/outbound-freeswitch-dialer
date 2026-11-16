@@ -3,9 +3,9 @@
 D02 owns the configuration publisher and the physical ingress safety boundary.
 `FREESWITCH_INBOUND_CONFIG_ENABLED=false` leaves the publisher off. Enabling this
 publisher is **not** product inbound enablement: even a trusted, enabled DID still
-receives `503 Admission unavailable`, before answer/RTP, until D03 supplies its
-separately tested durable capture/commit/ack continuation. Never call the A03 lab
-journal from the product or remove that refusal to demonstrate a successful call.
+receives `503 Admission unavailable`, before answer/RTP. [D03](inbound-durable-ingress.md) now supplies an independent
+product capture/import continuation; D04 still owns queue admission and its ACK.
+Never call the A03 lab journal from the product or treat capture as permission to answer.
 D03/D04, browser/provider acceptance and I05 activation remain separate tasks.
 
 ## Desired, applied and failed revisions
@@ -77,7 +77,7 @@ Untrusted, disabled and unknown routes return 403, 403 and 404 respectively.
 
 Enabled routes acquire native `mod_hash` limits in realm `outbound_dialer`, resources
 `pre_admission` and `trunk`, before the continuation. They set `limit_ignore_transfer`,
-`sched_hangup` and `park_timeout`. Until D03 exists the continuation refuses immediately;
+`sched_hangup` and `park_timeout`. The D03 continuation captures only when explicitly enabled and still refuses before answer;
 the scheduled guard is additional protection, not evidence that an indefinite blocking
 script can be interrupted. D03 must bound each capture/ack I/O by A03's separate-process
 protocol and must not perform direct FreeSWITCH SQLite writes. It releases the

@@ -521,8 +521,9 @@ outbound; automatic advancement retains inbound priority.
 
 A03's opt-in [durable ingress prototype and protocol](inbound-durable-ingress-prototype.md)
 uses a separate local journal agent with bounded FS requests and idempotent PostgreSQL
-import. Its isolated evidence does not implement or enable product ingress; D03 must
-integrate the protocol with product admission, discovery, authorization and recovery.
+import. [D03 product capture/import](inbound-durable-ingress.md) now implements
+independent capture, discovery, terminal history and commit/sequence ACKs. It stays
+pre-queue and refuses before answer; D04 admission and I01–I05 enablement remain separate.
 
 An ESL subscription and its process-local backlog are not durable ingress storage.
 Recovery must also discover trusted, application-tagged live FreeSWITCH ingress channels
