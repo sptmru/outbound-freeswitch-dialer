@@ -222,6 +222,8 @@ render "$TEMPLATE_DIR/dialplan/public/reject.xml.tpl" "$CONFIG_DIR/dialplan/publ
 mkdir -p "$CONFIG_DIR/scripts"
 cp "$TEMPLATE_DIR/inbound/outbound-ingress.lua" "$CONFIG_DIR/scripts/outbound-ingress.lua"
 cp "$TEMPLATE_DIR/inbound/outbound-wait.lua" "$CONFIG_DIR/scripts/outbound-wait.lua"
+cp "$TEMPLATE_DIR/inbound/outbound-fallback.lua" "$CONFIG_DIR/scripts/outbound-fallback.lua"
+render "$TEMPLATE_DIR/dialplan/inbound-fallback.xml.tpl" "$CONFIG_DIR/dialplan/inbound-fallback.xml"
 render "$TEMPLATE_DIR/dialplan/inbound-wait.xml.tpl" "$CONFIG_DIR/dialplan/inbound-wait.xml"
 render "$TEMPLATE_DIR/dialplan/agent-ingress.xml.tpl" "$CONFIG_DIR/dialplan/agent-ingress.xml"
 render "$TEMPLATE_DIR/dialplan/public.xml.tpl" "$CONFIG_DIR/dialplan/public.xml"

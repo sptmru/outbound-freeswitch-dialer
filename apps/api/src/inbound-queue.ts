@@ -113,7 +113,14 @@ export async function admitInboundQueue(
               [callId]
             )
           ).rows[0];
+          const flow = (
+            await db.query(
+              "select flow_timeout_ms from inbound_flow_versions where id::text=$1 and campaign_id=$2",
+              [config.no_answer_flow_version_id ?? null, call.campaign_id]
+            )
+          ).rows[0];
           const request = {
+            fallbackGuardSeconds: flow ? Math.ceil(flow.flow_timeout_ms / 1000) + 3 : 0,
             inboundWaiting: true,
             participantId: participant,
             legId: leg,
@@ -334,22 +341,35 @@ export async function persistInboundQueueEvent(
             (await db.query("select 1 from inbound_queue_admissions where call_id=$1", [callId])).rowCount
           );
           const canceled = headers["hangup-cause"] === "ORIGINATOR_CANCEL";
-          const reason =
-            headers["hangup-cause"] === "ALLOTTED_TIMEOUT" && !call.agent_connected_at
-              ? "queue_timeout"
-              : event === "INGRESS_ABSENT"
-                ? "channel_absent_on_recovery"
-                : call.agent_connected_at
-                  ? "customer_hung_up"
-                  : admitted
-                    ? canceled
-                      ? "caller_canceled_in_queue"
-                      : "caller_abandoned_queue"
-                    : canceled
-                      ? "caller_canceled_before_admission"
-                      : "caller_hung_up_before_admission";
+          const fallbackHangup = call.fallback_started_at
+            ? (
+                await db.query(
+                  `select o.request->>'reason' as reason from call_operations o join call_execution_attempts a on a.operation_id=o.id where o.call_id=$1 and o.command_kind='hangup' and o.request->>'inboundFallback'='true' order by o.created_at desc limit 1`,
+                  [callId]
+                )
+              ).rows[0]
+            : null;
+          const reason = fallbackHangup
+            ? `no_answer_${fallbackHangup.reason}`
+            : call.fallback_started_at
+              ? headers["hangup-cause"] === "ALLOTTED_TIMEOUT"
+                ? "no_answer_deadline"
+                : "caller_hung_up_during_fallback"
+              : headers["hangup-cause"] === "ALLOTTED_TIMEOUT" && !call.agent_connected_at
+                ? "queue_timeout"
+                : event === "INGRESS_ABSENT"
+                  ? "channel_absent_on_recovery"
+                  : call.agent_connected_at
+                    ? "customer_hung_up"
+                    : admitted
+                      ? canceled
+                        ? "caller_canceled_in_queue"
+                        : "caller_abandoned_queue"
+                      : canceled
+                        ? "caller_canceled_before_admission"
+                        : "caller_hung_up_before_admission";
           await db.query(
-            "update calls set state=$2,outcome=case when $4='queue_timeout' then 'not_answered' else 'customer_hung_up' end,ended_at=greatest(arrived_at,$3),queue_exited_at=coalesce(queue_exited_at,greatest(arrived_at,$3)),inbound_end_reason=$4,terminal_event_name=$5,terminal_source='inbound_customer',updated_at=clock_timestamp() where id=$1",
+            "update calls set state=$2,outcome=case when $4='queue_timeout' or $4 like 'no_answer_%' then 'not_answered' else 'customer_hung_up' end,ended_at=greatest(arrived_at,$3),queue_exited_at=coalesce(queue_exited_at,greatest(arrived_at,$3)),inbound_end_reason=$4,terminal_event_name=$5,terminal_source='inbound_customer',updated_at=clock_timestamp() where id=$1",
             [callId, canceled ? "canceled" : "completed", at, reason, event]
           );
         }
@@ -377,9 +397,14 @@ export function inboundWaitingCommand(op: DurableCommand) {
       op.target_uuid === op.call_id
   );
   assert.match(op.request.deadlineEpoch as string, /^[1-9][0-9]{9,11}$/);
+  assert.ok(
+    Number.isInteger(op.request.fallbackGuardSeconds ?? 0) &&
+      Number(op.request.fallbackGuardSeconds ?? 0) >= 0 &&
+      Number(op.request.fallbackGuardSeconds ?? 0) <= 183
+  );
   const audio = op.request.audio as string;
   assert.ok(audio === "tone" || (safePath.test(audio) && !audio.split("/").includes("..")));
-  return `uuid_transfer ${op.target_uuid} inbound_wait:${op.id}:${op.request.deadlineEpoch}:${audio} XML inbound-wait`;
+  return `uuid_transfer ${op.target_uuid} inbound_wait:${op.id}:${op.request.deadlineEpoch}:${audio}:${op.request.fallbackGuardSeconds ?? 0} XML inbound-wait`;
 }
 async function waitingResolution(op: DurableCommand, db: pg.PoolClient) {
   const job = (

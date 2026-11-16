@@ -1,3 +1,4 @@
+import { runFallback } from "./f03-fallback-probe.mjs";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { fork } from "node:child_process";
@@ -116,7 +117,12 @@ async function clean(id) {
 async function startCall(caller = "+14155550199") {
   const before = new Set((await readIngressRecords(socket)).map((r) => r.uuid));
   let control;
-  const result = invite({ port: 5090, caller, timeoutMs: 17000, control: (c) => (control = c) });
+  const result = invite({
+    port: 5090,
+    caller,
+    timeoutMs: process.env.F03_FALLBACK === "1" ? 45000 : 17000,
+    control: (c) => (control = c)
+  });
   result.catch(() => {});
   inflight = result;
   await until(
@@ -188,6 +194,21 @@ try {
       }
     }
   };
+  if (process.env.F03_FALLBACK === "1")
+    await runFallback({
+      f,
+      queue,
+      directory,
+      config,
+      startCall,
+      recover,
+      call,
+      clean,
+      checked,
+      pass,
+      executor: limited.executor,
+      esl
+    });
   if (process.env.F02_AUDIO === "1")
     await runInboundAudioReplacement({
       f,

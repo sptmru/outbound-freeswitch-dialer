@@ -1,3 +1,4 @@
+import { persistInboundFallbackJob, persistInboundFallbackEvent } from "./inbound-fallback.js";
 import { persistInboundQueueEvent, persistInboundQueueJob } from "./inbound-queue.js";
 import { persistInboundConnectionJob } from "./inbound-connection.js";
 import { isInitialIngressEvent } from "./inbound-ingress.js";
@@ -70,6 +71,9 @@ const EVENT_NAMES = [
   "sofia::unregister",
   "sofia::expire",
   "outbound_dialer::inbound_waiting_started",
+  "outbound_dialer::inbound_fallback_started",
+  "outbound_dialer::inbound_fallback_completed",
+  "outbound_dialer::inbound_fallback_failed",
   "outbound_dialer::voicemail_playback_started",
   "outbound_dialer::voicemail_playback_completed",
   "outbound_dialer::voicemail_playback_failed"
@@ -346,11 +350,16 @@ async function persistFreeSwitchEvent(
 ): Promise<void> {
   if (
     frame.headers["event-name"] === "BACKGROUND_JOB" &&
-    ((await persistInboundConnectionJob(pool, {
+    ((await persistInboundFallbackJob(pool, {
       jobUuid: frame.headers["job-uuid"] ?? "",
       body: frame.body,
       headers: frame.headers
     })) ||
+      (await persistInboundConnectionJob(pool, {
+        jobUuid: frame.headers["job-uuid"] ?? "",
+        body: frame.body,
+        headers: frame.headers
+      })) ||
       (await persistInboundQueueJob(pool, {
         jobUuid: frame.headers["job-uuid"] ?? "",
         body: frame.body,
@@ -358,6 +367,7 @@ async function persistFreeSwitchEvent(
       })))
   )
     return;
+  if (await persistInboundFallbackEvent(pool, frame.headers)) return;
   if (await persistInboundQueueEvent(pool, frame.headers, frame.body)) return;
   if (isInitialIngressEvent(frame.headers)) return;
   const eventName = frame.headers["event-name"];
