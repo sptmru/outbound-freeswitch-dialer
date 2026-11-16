@@ -70,7 +70,16 @@ export function decodeWav(buffer) {
   return { channels, samples };
 }
 
-export async function endpoint({ username, password, source, frequency }) {
+export async function endpoint({
+  username,
+  password,
+  source,
+  frequency,
+  rejectCode,
+  answerGate,
+  onInvite,
+  onCancel
+}) {
   const sip = dgram.createSocket("udp4");
   const rtp = dgram.createSocket("udp4");
   for (const socket of [sip, rtp])
@@ -146,30 +155,53 @@ export async function endpoint({ username, password, source, frequency }) {
       const to = msg.headers.to.includes(";tag=") ? msg.headers.to : `${msg.headers.to};tag=a05`;
       if (method === "INVITE") {
         media(msg.body);
-        invites.push({ id, address });
+        invites.push({ id, address, headers: msg.headers });
+        onInvite?.(msg);
         dialogs.set(id, { uri: msg.headers.contact.match(/<([^>]+)>/)[1], from: to, to: msg.headers.from });
       }
       if (method === "BYE") {
         target = null;
         dialogs.delete(id);
       }
-      const body = method === "INVITE" ? sdp : "";
-      send(
-        [
-          "SIP/2.0 200 OK",
-          `Via: ${msg.headers.via}`,
-          `From: ${msg.headers.from}`,
-          `To: ${to}`,
-          `Call-ID: ${id}`,
-          `CSeq: ${msg.headers.cseq}`,
-          `Contact: ${contact}`,
-          ...(body ? ["Content-Type: application/sdp"] : []),
-          `Content-Length: ${Buffer.byteLength(body)}`,
-          "",
-          body
-        ].join("\r\n"),
-        remote
-      );
+      if (method === "CANCEL") onCancel?.(msg);
+      const body = method === "INVITE" && !rejectCode ? sdp : "";
+      const code = method === "INVITE" && rejectCode ? rejectCode : 200;
+      const respond = () =>
+        send(
+          [
+            `SIP/2.0 ${code} ${code === 200 ? "OK" : "Busy Here"}`,
+            `Via: ${msg.headers.via}`,
+            `From: ${msg.headers.from}`,
+            `To: ${to}`,
+            `Call-ID: ${id}`,
+            `CSeq: ${msg.headers.cseq}`,
+            `Contact: ${contact}`,
+            ...(body ? ["Content-Type: application/sdp"] : []),
+            `Content-Length: ${Buffer.byteLength(body)}`,
+            "",
+            body
+          ].join("\r\n"),
+          remote
+        );
+      if (method === "INVITE" && answerGate) {
+        send(
+          [
+            "SIP/2.0 180 Ringing",
+            `Via: ${msg.headers.via}`,
+            `From: ${msg.headers.from}`,
+            `To: ${to}`,
+            `Call-ID: ${id}`,
+            `CSeq: ${msg.headers.cseq}`,
+            "Content-Length: 0",
+            "",
+            ""
+          ].join("\r\n"),
+          remote
+        );
+        Promise.resolve(answerGate)
+          .then(respond)
+          .catch((e) => errors.push(e.message));
+      } else respond();
     } catch (error) {
       errors.push(error.message);
     }
@@ -200,6 +232,12 @@ export async function endpoint({ username, password, source, frequency }) {
     received,
     invites,
     errors,
+    setBehavior(value = {}) {
+      rejectCode = value.rejectCode;
+      answerGate = value.answerGate;
+      onInvite = value.onInvite;
+      onCancel = value.onCancel;
+    },
     async register(expires = 60) {
       const id = randomUUID();
       const uri = "sip:a04.invalid";

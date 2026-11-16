@@ -812,7 +812,12 @@ test(
       await queued(f);
       const offer = (await dispatchInboundOffers(f.pool, a.id))!;
       // Reconstruct the immediately previous schema in this disposable fixture.
-      await f.pool.query(`drop table call_offer_mutations;
+      await f.pool.query(`drop table call_offer_accept_mutations;
+      drop table inbound_connection_attempts;
+      drop function preserve_inbound_accept_mutation();
+      drop function preserve_inbound_connection();
+      delete from schema_migrations where filename='038_inbound_acceptance.sql';
+      drop table call_offer_mutations;
       drop trigger notify_call_offers_changed on call_offers;
       drop trigger notify_call_offer_exclusions_changed on call_offer_exclusions;
       drop trigger notify_agent_auto_next_intents_changed on agent_auto_next_intents;

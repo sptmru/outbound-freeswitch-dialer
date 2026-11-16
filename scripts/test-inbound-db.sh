@@ -48,5 +48,5 @@ docker inspect "$PG_CONTAINER" --format '{{.HostConfig.NetworkMode}} {{json .Hos
 export TEST_DATABASE_URL="postgresql://postgres@localhost/inbound_test?host=$RUN_DIR/socket"
 unset DATABASE_URL
 export INBOUND_TEST_ARTIFACTS="$RUN_DIR"
-timeout 240 npm run test:inbound:db > "$RUN_DIR/result.txt" 2>&1 || { cat "$RUN_DIR/result.txt"; exit 1; }
+timeout 360 npm run test:inbound:db > "$RUN_DIR/result.txt" 2>&1 || { cat "$RUN_DIR/result.txt"; exit 1; }
 cat "$RUN_DIR/result.txt"

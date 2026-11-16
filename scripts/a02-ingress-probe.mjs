@@ -6,6 +6,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
+import { encodeUlaw } from "./a05-media.mjs";
 
 export async function render(directory, mode = "unavailable") {
   assert.ok(["unavailable", "early-wait", "answered-wait"].includes(mode), "Unknown A02 fixture mode");
@@ -117,6 +118,7 @@ export async function invite({
   codec = "PCMU",
   timeoutMs = 5000,
   allowNoFinal = false,
+  frequency,
   control
 }) {
   const sip = dgram.createSocket("udp4");
@@ -126,9 +128,28 @@ export async function invite({
   const callId = `${randomUUID()}@a02.invalid`;
   const spoof = "11111111-1111-4111-8111-111111111111";
   const started = Date.now();
+  let audioTimer;
+  let audioTarget;
+  let sequence = 0,
+    timestamp = 0;
   try {
     await bind(sip, source);
     await bind(rtp, source);
+    if (frequency) {
+      assert.equal(codec, "PCMU");
+      audioTimer = setInterval(() => {
+        if (!audioTarget) return;
+        const packet = Buffer.alloc(172);
+        packet[0] = 128;
+        packet.writeUInt16BE(sequence++ & 65535, 2);
+        packet.writeUInt32BE(timestamp >>> 0, 4);
+        packet.writeUInt32BE(0xe0200001, 8);
+        for (let i = 0; i < 160; i++)
+          packet[12 + i] = encodeUlaw(6000 * Math.sin((2 * Math.PI * frequency * (timestamp + i)) / 8000));
+        timestamp += 160;
+        rtp.send(packet, audioTarget.port, audioTarget.host);
+      }, 20);
+    }
     rtp.on("message", (data) => {
       if (data.length >= 12 && data[0] >> 6 === 2)
         packets.push({ ms: Date.now() - started, type: data[1] & 127, payload: [...data.subarray(12)] });
@@ -186,6 +207,14 @@ export async function invite({
         if (status < 300) {
           dialogTarget = target;
           dialogTo = parsed.headers.to;
+          if (frequency) {
+            const body = messages.at(-1).body;
+            const host = body.match(/c=IN IP4 ([^\r\n]+)/)?.[1];
+            const mediaPort = Number(body.match(/m=audio (\d+)/)?.[1]);
+            assert.equal(host, "127.0.0.1");
+            assert.ok(mediaPort >= 20000 && mediaPort <= 20040);
+            audioTarget = { host, port: mediaPort };
+          }
         }
         send("ACK", target, 1, parsed.headers.to, [], "", status < 300 ? `z9hG4bK${randomUUID()}` : branch);
       }
@@ -244,6 +273,7 @@ export async function invite({
       codec
     };
   } finally {
+    if (audioTimer) clearInterval(audioTimer);
     sip.close();
     rtp.close();
   }

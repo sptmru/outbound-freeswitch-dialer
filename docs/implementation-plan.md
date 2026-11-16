@@ -36,7 +36,11 @@ queue/capacity/waiting and customer lifecycle service. Its coordinator requires 
 explicit C03 dependency; default server bootstrap and I05 enablement remain separate.
 [E01 FIFO offers and exclusions](inbound-call-offers.md) adds bounded SQL-only
 dispatch, own-offer Ignore, admission-time expiry and authenticated snapshots with
-transactional refresh hints. E02 media acceptance and I05 activation remain separate.
+transactional refresh hints.
+[E02 inbound acceptance](inbound-call-acceptance.md) adds atomic winner/slot/connection
+claims, verified native originate/bridge, bounded cleanup and original-deadline
+retries behind an explicit executor dependency. E03/E04 browser integration and
+I05 activation remain separate.
 
 ## Completed Repository Work
 

@@ -18,6 +18,8 @@ async function oldest(client: pg.PoolClient, agentId: string, campaignId: string
       `select c.id from calls c join inbound_queue_admissions q on q.call_id=c.id
      where c.direction='inbound' and c.campaign_id=$2 and c.state='queued' and c.ended_at is null
        and c.queue_exited_at is null and c.fallback_started_at is null and c.queue_deadline_at>clock_timestamp()
+       and not exists(select 1 from inbound_connection_attempts x where x.call_id=c.id
+         and (x.settled_at is null or x.retry_at>clock_timestamp() or x.attempt>=3))
        and not exists(select 1 from call_offer_exclusions e where e.call_id=c.id and e.agent_id=$1)
        and not exists(select 1 from call_offers o where o.call_id=c.id and o.agent_id=$1 and o.kind='inbound'
          and o.state='pending' and o.deadline_at<=clock_timestamp())
@@ -31,7 +33,7 @@ async function oldest(client: pg.PoolClient, agentId: string, campaignId: string
  * Pending calls and FIFO head are rediscovered after lock waits; a changed graph
  * is retried from discovery, with no ESL or external callbacks after commit.
  */
-async function recipient<T>(
+export async function withOfferRecipient<T>(
   pool: pg.Pool,
   agentId: string,
   extraCallIds: string[],
@@ -181,7 +183,7 @@ export async function dispatchInboundOffers(
   agentId: string,
   checkpoint?: (a: CallAdmission) => Promise<void>
 ) {
-  return recipient(pool, agentId, [], async (a, desk) => {
+  return withOfferRecipient(pool, agentId, [], async (a, desk) => {
     const offer = await refresh(a, desk, agentId, true);
     await checkpoint?.(a);
     return offer;
@@ -189,7 +191,7 @@ export async function dispatchInboundOffers(
 }
 
 export async function readInboundOffer(pool: pg.Pool, actor: DeskActor, deskSessionId: string) {
-  return recipient(pool, actor.agentId, [], async (a, desk) => {
+  return withOfferRecipient(pool, actor.agentId, [], async (a, desk) => {
     await verifyActor(a.client, actor);
     verifyController(desk, actor, { deskSessionId });
     const offer = await refresh(a, desk, actor.agentId, false);
@@ -222,7 +224,7 @@ export async function ignoreInboundOffer(
   ).rows[0];
   if (!found) throw new AdmissionError("not_owner");
   const fingerprint = requestFingerprint("POST", "/agent/call-offers/:offerId/ignore", offerId, input);
-  return recipient(pool, actor.agentId, [found.call_id], async (a, desk) => {
+  return withOfferRecipient(pool, actor.agentId, [found.call_id], async (a, desk) => {
     const c = a.client;
     await verifyActor(c, actor);
     const old = (

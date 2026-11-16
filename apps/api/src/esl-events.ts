@@ -1,4 +1,5 @@
 import { persistInboundQueueEvent, persistInboundQueueJob } from "./inbound-queue.js";
+import { persistInboundConnectionJob } from "./inbound-connection.js";
 import { isInitialIngressEvent } from "./inbound-ingress.js";
 import { lockEligibilityAgents, withEligibilityTransaction } from "./eligibility.js";
 import { persistSupervisorJob, persistCoordinatedSupervisorEvent } from "./supervisor-coordination.js";
@@ -345,11 +346,16 @@ async function persistFreeSwitchEvent(
 ): Promise<void> {
   if (
     frame.headers["event-name"] === "BACKGROUND_JOB" &&
-    (await persistInboundQueueJob(pool, {
+    ((await persistInboundConnectionJob(pool, {
       jobUuid: frame.headers["job-uuid"] ?? "",
       body: frame.body,
       headers: frame.headers
-    }))
+    })) ||
+      (await persistInboundQueueJob(pool, {
+        jobUuid: frame.headers["job-uuid"] ?? "",
+        body: frame.body,
+        headers: frame.headers
+      })))
   )
     return;
   if (await persistInboundQueueEvent(pool, frame.headers, frame.body)) return;

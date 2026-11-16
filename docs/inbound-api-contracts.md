@@ -123,6 +123,12 @@ provisioning, generation-scoped cleanup and transactional revision advancement.
 returns its original `applied` result without affecting later work. Due expiry
 is persisted during dispatch, snapshot reads and admission. PostgreSQL refresh
 hints use the existing `live-events.ts` listener; snapshots remain authoritative.
+[E02](inbound-call-acceptance.md) implements `POST /agent/call-offers/:offerId/accept`
+for inbound offers behind an explicit native executor dependency. It atomically
+persists the winner and returns the existing `AcceptCallOfferResponse` with
+`status: "connecting"`; confirmed bridge evidence remains required. Transfer
+acceptance remains G01 work. The route is now in live OpenAPI and removed from
+the planned catalog; absent staged bootstrap returns 409 before mutation.
 Acceptance, transfer decline and browser integration retain their E02/G01/E03 gates.
 
 `coordination` contains `contractVersion: 1`, server `revision`, current `session`,
@@ -198,8 +204,6 @@ No unimplemented operation is added to the main live `paths`. It specifies:
 
 | Operations                                                                          | Request / response                                                       |
 | ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
-| POST `/agent/call-offers/{offerId}/accept`                                          | DeskMutationRequest / AcceptCallOfferResponse                            |
-| POST `/agent/call-offers/{offerId}/ignore`                                          | DeskMutationRequest / CoordinationMutationResponse                       |
 | GET `/agent/calls/{callId}/transfer-targets`                                        | no body / TransferTargetsResponse                                        |
 | POST `/agent/calls/{callId}/transfers`                                              | CreateTransferRequest / TransferSnapshot                                 |
 | DELETE `/agent/calls/{callId}/transfers/{transferId}`                               | DeskMutationRequest / TransferSnapshot                                   |

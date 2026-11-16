@@ -6,7 +6,7 @@ Branch: `feat/e01-fifo-call-offers`. Base: `e6050cc8a9b9d70e5a3e29d4747edd9ac0ef
 E01 supplies SQL-only dispatch, due expiry, own-offer Ignore and authoritative
 snapshots. Offers allocate no recipient slot, participant, operation, browser leg
 or capacity reservation. C03/D04 own the already admitted customer waiting path.
-E02 owns winner/connection/retry execution, E03/E04 browser controls and service
+[E02 supplies winner/connection/retry execution](inbound-call-acceptance.md); E03/E04 own browser controls and service
 INVITE handling, F03 the queue deadline continuation, and I05 runtime activation.
 The default `server.ts` does not start the dispatcher or the native media runtime.
 

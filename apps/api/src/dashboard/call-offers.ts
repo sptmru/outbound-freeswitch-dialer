@@ -6,12 +6,21 @@ import { requireUser } from "../auth/routes.js";
 import { AdmissionError } from "../call-admission.js";
 import { deskMutationSchema } from "../call-coordination-contracts.js";
 import { ignoreInboundOffer, readInboundOffer } from "../inbound-dispatcher.js";
+import { acceptInboundOffer } from "../inbound-acceptance.js";
+import { CapacityError } from "../call-capacity.js";
+import { ExecutionError } from "../call-executor.js";
 
-export function registerCallOfferRoutes(app: FastifyInstance, config: AppConfig, pool: pg.Pool) {
-  for (const method of ["GET", "POST"] as const)
+export function registerCallOfferRoutes(
+  app: FastifyInstance,
+  config: AppConfig,
+  pool: pg.Pool,
+  connection?: { wakeExecutor(operationId: string): Promise<void> }
+) {
+  for (const action of ["snapshot", "ignore", "accept"] as const) {
+    const method = action === "snapshot" ? "GET" : "POST";
     app.route({
       method,
-      url: method === "GET" ? "/agent/call-offers" : "/agent/call-offers/:offerId/ignore",
+      url: method === "GET" ? "/agent/call-offers" : `/agent/call-offers/:offerId/${action}`,
       handler: async (request, reply) => {
         const user = await requireUser(request, config, pool);
         if (!user) return reply.code(401).send({ message: "Unauthorized" });
@@ -29,14 +38,29 @@ export function registerCallOfferRoutes(app: FastifyInstance, config: AppConfig,
           }
           const { offerId } = z.object({ offerId: z.guid() }).parse(request.params);
           const input = deskMutationSchema.parse(request.body);
-          const result = await ignoreInboundOffer(pool, actor, offerId, input);
+          if (action === "accept" && !connection) throw new AdmissionError("coordination_unavailable");
+          const result =
+            action === "accept"
+              ? await acceptInboundOffer(pool, actor, offerId, input)
+              : await ignoreInboundOffer(pool, actor, offerId, input);
           if ("conflict" in result)
             return reply
               .code(409)
               .send({ message: result.conflict, code: result.conflict, revision: input.expectedRevision });
+          if ("operationId" in result && connection) {
+            // Response never awaits media/ESL. Durable polling recovers a lost wake.
+            void connection
+              .wakeExecutor(result.operationId)
+              .catch((error) => request.log.error({ err: error }, "Inbound connection wake failed"));
+          }
           return result;
         } catch (error) {
-          if (!(error instanceof AdmissionError)) throw error;
+          if (
+            !(error instanceof AdmissionError) &&
+            !(error instanceof ExecutionError) &&
+            !(error instanceof CapacityError)
+          )
+            throw error;
           const code = ["session_revoked", "maintenance", "discovery_changed"].includes(error.reason)
             ? "coordination_unavailable"
             : error.reason;
@@ -44,4 +68,5 @@ export function registerCallOfferRoutes(app: FastifyInstance, config: AppConfig,
         }
       }
     });
+  }
 }

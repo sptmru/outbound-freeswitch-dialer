@@ -16,11 +16,14 @@ const commands = [
     [
       "--test",
       "--test-concurrency=1",
+      "--test-reporter=tap",
+      ...(process.env.INBOUND_TEST_PATTERN ? ["--test-name-pattern", process.env.INBOUND_TEST_PATTERN] : []),
       "apps/api/dist-test/inbound-harness.integration.test.js",
       "apps/api/dist-test/inbound-config.integration.test.js",
       "apps/api/dist-test/inbound-ingress.integration.test.js",
       "apps/api/dist-test/inbound-queue.integration.test.js",
       "apps/api/dist-test/inbound-dispatcher.integration.test.js",
+      "apps/api/dist-test/inbound-acceptance.integration.test.js",
       "apps/api/dist-test/call-admission.integration.test.js",
       "apps/api/dist-test/eligibility.integration.test.js",
       "apps/api/dist-test/desk-sessions.integration.test.js",
@@ -42,7 +45,7 @@ const commands = [
 for (const [command, args] of commands) {
   const code = await new Promise((resolve, reject) => {
     const child = spawn(command, args, { stdio: "inherit" });
-    const timer = setTimeout(() => child.kill("SIGKILL"), 180000);
+    const timer = setTimeout(() => child.kill("SIGKILL"), 300000);
     child.once("error", (error) => {
       clearTimeout(timer);
       reject(error);

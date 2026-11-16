@@ -104,6 +104,18 @@ const campaignParams = params("campaignId", "Campaign identifier");
 const contactParams = params("contactId", "Contact identifier");
 const recordingParams = params("recordingId", "Voicemail recording identifier");
 const supervisorSessionParams = params("sessionId", "Supervisor session identifier");
+add(
+  "POST",
+  "/agent/call-offers/:offerId/accept",
+  "Accept own inbound offer",
+  "Atomically claims one winning slot and durable connection intent. Returns connecting before media; only correlated FreeSWITCH bridge evidence confirms connection. Requires the staged native executor dependency.",
+  {
+    params: params("offerId", "Inbound offer identifier"),
+    body: ref("DeskMutationRequest"),
+    success: ref("AcceptCallOfferResponse"),
+    errors: [400, 401, 403, 409]
+  }
+);
 
 add(
   "GET",

@@ -223,7 +223,7 @@ export async function persistInboundQueueEvent(
   const event = headers["event-name"];
   const db = await pool.connect();
   try {
-    await withCallAdmission(db, { callIds: [callId] }, async () => {
+    await withCallAdmission(db, { callIds: [callId] }, async (a) => {
       const call = (await db.query("select * from calls where id=$1", [callId])).rows[0];
       const leg = (
         await db.query(
@@ -293,7 +293,7 @@ export async function persistInboundQueueEvent(
           const peer = headers["other-leg-unique-id"];
           const winner = (
             await db.query(
-              `select p.id,p.agent_id from call_participants p join call_legs l on l.participant_id=p.id
+              `select p.id,p.agent_id,p.slot_reservation_id,p.slot_generation from call_participants p join call_legs l on l.participant_id=p.id
             join agent_call_slots s on s.participant_id=p.id and s.call_id=p.call_id and s.agent_id=p.agent_id
               and s.reservation_id=p.slot_reservation_id and s.generation=p.slot_generation
             join call_offers o on o.call_id=p.call_id and o.agent_id=p.agent_id and o.state='accepted'
@@ -302,7 +302,10 @@ export async function persistInboundQueueEvent(
               and (($2::text=$1::text and l.freeswitch_uuid=$3::text) or (l.freeswitch_uuid=$2::text and $3::text=$1::text))
               and exists(select 1 from call_operations x join call_execution_attempts t on t.operation_id=x.id
                 where x.call_id=$1 and x.command_kind='bridge' and x.state in ('uncertain','succeeded')
-                  and x.request->>'participantId'=p.id::text)`,
+                  and x.request->>'participantId'=p.id::text
+                  and (not exists(select 1 from inbound_connection_attempts where call_id=$1)
+                    or exists(select 1 from inbound_connection_attempts i where i.call_id=$1 and i.participant_id=p.id
+                      and i.bridge_operation_id=x.id and i.settled_at is null)))`,
               [callId, uuid, peer ?? null, call.agent_id]
             )
           ).rows[0];
@@ -314,6 +317,15 @@ export async function persistInboundQueueEvent(
             await db.query(
               "update call_participants set connected_at=coalesce(connected_at,greatest(joined_at,$2)) where id=$1",
               [winner.id, at]
+            );
+            await a.transition(
+              {
+                agentId: winner.agent_id,
+                callId,
+                reservationId: winner.slot_reservation_id,
+                generation: winner.slot_generation
+              },
+              "active"
             );
           }
         }

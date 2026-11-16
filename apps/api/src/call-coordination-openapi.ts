@@ -11,13 +11,6 @@ type ContractOperation = {
 };
 export const plannedCallCoordinationOperations: ContractOperation[] = [
   {
-    method: "post",
-    path: "/agent/call-offers/{offerId}/accept",
-    request: "DeskMutationRequest",
-    response: "AcceptCallOfferResponse",
-    role: "authenticated"
-  },
-  {
     method: "get",
     path: "/agent/calls/{callId}/transfer-targets",
     response: "TransferTargetsResponse",

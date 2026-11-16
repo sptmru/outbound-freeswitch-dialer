@@ -438,10 +438,11 @@ export function registerDashboardRoutes(
   runtimeSettings = new RuntimeSettingsService(pool, config),
   manualOutbound?: { wakeExecutor(operationId: string): Promise<void> },
   nativeControls?: { wakeExecutor(operationId: string): Promise<void> },
-  nativeSupervisor?: { wakeExecutor(operationId: string): Promise<void> }
+  nativeSupervisor?: { wakeExecutor(operationId: string): Promise<void> },
+  inboundConnection?: { wakeExecutor(operationId: string): Promise<void> }
 ): void {
   registerDeskSessionRoutes(app, config, pool);
-  registerCallOfferRoutes(app, config, pool);
+  registerCallOfferRoutes(app, config, pool, inboundConnection);
   async function coordinatedSupervisor(
     request: FastifyRequest,
     user: { id: string },
