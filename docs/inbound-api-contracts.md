@@ -117,6 +117,14 @@ provisioning, generation-scoped cleanup and transactional revision advancement.
 
 ## Snapshots and mutation results
 
+[E01](inbound-call-offers.md) implements the controller-scoped
+`GET /agent/call-offers?deskSessionId=<uuid>` snapshot and
+`POST /agent/call-offers/:offerId/ignore` for inbound offers. Exact Ignore replay
+returns its original `applied` result without affecting later work. Due expiry
+is persisted during dispatch, snapshot reads and admission. PostgreSQL refresh
+hints use the existing `live-events.ts` listener; snapshots remain authoritative.
+Acceptance, transfer decline and browser integration retain their E02/G01/E03 gates.
+
 `coordination` contains `contractVersion: 1`, server `revision`, current `session`,
 `slot`, `offer`, `transfer`, `autoNextIntent` and independent `actions`:
 `manualStart`, `autoNext`, `accept`, `ignore`, `transfer`. Each action carries

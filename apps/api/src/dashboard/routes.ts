@@ -83,6 +83,7 @@ import { CapacityError } from "../call-capacity.js";
 import { admitNativeCallControl, CallControlError } from "../native-call-control.js";
 import { requireUser } from "../auth/routes.js";
 import { registerDeskSessionRoutes } from "./desk-sessions.js";
+import { registerCallOfferRoutes } from "./call-offers.js";
 import { setAgentAvailability } from "../agent-availability.js";
 import type { AppConfig } from "../config.js";
 import { SESSION_COOKIE_NAME } from "../security.js";
@@ -440,6 +441,7 @@ export function registerDashboardRoutes(
   nativeSupervisor?: { wakeExecutor(operationId: string): Promise<void> }
 ): void {
   registerDeskSessionRoutes(app, config, pool);
+  registerCallOfferRoutes(app, config, pool);
   async function coordinatedSupervisor(
     request: FastifyRequest,
     user: { id: string },

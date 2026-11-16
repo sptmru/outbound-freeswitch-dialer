@@ -105,6 +105,30 @@ const contactParams = params("contactId", "Contact identifier");
 const recordingParams = params("recordingId", "Voicemail recording identifier");
 const supervisorSessionParams = params("sessionId", "Supervisor session identifier");
 
+add(
+  "GET",
+  "/agent/call-offers",
+  "Read own inbound offer",
+  "Authoritative controller-scoped snapshot; expires due offers using database time. Realtime events only request a refresh.",
+  {
+    querystring: object({ deskSessionId: uuid("Controlling Desk session") }),
+    success: ref("CallOffersResponse"),
+    errors: [400, 401, 409]
+  }
+);
+add(
+  "POST",
+  "/agent/call-offers/:offerId/ignore",
+  "Ignore own inbound offer",
+  "Atomically closes only the actor's pending inbound offer and persists its permanent call-agent exclusion. Transfer decline remains staged under G01. Replays never affect a later offer.",
+  {
+    params: params("offerId", "Inbound offer identifier"),
+    body: ref("DeskMutationRequest"),
+    success: ref("CoordinationMutationResponse"),
+    errors: [400, 401, 403, 409]
+  }
+);
+
 add("GET", "/", "Get API service status", "Returns the API service name and basic status.", {
   success: ref("RootServiceResponse")
 });

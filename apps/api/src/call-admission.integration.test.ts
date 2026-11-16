@@ -411,9 +411,15 @@ test(
           (await withCallAdmission(c, f.resources(call), (a) => a.eligibility(f.input))).queuedCallIds,
           []
         );
-        await c.query(
-          "update call_offers set state='expired',reason='deadline_elapsed',closed_at=clock_timestamp() where id=$1",
-          [offer]
+        // E01 admission now persists due expiry before making its decision.
+        assert.equal(
+          (await c.query("select state from call_offers where id=$1", [offer])).rows[0].state,
+          "expired"
+        );
+        assert.equal(
+          (await c.query("select reason from call_offer_exclusions where offer_id=$1", [offer])).rows[0]
+            .reason,
+          "deadline_elapsed"
         );
         await c.query("update agent_desk_sessions set revision=revision+1 where id=$1", [
           f.input.deskSessionId

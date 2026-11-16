@@ -227,6 +227,16 @@
     ],
     "additionalProperties": false
   },
+  "CallOffersResponse": {
+    "$id": "CallOffersResponse",
+    "type": "object",
+    "properties": {
+      "revision": { "$ref": "DeskRevision#" },
+      "offer": { "anyOf": [{ "$ref": "CallOfferSnapshot#" }, { "type": "null" }] }
+    },
+    "required": ["revision", "offer"],
+    "additionalProperties": false
+  },
   "TransferSnapshot": {
     "$id": "TransferSnapshot",
     "type": "object",

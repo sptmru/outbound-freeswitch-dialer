@@ -34,6 +34,9 @@ DB/API boundary.
 [D04 durable inbound queue admission](inbound-queue-admission.md) adds the staged
 queue/capacity/waiting and customer lifecycle service. Its coordinator requires an
 explicit C03 dependency; default server bootstrap and I05 enablement remain separate.
+[E01 FIFO offers and exclusions](inbound-call-offers.md) adds bounded SQL-only
+dispatch, own-offer Ignore, admission-time expiry and authenticated snapshots with
+transactional refresh hints. E02 media acceptance and I05 activation remain separate.
 
 ## Completed Repository Work
 

@@ -108,6 +108,10 @@ export interface CallOfferSnapshot {
   callingNumber: string;
   closureReason: string | null;
 }
+export interface CallOffersResponse {
+  revision: DeskRevision;
+  offer: CallOfferSnapshot | null;
+}
 export interface TransferSnapshot {
   id: string;
   callId: string;

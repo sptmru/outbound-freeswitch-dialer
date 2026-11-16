@@ -9,6 +9,7 @@ import {
 import { lockUserMediaAction } from "./user-media-lock.js";
 import { lockCampaignVoicemail } from "./dashboard/recordings.js";
 import { CallCapacity } from "./call-capacity.js";
+import { expireInboundOffers } from "./call-offer-expiry.js";
 
 // A01 namespace; distinct from user media (72201) and execution (A05/C03).
 export const ADMISSION_LOCK_NAMESPACE = 72_202;
@@ -147,6 +148,8 @@ export class CallAdmission {
       !this.resources.userIds.includes(input.userId.toLowerCase())
     )
       throw new AdmissionError("parent_not_locked");
+    // Timers and realtime delivery are not the authority for due expiry.
+    await expireInboundOffers(this.client, [input.agentId]);
     const result = await this.client.query(
       `
       select case
@@ -193,7 +196,8 @@ export class CallAdmission {
       );
       const o = offer.rows[0];
       if (o) this.assertCall(o.call_id);
-      if (!o || o.state !== "pending" || o.ended_at || o.excluded) reason = "offer_closed";
+      if (o?.state === "expired") reason = "offer_expired";
+      else if (!o || o.state !== "pending" || o.ended_at || o.excluded) reason = "offer_closed";
       else if (
         o.desk_session_id !== input.deskSessionId ||
         o.desk_revision !== input.expectedRevision ||

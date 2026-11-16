@@ -18,13 +18,6 @@ export const plannedCallCoordinationOperations: ContractOperation[] = [
     role: "authenticated"
   },
   {
-    method: "post",
-    path: "/agent/call-offers/{offerId}/ignore",
-    request: "DeskMutationRequest",
-    response: "CoordinationMutationResponse",
-    role: "authenticated"
-  },
-  {
     method: "get",
     path: "/agent/calls/{callId}/transfer-targets",
     response: "TransferTargetsResponse",

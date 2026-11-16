@@ -29,6 +29,7 @@ This document is the current product and operational contract. Items described a
 - PostgreSQL statement-level notifications publish refresh hints for agent, call, campaign, contact, recording, suppression, and user changes.
 - EventSource reconnects automatically; the server advertises a three-second retry and sends 15-second heartbeats.
 - The UI retains periodic HTTP refresh as a fallback. SSE is a refresh signal, not the authoritative state payload; REST responses remain authoritative.
+- The staged inbound offer service publishes committed offer/exclusion/auto-intent refresh hints. `GET /agent/call-offers` returns the authenticated controller's authoritative offer; own-offer Ignore and due expiry retain permanent per-call exclusions. Native dispatcher activation and browser offer controls have separate enablement gates; see [E01](inbound-call-offers.md).
 
 ## Agent Availability
 
