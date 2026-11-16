@@ -434,15 +434,15 @@ export async function validateManualDial(
   });
 }
 
-export async function startManualCall(input: StartManualCallRequest): Promise<AgentDeskResponse> {
-  return apiFetch<AgentDeskResponse>("/agent/manual-dial/start", {
+export async function startManualCall(input: StartManualCallRequest): Promise<CallStartResponse> {
+  return apiFetch<CallStartResponse>("/agent/manual-dial/start", {
     method: "POST",
     body: JSON.stringify(input)
   });
 }
 
-export async function startNextCall(input: StartNextCallRequest = {}): Promise<AgentDeskResponse> {
-  return apiFetch<AgentDeskResponse>("/agent/call-next", {
+export async function startNextCall(input: StartNextCallRequest = {}): Promise<CallStartResponse> {
+  return apiFetch<CallStartResponse>("/agent/call-next", {
     method: "POST",
     body: JSON.stringify(input)
   });
@@ -451,8 +451,8 @@ export async function startNextCall(input: StartNextCallRequest = {}): Promise<A
 export async function startLeadCall(
   contactId: string,
   input: StartLeadCallRequest = {}
-): Promise<AgentDeskResponse> {
-  return apiFetch<AgentDeskResponse>(`/agent/leads/${contactId}/call`, {
+): Promise<CallStartResponse> {
+  return apiFetch<CallStartResponse>(`/agent/leads/${contactId}/call`, {
     method: "POST",
     body: JSON.stringify(input)
   });
@@ -694,4 +694,27 @@ export function leaveDeskSession(input: DeskMutationRequest): Promise<DeskSessio
     body: JSON.stringify(input),
     keepalive: true
   });
+}
+
+export type CallStartResponse =
+  | AgentDeskResponse
+  | Extract<import("./types").CoordinationMutationResponse, { status: "started" | "deferred" }>;
+
+export async function acceptCallOffer(offerId: string, input: DeskMutationRequest) {
+  return apiFetch<import("./types").AcceptCallOfferResponse>(
+    `/agent/call-offers/${encodeURIComponent(offerId)}/accept`,
+    {
+      method: "POST",
+      body: JSON.stringify(input)
+    }
+  );
+}
+export async function ignoreCallOffer(offerId: string, input: DeskMutationRequest) {
+  return apiFetch<import("./types").CoordinationMutationResponse>(
+    `/agent/call-offers/${encodeURIComponent(offerId)}/ignore`,
+    {
+      method: "POST",
+      body: JSON.stringify(input)
+    }
+  );
 }

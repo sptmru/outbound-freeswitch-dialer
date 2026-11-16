@@ -1,3 +1,4 @@
+import { coordinatedDesk, readyPhone } from "./test/coordination-fixtures";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -246,6 +247,33 @@ describe("App Agent Desk empty states", () => {
     }));
     apiMocks.useSoftphoneRegistration.mockReturnValue(softphoneRuntime);
     apiMocks.useSupervisorSoftphone.mockReturnValue(supervisorSoftphoneRuntime);
+  });
+
+  it("E03.1 offer SSE hints and reconnect refetch the desk; lower revisions cannot revive an old offer", async () => {
+    const current = coordinatedDesk();
+    current.coordination!.revision = "2";
+    current.coordination!.session!.revision = "2";
+    current.coordination!.offer = null;
+    const stale = coordinatedDesk();
+    let hints: {
+      onRefresh: (event: { source: string; occurredAt: string }) => void;
+      onConnectionChange: (connected: boolean) => void;
+    };
+    apiMocks.fetchMe.mockResolvedValue({ user: current.user });
+    apiMocks.fetchAgentDesk.mockResolvedValueOnce(current).mockResolvedValue(stale);
+    apiMocks.useSoftphoneRegistration.mockReturnValue(readyPhone(current));
+    apiMocks.subscribeAgentEvents.mockImplementation((input) => {
+      hints = input;
+      return () => undefined;
+    });
+    render(<App />);
+    await screen.findByLabelText("Manual call");
+    act(() => hints.onRefresh({ source: "call_offers", occurredAt: "" }));
+    await waitFor(() => expect(apiMocks.fetchAgentDesk).toHaveBeenCalledTimes(2));
+    expect(screen.queryByRole("heading", { name: "Incoming call" })).toBeNull();
+    act(() => hints.onConnectionChange(true));
+    await waitFor(() => expect(apiMocks.fetchAgentDesk).toHaveBeenCalledTimes(3));
+    expect(screen.queryByRole("heading", { name: "Incoming call" })).toBeNull();
   });
 
   it("restores the shared page and selected campaign from the URL", async () => {

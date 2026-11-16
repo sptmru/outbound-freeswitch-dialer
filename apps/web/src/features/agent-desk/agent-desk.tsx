@@ -7,10 +7,14 @@ import {
   sendDtmf,
   startLeadCall,
   startManualCall,
-  startNextCall
+  startNextCall,
+  type CallStartResponse
 } from "../../api";
 import type { SoftphoneRuntime } from "../../softphone";
 import type { AgentDeskResponse, LeadSummary } from "../../types";
+import { CallOfferCard } from "./call-offer";
+import { actionUnavailable, conflictMessage, controllerMutation } from "./coordination";
+import type { ManualStartIntent } from "../../types";
 import { ActiveCall } from "./active-call";
 import { NoCampaignPanel, RecentAgentCalls, VoicemailJobs } from "./agent-activity-panels";
 import {
@@ -40,6 +44,66 @@ export function AgentDesk({
   const [callNextPending, setCallNextPending] = useState(false);
   const callStartPendingRef = useRef(false);
   const [callNextError, setCallNextError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [dismissedOfferId, setDismissedOfferId] = useState<string | null>(null);
+  const mounted = useRef(true);
+  const noticeRef = useRef<HTMLParagraphElement>(null);
+  const focusNotice = useRef(false);
+  useEffect(() => {
+    if (notice && focusNotice.current) {
+      noticeRef.current?.focus();
+      focusNotice.current = false;
+    }
+  }, [notice]);
+  const context = `${desk.coordination?.session?.id}/${desk.coordination?.revision}/${desk.coordination?.session?.bindingGeneration}/${desk.campaign?.id}`;
+  const latestContext = useRef(context);
+  latestContext.current = context;
+  const manualRetry = useRef<{ signature: string; intent: ManualStartIntent } | null>(null);
+  const canceledAuto = useRef(new Set<string>());
+  const autoSource = desk.coordination?.autoNextIntent;
+  const authority = `${context}/${desk.coordination?.slot.state}/${desk.coordination?.slot.callId}/${autoSource?.id}/${autoSource?.state}`;
+  const latestAuthority = useRef(authority);
+  latestAuthority.current = authority;
+  const mutation = controllerMutation(desk, softphone);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+
+  async function refreshDesk() {
+    const captured = context;
+    const next = await fetchAgentDesk(desk.campaign?.id);
+    if (mounted.current && latestContext.current === captured) onDeskChanged(next);
+  }
+
+  function manualIntent(signature: string): ManualStartIntent | undefined {
+    if (!desk.coordination) return undefined;
+    if (!mutation) throw new Error("Your browser phone is not ready. Refresh the desk before calling.");
+    if (autoSource) canceledAuto.current.add(autoSource.id);
+    const scoped = `${context}/${signature}`;
+    if (manualRetry.current?.signature !== scoped) {
+      manualRetry.current = { signature: scoped, intent: { ...mutation, startReason: "manual" } };
+    }
+    return manualRetry.current.intent;
+  }
+
+  async function actionFailure(error: unknown) {
+    const message = conflictMessage(error);
+    if (message) {
+      focusNotice.current = true;
+      setNotice(message);
+    }
+    // No optimistic offer dismissal. Validation, HTTP loss and conflicts refetch.
+    try {
+      await refreshDesk();
+    } catch {
+      /* Poll/SSE remains the fallback. */
+    }
+    return message;
+  }
+
   const [callControlPending, setCallControlPending] = useState<"hangup" | "voicemail" | "dtmf" | null>(null);
   const callControlPendingRef = useRef<typeof callControlPending>(null);
   const [endCallError, setEndCallError] = useState<string | null>(null);
@@ -58,7 +122,11 @@ export function AgentDesk({
     softphone.registered &&
     (softphone.deskSession === undefined || softphone.deskSession?.ready === true) &&
     availabilityStatus === "available" &&
-    !softphone.audioSetup.checking;
+    !softphone.audioSetup.checking &&
+    (!desk.coordination ||
+      (mutation !== null &&
+        desk.coordination.slot.state === "free" &&
+        desk.coordination.actions.manualStart.allowed));
 
   useEffect(() => {
     autoAdvancePausedRef.current = availabilityStatus === "paused";
@@ -83,7 +151,12 @@ export function AgentDesk({
     }
     setCallNextError(null);
     try {
-      await runCallStart(() => startNextCall({ campaignId: campaign.id }));
+      await runCallStart(() =>
+        startNextCall({
+          campaignId: campaign.id,
+          ...(desk.coordination ? { intent: manualIntent("next") } : {})
+        })
+      );
     } catch (error) {
       setCallNextError(error instanceof Error ? error.message : "Could not start next call");
     }
@@ -110,7 +183,13 @@ export function AgentDesk({
     }
     setCallNextError(null);
     try {
-      await runCallStart(() => startLeadCall(lead.id, { confirmCompletedLead, confirmRetryWait }));
+      await runCallStart(() =>
+        startLeadCall(lead.id, {
+          confirmCompletedLead,
+          confirmRetryWait,
+          ...(desk.coordination ? { intent: manualIntent(`lead/${lead.id}`) } : {})
+        })
+      );
     } catch (error) {
       setCallNextError(error instanceof Error ? error.message : "Could not start lead call");
     }
@@ -120,30 +199,139 @@ export function AgentDesk({
     if (!campaign) {
       throw new Error("No active campaign is available");
     }
-    await runCallStart(() => startManualCall({ campaignId: campaign.id, phoneNumber }));
+    if (!canStartCalls) throw new Error(callStartBlockedMessage(desk, softphone));
+    const started = await runCallStart(() =>
+      startManualCall({
+        campaignId: campaign.id,
+        phoneNumber,
+        ...(desk.coordination ? { intent: manualIntent(`number/${phoneNumber}`) } : {})
+      })
+    );
+    return started === "started";
   }
 
-  async function runCallStart(action: () => Promise<AgentDeskResponse>) {
-    if (callStartPendingRef.current) {
-      throw new Error("Another call is already starting");
-    }
+  async function runCallStart(action: () => Promise<CallStartResponse>, automatic = false) {
+    if (callStartPendingRef.current) return "busy";
     callStartPendingRef.current = true;
     setCallNextPending(true);
-    softphone.startBrowserRingback();
+    setNotice(null);
+    const captured = context;
+    const capturedAuthority = authority;
+    if (!desk.coordination) softphone.startBrowserRingback();
     try {
-      const nextDesk = await action();
-      if (!nextDesk.activeCall) {
-        softphone.stopBrowserRingback();
+      const result = await action();
+      if (
+        !mounted.current ||
+        latestContext.current !== captured ||
+        latestAuthority.current !== capturedAuthority
+      )
+        return;
+      if ("status" in result) {
+        if (result.status === "deferred") {
+          softphone.stopBrowserRingback();
+          setNotice("Automatic next call is waiting for incoming calls.");
+        } else {
+          setDismissedOfferId(desk.coordination?.offer?.id ?? null);
+          softphone.startBrowserRingback();
+          setNotice("Starting call…");
+        }
+        await refreshDesk();
+        if (result.status === "deferred") return "deferred";
+      } else {
+        if (!result.activeCall) softphone.stopBrowserRingback();
+        onDeskChanged(result);
       }
-      onDeskChanged(nextDesk);
+      if (!automatic) manualRetry.current = null;
+      return "started";
     } catch (error) {
       softphone.stopBrowserRingback();
-      throw error;
+      if (!mounted.current || latestContext.current !== captured) return;
+      const expected = await actionFailure(error);
+      if (!expected && !automatic) throw error;
+      if (!expected && automatic) setNotice("Automatic next call is waiting for a desk refresh.");
+      return false;
     } finally {
       callStartPendingRef.current = false;
-      setCallNextPending(false);
+      if (mounted.current) setCallNextPending(false);
     }
   }
+
+  async function runOffer(action: () => Promise<unknown>, kind: "accept" | "ignore") {
+    if (callStartPendingRef.current) return;
+    callStartPendingRef.current = true;
+    setCallNextPending(true);
+    if (autoSource && kind === "accept") canceledAuto.current.add(autoSource.id);
+    try {
+      await action();
+    } catch (error) {
+      const expected = await actionFailure(error);
+      if (!expected)
+        setNotice(error instanceof Error ? error.message : "Could not update offer. Please try again.");
+    } finally {
+      callStartPendingRef.current = false;
+      if (mounted.current) setCallNextPending(false);
+    }
+  }
+
+  // Native progression requires a server-bound source. Call disappearance is
+  // never evidence that inbound completion or a transfer can start outbound.
+  useEffect(() => {
+    if (
+      !desk.coordination ||
+      !mutation ||
+      !autoSource ||
+      canceledAuto.current.has(autoSource.id) ||
+      !["pending", "deferred"].includes(autoSource.state) ||
+      desk.activeCall ||
+      desk.coordination.slot.state !== "free" ||
+      !campaign?.autoAdvanceToNextLeadEnabled ||
+      campaign.callableLeads <= 0 ||
+      autoAdvancePausedRef.current ||
+      !softphone.registered ||
+      softphone.audioSetup.checking ||
+      (!desk.coordination.actions.autoNext.allowed &&
+        desk.coordination.actions.autoNext.reason !== "incoming_pending")
+    )
+      return;
+    let stopped = false;
+    let timer: number;
+    const intent = {
+      ...mutation,
+      idempotencyKey: autoSource.id,
+      startReason: "automatic" as const,
+      sourceCallId: autoSource.sourceCallId
+    };
+    async function attempt() {
+      if (
+        stopped ||
+        latestContext.current !== context ||
+        canceledAuto.current.has(autoSource!.id) ||
+        autoAdvancePausedRef.current
+      )
+        return;
+      const outcome = await runCallStart(() => startNextCall({ campaignId: campaign!.id, intent }), true);
+      if (!stopped && (outcome === "deferred" || outcome === "busy"))
+        timer = window.setTimeout(() => void attempt(), 2000);
+    }
+    timer = window.setTimeout(() => void attempt(), 0);
+    return () => {
+      stopped = true;
+      window.clearTimeout(timer);
+    };
+  }, [
+    context,
+    autoSource?.id,
+    autoSource?.state,
+    desk.activeCall?.id,
+    desk.coordination?.slot.state,
+    desk.coordination?.actions.autoNext.allowed,
+    desk.coordination?.actions.autoNext.reason,
+    campaign?.autoAdvanceToNextLeadEnabled,
+    availabilityStatus,
+    softphone.registered,
+    softphone.audioSetup.checking,
+    mutation !== null
+  ]);
 
   useEffect(() => {
     const previousActiveCall = previousActiveCallRef.current;
@@ -154,6 +342,7 @@ export function AgentDesk({
         }
       : null;
     if (
+      desk.coordination ||
       !previousActiveCall ||
       previousActiveCall.manualDial ||
       desk.activeCall ||
@@ -232,9 +421,42 @@ export function AgentDesk({
     }
   }
 
+  const offerCard = (
+    <>
+      {desk.coordination && !desk.coordination.actions.manualStart.allowed && (
+        <p role="status" className="desk-notice">
+          {actionUnavailable(desk.coordination.actions.manualStart.reason)}
+        </p>
+      )}
+      {notice && (
+        <p ref={noticeRef} tabIndex={-1} role="status" className="desk-notice">
+          {notice}
+        </p>
+      )}
+      {desk.coordination &&
+        ["reserved", "connecting", "uncertain"].includes(desk.coordination.slot.state) && (
+          <p role="status" className="desk-notice">
+            {desk.coordination.slot.state === "uncertain" ? "Checking call connection…" : "Connecting…"}
+          </p>
+        )}
+      {desk.coordination && (
+        <CallOfferCard
+          desk={desk}
+          dismissedOfferId={dismissedOfferId}
+          mutation={mutation}
+          outputId={softphone.audioSetup.selectedOutputId}
+          busy={callNextPending}
+          run={runOffer}
+          refresh={refreshDesk}
+        />
+      )}
+    </>
+  );
+
   if (!campaign) {
     return (
       <section className={desk.activeCall ? "agent-grid active-agent-grid" : "ready-desk-grid"}>
+        {offerCard}
         <NoCampaignPanel />
         {desk.activeCall && (
           <ActiveCall
@@ -265,6 +487,7 @@ export function AgentDesk({
     );
     return (
       <section className="agent-grid active-agent-grid">
+        {offerCard}
         <LeadQueue
           canStartCalls={canStartCalls}
           error={callNextError}
@@ -294,6 +517,7 @@ export function AgentDesk({
 
   return (
     <section className="ready-desk-grid">
+      {offerCard}
       <LeadQueue
         canStartCalls={canStartCalls}
         error={callNextError}

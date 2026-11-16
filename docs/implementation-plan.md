@@ -39,7 +39,10 @@ dispatch, own-offer Ignore, admission-time expiry and authenticated snapshots wi
 transactional refresh hints.
 [E02 inbound acceptance](inbound-call-acceptance.md) adds atomic winner/slot/connection
 claims, verified native originate/bridge, bounded cleanup and original-deadline
-retries behind an explicit executor dependency. E03/E04 browser integration and
+retries behind an explicit executor dependency.
+[E03 Agent Desk offers](inbound-agent-desk-offers.md) supplies the staged native
+browser consumer, manual/automatic intent separation and isolated U/B fixtures.
+E04 service-INVITE/media integration and
 I05 activation remain separate.
 
 ## Completed Repository Work

@@ -1,3 +1,4 @@
+import { olderDesk } from "./features/agent-desk/coordination";
 import { useEffect, useRef, useState } from "react";
 import {
   Activity,
@@ -116,7 +117,13 @@ const deskRefreshSources = new Set([
   "contacts",
   "recordings",
   "suppression_entries",
-  "users"
+  "users",
+  "agent_desk_sessions",
+  "agent_interactive_slots",
+  "call_offers",
+  "call_offer_exclusions",
+  "call_transfers",
+  "agent_auto_next_intents"
 ]);
 
 const adminRefreshSources: Record<Exclude<View, "desk">, ReadonlySet<string>> = {
@@ -214,7 +221,7 @@ export function App() {
       deskRequestRef.current += 1;
       deskBackgroundRequestRef.current += 1;
       setUser(nextUser);
-      setDesk(nextDesk);
+      setDesk((current) => (olderDesk(nextDesk, current) ? current : nextDesk));
       const nextCampaignId = nextDesk.campaign?.id ?? null;
       const nextView: View = nextUser.role === "agent" || nextDesk.activeCall ? "desk" : view;
       setSelectedCampaignId(nextCampaignId);
@@ -272,7 +279,7 @@ export function App() {
       }
       const nextCampaignId = nextDesk.campaign?.id ?? null;
       setSelectedCampaignId(nextCampaignId);
-      setDesk(nextDesk);
+      setDesk((current) => (olderDesk(nextDesk, current) ? current : nextDesk));
       writeNavigationState(activeView, nextCampaignId);
     } finally {
       if (requestId === deskRequestRef.current) {
@@ -286,7 +293,8 @@ export function App() {
       return;
     }
     deskRequestRef.current += 1;
-    setDesk(nextDesk);
+    deskBackgroundRequestRef.current += 1;
+    setDesk((current) => (olderDesk(nextDesk, current) ? current : nextDesk));
     setSelectedCampaignId(nextDesk.campaign?.id ?? null);
   }
 
@@ -320,7 +328,7 @@ export function App() {
         ) {
           return;
         }
-        setDesk(nextDesk);
+        setDesk((current) => (olderDesk(nextDesk, current) ? current : nextDesk));
         setSelectedCampaignId(nextDesk.campaign?.id ?? null);
       } catch (refreshError) {
         if (
@@ -375,7 +383,7 @@ export function App() {
           deskVersion === deskRequestRef.current &&
           !deskActionPendingRef.current
         ) {
-          setDesk(nextDesk);
+          setDesk((current) => (olderDesk(nextDesk, current) ? current : nextDesk));
           setSelectedCampaignId(nextDesk.campaign?.id ?? null);
         }
 
@@ -419,9 +427,7 @@ export function App() {
     let unsubscribe: () => void = () => undefined;
     try {
       unsubscribe = subscribeAgentEvents({
-        onConnectionChange: (connected) => {
-          if (!connected) scheduleRefresh();
-        },
+        onConnectionChange: () => scheduleRefresh(),
         onRefresh: scheduleRefresh
       });
     } catch {

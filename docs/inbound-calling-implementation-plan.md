@@ -703,6 +703,10 @@ Document `startReason`, source, and session fields on `/agent/call-next`; map ex
 lead/manual-number actions to manual admission. Ambiguous legacy requests do not
 silently dismiss offers. Intent metadata is not a security privilege or media proof.
 
+[E03 browser consumer and verification](inbound-agent-desk-offers.md) implements
+the staged offer/manual/automatic interface; native snapshot/source publication
+and execution bootstrap remain an I05 gate.
+
 Agent Desk: number/campaign/wait card, ringtone, Accept/Ignore, connecting, transfer
 offers, recipient selection/cancel. Allow explicit manual outbound with pending inbound
 or transfer offers when other checks pass; the start request performs atomic dismissal with no extra

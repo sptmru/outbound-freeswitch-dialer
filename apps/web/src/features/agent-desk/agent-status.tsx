@@ -115,7 +115,7 @@ export function AgentStatusPanel({
   onAvailabilityChangeStarted?: (status: "available" | "paused") => void;
   onDeskChanged: (desk: AgentDeskResponse) => void;
   onManualDialNumberChange: (phoneNumber: string) => void;
-  onStartManualCall: (phoneNumber: string) => Promise<void>;
+  onStartManualCall: (phoneNumber: string) => Promise<boolean | void>;
   softphone: SoftphoneRuntime;
 }) {
   const [campaignPending, setCampaignPending] = useState(false);
@@ -144,8 +144,8 @@ export function AgentStatusPanel({
 
     setManualDialError(null);
     try {
-      await onStartManualCall(manualDialNumber);
-      onManualDialNumberChange("");
+      const started = await onStartManualCall(manualDialNumber);
+      if (started !== false) onManualDialNumberChange("");
     } catch (error) {
       setManualDialError(error instanceof Error ? error.message : "Could not start call");
     }
