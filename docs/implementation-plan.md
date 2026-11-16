@@ -50,7 +50,9 @@ state. [F02 inbound audio](inbound-audio-library.md) reuses upload/preview and p
 retained/active media references through replacement/deletion races.
 [F03 no-answer playback](inbound-fallback.md) adds atomic queue fallback, saved step
 operations and native playback evidence behind the explicit C03 worker dependency.
-F04/F05 forwarding/UI and I05 activation remain separate.
+[F04 external forwarding](inbound-forwarding.md) adds reserved external legs, native
+bridge cancellation and bounded failure continuation. F05 UI and I05 activation
+remain separate.
 
 ## Completed Repository Work
 

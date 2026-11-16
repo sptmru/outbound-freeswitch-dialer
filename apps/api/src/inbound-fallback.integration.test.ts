@@ -448,3 +448,275 @@ test(
     }
   }
 );
+
+const forwardConfig = {
+  SIP_TRUNK_MODE: "ip_auth" as const,
+  SIP_TRUNK_PROXY: "127.0.0.1:5099",
+  SIP_TRUNK_CALLER_ID: "+12025550100"
+};
+async function forwardFlow(f: Fixture) {
+  const parent = (
+    await f.pool.query("insert into inbound_flows(campaign_id,name) values($1,'F04') returning id", [
+      f.campaign
+    ])
+  ).rows[0].id;
+  const version = (
+    await f.pool.query(
+      `insert into inbound_flow_versions(flow_id,campaign_id,version,flow_timeout_ms,actions,audio_snapshot) values($1,$2,1,20000,$3,'[]') returning id`,
+      [
+        parent,
+        f.campaign,
+        JSON.stringify([
+          { type: "forward_external", target: "+14155550101", timeoutMs: 5000 },
+          { type: "hangup" }
+        ])
+      ]
+    )
+  ).rows[0].id;
+  const id = await queued(f, {
+    arrivedUs: Date.now() * 1000 - 59000000,
+    routeData: Buffer.from(
+      JSON.stringify({ queue_timeout_ms: 60000, max_waiting_calls: 40, no_answer_flow_version_id: version })
+    ).toString("base64url")
+  });
+  await due(f, id);
+  return id;
+}
+for (const reverse of [false, true]) {
+  test(
+    `F04.2 DB: reserved identity replay, capacity limit race and rollback (reverse=${reverse})`,
+    options,
+    async () => {
+      const f = await fixture();
+      try {
+        const { withCallAdmission } = await import("./call-admission.js");
+        const { defaultCapacityLimits } = await import("./call-capacity.js");
+        const client = await f.pool.connect();
+        try {
+          await withCallAdmission(client, {}, (a) =>
+            a.capacity.configure({ ...defaultCapacityLimits, forwarding: 1 })
+          );
+        } finally {
+          client.release();
+        }
+        const ids = [await forwardFlow(f), await forwardFlow(f)];
+        if (reverse) ids.reverse();
+        await assert.rejects(
+          advanceInboundFallback(
+            f.pool,
+            ids[0]!,
+            async () => {
+              throw new Error("rollback");
+            },
+            forwardConfig
+          ),
+          /rollback/
+        );
+        assert.equal(
+          (await f.pool.query("select count(*)::int n from call_participants where role='external'")).rows[0]
+            .n,
+          0
+        );
+        let release!: () => void, held!: () => void;
+        const gate = new Promise<void>((r) => (release = r)),
+          ready = new Promise<void>((r) => (held = r));
+        const leader = await f.pool.connect(),
+          follower = await f.pool.connect();
+        const facade = (c: pg.PoolClient) =>
+          ({
+            query: f.pool.query.bind(f.pool),
+            connect: async () =>
+              Object.assign(Object.create(c), { query: c.query.bind(c), release: () => {} })
+          }) as pg.Pool;
+        const lp = (await leader.query("select pg_backend_pid() pid")).rows[0].pid,
+          fp = (await follower.query("select pg_backend_pid() pid")).rows[0].pid;
+        try {
+          const first = advanceInboundFallback(
+            facade(leader),
+            ids[0]!,
+            async () => {
+              held();
+              await gate;
+            },
+            forwardConfig
+          );
+          await Promise.race([
+            ready,
+            first.then(() => {
+              throw new Error("missed checkpoint");
+            })
+          ]);
+          const second = advanceInboundFallback(facade(follower), ids[1]!, undefined, forwardConfig);
+          await assertBlocked(f.pool, fp, lp);
+          release();
+          const winner = (await first)!;
+          assert.equal(await second, null);
+          assert.equal(
+            (await advanceInboundFallback(f.pool, ids[0]!, undefined, forwardConfig))!.id,
+            winner.id
+          );
+          assert.equal(
+            (
+              await f.pool.query(
+                "select count(*)::int n from call_capacity_reservations where operation_id=$1",
+                [winner.id]
+              )
+            ).rows[0].n,
+            3
+          );
+          assert.equal(
+            (await f.pool.query("select count(*)::int n from call_participants where role='external'"))
+              .rows[0].n,
+            1
+          );
+          const loser = (
+            await f.pool.query(
+              "select * from call_operations where call_id=$1 and command_kind='forward_external'",
+              [ids[1]]
+            )
+          ).rows[0];
+          assert.equal(loser.result.reason, "capacity_exceeded");
+          assert.equal(
+            (await advanceInboundFallback(f.pool, ids[1]!, undefined, forwardConfig))!.command_kind,
+            "hangup"
+          );
+        } finally {
+          release();
+          leader.release(true);
+          follower.release(true);
+        }
+      } finally {
+        await f.cleanup();
+      }
+    }
+  );
+}
+test(
+  "F04.1/F04.3 DB: terminal/late answer permutations retain ambiguity until native bridge finish",
+  options,
+  async () => {
+    const { persistInboundForwardingEvent } = await import("./inbound-forwarding.js");
+    const { reconcileCoordinatedCallCleanup } = await import("./call-cleanup.js");
+    for (const terminalFirst of [true, false]) {
+      const f = await fixture();
+      try {
+        const id = await forwardFlow(f),
+          op = (await advanceInboundFallback(f.pool, id, undefined, forwardConfig))!;
+        await f.pool.query(
+          "insert into call_execution_attempts(operation_id,owner_id,backend_pid,replica,seat) values($1,$2,pg_backend_pid(),0,0)",
+          [op.id, randomUUID()]
+        );
+        await f.pool.query("update call_operations set state='uncertain' where id=$1", [op.id]);
+        if (terminalFirst) await f.end(id);
+        await persistInboundQueueEvent(f.pool, {
+          variable_outbound_dialer_call_id: id,
+          "unique-id": String(op.request.externalUuid),
+          "event-name": "CHANNEL_ANSWER",
+          "event-uuid": randomUUID()
+        });
+        if (!terminalFirst) await f.end(id);
+        await persistInboundQueueEvent(f.pool, {
+          variable_outbound_dialer_call_id: id,
+          "unique-id": String(op.request.externalUuid),
+          "event-name": "CHANNEL_DESTROY",
+          "event-uuid": randomUUID()
+        });
+        assert.equal(await resolveInboundFallback(op, f.pool), null);
+        await persistInboundFallbackJob(f.pool, { jobUuid: op.command_uuid, body: "+OK", headers: {} });
+        assert.equal(
+          await resolveInboundFallback(op, f.pool),
+          null,
+          "transfer ACK cannot fence asynchronous Lua"
+        );
+        await reconcileCoordinatedCallCleanup(f.pool, id);
+        assert.equal(
+          (
+            await f.pool.query(
+              "select count(*)::int n from call_capacity_reservations where operation_id=$1 and state<>'released'",
+              [op.id]
+            )
+          ).rows[0].n,
+          3
+        );
+        await persistInboundForwardingEvent(f.pool, {
+          "event-name": "CUSTOM",
+          "event-subclass": "outbound_dialer::inbound_forward_finished",
+          "outbound-dialer-call-id": id,
+          "outbound-dialer-operation-id": op.id,
+          "outbound-dialer-external-uuid": String(op.request.externalUuid),
+          "event-uuid": randomUUID()
+        });
+        assert.equal((await resolveInboundFallback(op, f.pool))!.result.outcome, "failed");
+        await settle(f, op, "failed");
+        await reconcileCoordinatedCallCleanup(f.pool, id);
+        assert.equal(await advanceInboundFallback(f.pool, id, undefined, forwardConfig), null);
+        assert.equal(
+          (
+            await f.pool.query(
+              "select count(*)::int n from call_capacity_reservations where call_id=$1 and state<>'released'",
+              [id]
+            )
+          ).rows[0].n,
+          0
+        );
+      } finally {
+        await f.cleanup();
+      }
+    }
+  }
+);
+
+test(
+  "F04.1 DB: negative transfer result and unstarted cancellation safely take continuation",
+  options,
+  async () => {
+    const { settleUnstartedForwarding } = await import("./inbound-forwarding.js");
+    const { reconcileCoordinatedCallCleanup } = await import("./call-cleanup.js");
+    for (const attempted of [true, false]) {
+      const f = await fixture();
+      try {
+        const id = await forwardFlow(f),
+          op = (await advanceInboundFallback(f.pool, id, undefined, forwardConfig))!;
+        if (attempted) {
+          await f.pool.query(
+            "insert into call_execution_attempts(operation_id,owner_id,backend_pid,replica,seat) values($1,$2,pg_backend_pid(),0,0)",
+            [op.id, randomUUID()]
+          );
+          await f.pool.query("update call_operations set state='uncertain' where id=$1", [op.id]);
+          await persistInboundFallbackJob(f.pool, {
+            jobUuid: op.command_uuid,
+            body: "-ERR transfer refused",
+            headers: {}
+          });
+          let probes = 0;
+          const resolved = await resolveInboundFallback(op, f.pool, async () => {
+            probes++;
+            return true;
+          });
+          assert.equal(probes, 1);
+          assert.equal(resolved!.result.outcome, "failed");
+          await settle(f, op, "failed");
+        } else {
+          await settle(f, op, "canceled");
+          await settleUnstartedForwarding(f.pool, id);
+        }
+        await reconcileCoordinatedCallCleanup(f.pool, id);
+        assert.equal(
+          (
+            await f.pool.query(
+              "select count(*)::int n from call_capacity_reservations where operation_id=$1 and state<>'released'",
+              [op.id]
+            )
+          ).rows[0].n,
+          0
+        );
+        assert.equal(
+          (await advanceInboundFallback(f.pool, id, undefined, forwardConfig))!.command_kind,
+          "hangup"
+        );
+      } finally {
+        await f.cleanup();
+      }
+    }
+  }
+);

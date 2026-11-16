@@ -5,6 +5,16 @@ import { withCallAdmission, type CallAdmission } from "./call-admission.js";
 import { enqueueCallCommand, type DurableCommand, type CallExecutor } from "./call-executor.js";
 import { createCommandDriver, type BackgroundJobEvidence } from "./call-command-transport.js";
 import { requestFingerprint } from "./call-coordination-contracts.js";
+import type { AppConfig } from "./config.js";
+import { sendFreeSwitchApiCommand } from "./esl.js";
+import { CapacityError } from "./call-capacity.js";
+import { reconcileCoordinatedCallCleanup } from "./call-cleanup.js";
+import {
+  forwardingDestination,
+  inboundForwardingCommand,
+  settleUnstartedForwarding,
+  type ForwardingConfig
+} from "./inbound-forwarding.js";
 import { ingressUuid } from "./ingress-journal.js";
 
 /** SQL-only timer/restart entry point. Acceptance and fallback share admission locks.
@@ -12,7 +22,8 @@ import { ingressUuid } from "./ingress-journal.js";
 async function advanceOnce(
   pool: pg.Pool,
   callId: string,
-  checkpoint?: (a: CallAdmission) => Promise<void>
+  checkpoint?: (a: CallAdmission) => Promise<void>,
+  forwarding?: ForwardingConfig
 ): Promise<DurableCommand | null> {
   const db = await pool.connect();
   try {
@@ -87,8 +98,102 @@ async function advanceOnce(
       const expired = (
         await db.query("select $1::timestamptz<=clock_timestamp() as expired", [run.deadline_at])
       ).rows[0].expired;
-      const action = !expired && (!previous || previous.state === "succeeded") ? v?.actions[step] : null;
-      // F04 owns forwarding; stop safely and explicitly until its adapter exists.
+      const continueFlow =
+        !previous ||
+        (previous.command_kind === "forward_external"
+          ? previous.result?.outcome !== "connected"
+          : previous.state === "succeeded");
+      const action = !expired && continueFlow ? v?.actions[step] : null;
+      if (action?.type === "forward_external") {
+        const destination = forwardingDestination(action.target, forwarding);
+        if (destination) {
+          await db.query("savepoint forward_claim");
+          try {
+            const participant = (
+              await db.query(
+                "insert into call_participants(call_id,role,external_number,joined_at) values($1,'external',$2,clock_timestamp()) returning id",
+                [callId, action.target]
+              )
+            ).rows[0].id;
+            const externalUuid = randomUUID();
+            const leg = (
+              await db.query(
+                "insert into call_legs(call_id,participant_id,type,freeswitch_uuid,state,started_at) values($1,$2,'external',$3,'created',clock_timestamp()) returning id",
+                [callId, participant, externalUuid]
+              )
+            ).rows[0].id;
+            const deadline = (
+              await db.query(
+                "select least($1::timestamptz,clock_timestamp()+$2::int*interval '1 millisecond') as at",
+                [run.deadline_at, action.timeoutMs]
+              )
+            ).rows[0].at;
+            const request = {
+              inboundFallback: true,
+              step,
+              flowVersionId: run.flow_version_id,
+              action: "forward_external",
+              externalUuid,
+              participantId: participant,
+              legId: leg,
+              ...destination,
+              deadlineEpoch: String(Math.floor(new Date(deadline).getTime() / 1000)),
+              flowDeadlineEpoch: String(Math.floor(new Date(run.deadline_at).getTime() / 1000))
+            };
+            const { operation } = await enqueueCallCommand(a, {
+              id: randomUUID(),
+              callId,
+              scope: `inbound-fallback:${callId}`,
+              key: String(step),
+              fingerprint: requestFingerprint("POST", "internal/inbound-fallback", callId, request),
+              kind: "forward_external",
+              generation: "1",
+              commandUuid: randomUUID(),
+              targetUuid: callId,
+              request,
+              deadline
+            });
+            await a.capacity.claim({
+              kind: "forward",
+              callId,
+              operationId: operation.id,
+              generation: "1",
+              callLegId: leg
+            });
+            await checkpoint?.(a);
+            await db.query("release savepoint forward_claim");
+            return operation;
+          } catch (error) {
+            await db.query("rollback to savepoint forward_claim");
+            if (!(error instanceof CapacityError) || error.reason !== "capacity_exceeded") throw error;
+          }
+        }
+        // No sender or external participant was committed. Record a terminal step
+        // so the next tick takes the finite saved continuation, never another dial.
+        const { operation } = await enqueueCallCommand(a, {
+          id: randomUUID(),
+          callId,
+          scope: `inbound-fallback:${callId}`,
+          key: String(step),
+          fingerprint: requestFingerprint("POST", "internal/inbound-fallback", callId, { step }),
+          kind: "forward_external",
+          generation: "1",
+          commandUuid: randomUUID(),
+          targetUuid: callId,
+          request: { inboundFallback: true, step, flowVersionId: run.flow_version_id },
+          deadline: run.deadline_at
+        });
+        await db.query(
+          "update call_operations set state='failed',resolved_at=clock_timestamp(),result=$2,resolution_evidence='forwarding refused before sender' where id=$1",
+          [
+            operation.id,
+            { outcome: "failed", reason: destination ? "capacity_exceeded" : "forwarding_unconfigured" }
+          ]
+        );
+        await checkpoint?.(a);
+        return null;
+      }
+      // Playback continuation reuses the retained customer and original flow deadline.
       const play = action?.type === "play_audio";
       const asset = play
         ? v.audio_snapshot.find((x: { recordingId: string }) => x.recordingId === action.recordingId)
@@ -99,14 +204,13 @@ async function advanceOnce(
         flowVersionId: run.flow_version_id,
         action: play ? "play_audio" : "hangup",
         audio: asset?.runtimeFilePath ?? null,
-        reason:
-          action?.type === "forward_external"
-            ? "forwarding_unavailable"
-            : expired
-              ? "flow_deadline"
-              : previous && previous.state !== "succeeded"
-                ? "playback_failed"
-                : "flow_complete",
+        reason: expired
+          ? "flow_deadline"
+          : previous && previous.state !== "succeeded"
+            ? previous.command_kind === "forward_external"
+              ? "forward_failed"
+              : "playback_failed"
+            : "flow_complete",
         deadlineEpoch: String(Math.floor(new Date(run.deadline_at).getTime() / 1000))
       };
       const deadline = (
@@ -139,11 +243,12 @@ async function advanceOnce(
 export async function advanceInboundFallback(
   pool: pg.Pool,
   callId: string,
-  checkpoint?: (a: CallAdmission) => Promise<void>
+  checkpoint?: (a: CallAdmission) => Promise<void>,
+  forwarding?: ForwardingConfig
 ): Promise<DurableCommand | null> {
   for (let attempt = 0; ; attempt++) {
     try {
-      return await advanceOnce(pool, callId, checkpoint);
+      return await advanceOnce(pool, callId, checkpoint, forwarding);
     } catch (error) {
       if (attempt >= 2 || !(error instanceof Error) || error.message !== "discovery_changed") throw error;
     }
@@ -156,6 +261,7 @@ export function inboundFallbackCommand(op: DurableCommand) {
       ingressUuid.test(op.call_id) &&
       op.target_uuid === op.call_id
   );
+  if (op.command_kind === "forward_external") return inboundForwardingCommand(op);
   if (op.command_kind === "hangup") return `uuid_kill ${op.call_id} NORMAL_CLEARING`;
   const path = op.request.audio;
   assert.ok(typeof path === "string" && /^\/[A-Za-z0-9_./-]+$/.test(path) && !path.split("/").includes(".."));
@@ -193,7 +299,11 @@ export async function persistInboundFallbackEvent(pool: pg.Pool, h: Record<strin
   );
   return true;
 }
-export async function resolveInboundFallback(op: DurableCommand, db: pg.Pool | pg.PoolClient) {
+export async function resolveInboundFallback(
+  op: DurableCommand,
+  db: pg.Pool | pg.PoolClient,
+  absent?: (uuid: string) => Promise<boolean>
+) {
   const job = (
     await db.query(
       `select raw_json from call_events where call_id=$1 and event_type='inbound_fallback_job' and raw_json->>'jobUuid'=$2 limit 1`,
@@ -201,6 +311,42 @@ export async function resolveInboundFallback(op: DurableCommand, db: pg.Pool | p
     )
   ).rows[0]?.raw_json;
   if (!job) return null; // Even terminal channel evidence cannot fence a delayed sender.
+  if (op.command_kind === "forward_external") {
+    const finished = (
+      await db.query(
+        "select 1 from call_events where call_id=$1 and event_type='inbound_forward_finished' and raw_json->>'operationId'=$2",
+        [op.call_id, op.id]
+      )
+    ).rowCount;
+    // The transfer job finishes before Lua's bridge. Only the Lua return fences
+    // that asynchronous sender; customer termination alone is insufficient.
+    if (!finished && !String(job.body).trim().startsWith("-ERR")) return null;
+    const leg = (
+      await db.query(
+        "select l.*,p.connected_at from call_legs l join call_participants p on p.id=l.participant_id where l.id=$1",
+        [op.request.legId]
+      )
+    ).rows[0];
+    if (!leg) return null;
+    if (!leg.ended_at && absent && (await absent(String(op.request.externalUuid)))) {
+      // The fixed job and Lua completion above fence every producer before probing.
+      await db.query(
+        "update call_legs set state='ended',ended_at=clock_timestamp() where id=$1 and ended_at is null",
+        [leg.id]
+      );
+      await db.query(
+        "update call_participants set left_at=coalesce(left_at,clock_timestamp()),end_reason=coalesce(end_reason,'finished_forward_channel_absent') where id=$1",
+        [leg.participant_id]
+      );
+      leg.ended_at = new Date();
+    }
+    if (!leg.ended_at) return null;
+    return {
+      state: leg.connected_at ? ("succeeded" as const) : ("failed" as const),
+      result: { outcome: leg.connected_at ? "connected" : "failed" },
+      evidence: "fixed transfer job and finished native bridge; exact external cleanup"
+    };
+  }
   const events = (
     await db.query(`select event_type from call_events where call_id=$1 and raw_json->>'operationId'=$2`, [
       op.call_id,
@@ -230,12 +376,35 @@ export async function resolveInboundFallback(op: DurableCommand, db: pg.Pool | p
 export function inboundFallbackExecutor(
   pool: pg.Pool,
   executor: CallExecutor,
-  esl: { host: string; port: number; password: string }
+  esl: { host: string; port: number; password: string },
+  forwarding?: ForwardingConfig
 ) {
+  const absent = async (uuid: string) =>
+    (
+      await sendFreeSwitchApiCommand(
+        {
+          FREESWITCH_ESL_HOST: esl.host,
+          FREESWITCH_ESL_PORT: esl.port,
+          FREESWITCH_ESL_PASSWORD: esl.password
+        } as AppConfig,
+        `uuid_exists ${uuid}`,
+        1000
+      )
+    ).body.trim() === "false";
   const driver = createCommandDriver({
     ...esl,
     buildCommand: inboundFallbackCommand,
     async validate(op, a) {
+      if (
+        op.command_kind === "forward_external" &&
+        (
+          await a.client.query(
+            "select count(*)::int n from call_capacity_reservations where operation_id=$1 and call_leg_id::text=$2 and state<>'released'",
+            [op.id, op.request.legId]
+          )
+        ).rows[0].n !== 3
+      )
+        return false;
       return Boolean(
         (
           await a.client.query(
@@ -247,17 +416,33 @@ export function inboundFallbackExecutor(
     },
     async verify(op, job, _signal, db) {
       await persistInboundFallbackJob(db, job);
-      return resolveInboundFallback(op, db);
+      return resolveInboundFallback(op, db, absent);
     },
     async reconcile(op, _signal, db) {
-      return resolveInboundFallback(op, db);
+      return resolveInboundFallback(op, db, absent);
     }
   });
   return {
     async tick(callId: string) {
-      const op = await advanceInboundFallback(pool, callId);
-      if (op) return executor.run(op.id, op.command_kind === "hangup" ? "critical" : "normal", driver);
-      return null;
+      for (let attempt = 0; ; attempt++) {
+        try {
+          await settleUnstartedForwarding(pool, callId);
+          await reconcileCoordinatedCallCleanup(pool, callId);
+          const op = await advanceInboundFallback(pool, callId, undefined, forwarding);
+          if (op) {
+            const result = await executor.run(
+              op.id,
+              op.command_kind === "hangup" ? "critical" : "normal",
+              driver
+            );
+            await reconcileCoordinatedCallCleanup(pool, callId);
+            return result;
+          }
+          return null;
+        } catch (error) {
+          if (attempt >= 2 || !(error instanceof Error) || error.message !== "discovery_changed") throw error;
+        }
+      }
     },
     async reconcile() {
       const rows = await pool.query(`select c.id from calls c where c.direction='inbound' and

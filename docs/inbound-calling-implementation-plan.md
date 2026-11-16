@@ -594,7 +594,8 @@ and protects current, published/pre-import and executing media references.
 [F01 administration APIs](inbound-admin-configuration.md) save validated number/queue
 configuration and immutable finite flows with revision/replay/audit protection.
 [F03 playback execution](inbound-fallback.md) uses durable step identities and native
-playback evidence; F04 owns forwarding. Saved configuration is not
+playback evidence; [F04 forwarding](inbound-forwarding.md) adds reserved native
+bridging and bounded failure continuation. Saved configuration is not
 provider delivery or activation.
 
 Support a bounded finite action sequence:

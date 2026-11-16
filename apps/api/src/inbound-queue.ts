@@ -296,6 +296,17 @@ export async function persistInboundQueueEvent(
               [leg.id, at]
             );
         }
+        if (event === "CHANNEL_BRIDGE" && call.fallback_started_at) {
+          await db.query(
+            `update call_participants p set connected_at=coalesce(connected_at,greatest(joined_at,$4))
+            from call_legs l,call_operations o where p.id=l.participant_id and p.call_id=$1 and p.role='external'
+            and o.call_id=p.call_id and o.command_kind='forward_external' and o.request->>'legId'=l.id::text
+            and exists(select 1 from call_execution_attempts where operation_id=o.id)
+            and (($2::text=$1::text and l.freeswitch_uuid=$3) or ($3::text=$1::text and l.freeswitch_uuid=$2))
+            and p.left_at is null and l.ended_at is null`,
+            [callId, uuid, headers["other-leg-unique-id"] ?? null, at]
+          );
+        }
         if (event === "CHANNEL_BRIDGE" && call.state === "connecting") {
           const peer = headers["other-leg-unique-id"];
           const winner = (
@@ -349,27 +360,37 @@ export async function persistInboundQueueEvent(
                 )
               ).rows[0]
             : null;
-          const reason = fallbackHangup
-            ? `no_answer_${fallbackHangup.reason}`
-            : call.fallback_started_at
-              ? headers["hangup-cause"] === "ALLOTTED_TIMEOUT"
-                ? "no_answer_deadline"
-                : "caller_hung_up_during_fallback"
-              : headers["hangup-cause"] === "ALLOTTED_TIMEOUT" && !call.agent_connected_at
-                ? "queue_timeout"
-                : event === "INGRESS_ABSENT"
-                  ? "channel_absent_on_recovery"
-                  : call.agent_connected_at
-                    ? "customer_hung_up"
-                    : admitted
-                      ? canceled
-                        ? "caller_canceled_in_queue"
-                        : "caller_abandoned_queue"
-                      : canceled
-                        ? "caller_canceled_before_admission"
-                        : "caller_hung_up_before_admission";
+          const external = (
+            await db.query(
+              "select connected_at,left_at from call_participants where call_id=$1 and role='external' order by created_at limit 1",
+              [callId]
+            )
+          ).rows[0];
+          const reason = external?.connected_at
+            ? "external_forward_completed"
+            : external && !external.left_at
+              ? "caller_hung_up_during_forwarding"
+              : fallbackHangup
+                ? `no_answer_${fallbackHangup.reason}`
+                : call.fallback_started_at
+                  ? headers["hangup-cause"] === "ALLOTTED_TIMEOUT"
+                    ? "no_answer_deadline"
+                    : "caller_hung_up_during_fallback"
+                  : headers["hangup-cause"] === "ALLOTTED_TIMEOUT" && !call.agent_connected_at
+                    ? "queue_timeout"
+                    : event === "INGRESS_ABSENT"
+                      ? "channel_absent_on_recovery"
+                      : call.agent_connected_at
+                        ? "customer_hung_up"
+                        : admitted
+                          ? canceled
+                            ? "caller_canceled_in_queue"
+                            : "caller_abandoned_queue"
+                          : canceled
+                            ? "caller_canceled_before_admission"
+                            : "caller_hung_up_before_admission";
           await db.query(
-            "update calls set state=$2,outcome=case when $4='queue_timeout' or $4 like 'no_answer_%' then 'not_answered' else 'customer_hung_up' end,ended_at=greatest(arrived_at,$3),queue_exited_at=coalesce(queue_exited_at,greatest(arrived_at,$3)),inbound_end_reason=$4,terminal_event_name=$5,terminal_source='inbound_customer',updated_at=clock_timestamp() where id=$1",
+            "update calls set state=$2,outcome=case when $4='external_forward_completed' then 'answered' when $4='queue_timeout' or $4 like 'no_answer_%' then 'not_answered' else 'customer_hung_up' end,ended_at=greatest(arrived_at,$3),queue_exited_at=coalesce(queue_exited_at,greatest(arrived_at,$3)),inbound_end_reason=$4,terminal_event_name=$5,terminal_source='inbound_customer',updated_at=clock_timestamp() where id=$1",
             [callId, canceled ? "canceled" : "completed", at, reason, event]
           );
         }

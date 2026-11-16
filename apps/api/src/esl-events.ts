@@ -1,3 +1,4 @@
+import { persistInboundForwardingEvent } from "./inbound-forwarding.js";
 import { persistInboundFallbackJob, persistInboundFallbackEvent } from "./inbound-fallback.js";
 import { persistInboundQueueEvent, persistInboundQueueJob } from "./inbound-queue.js";
 import { persistInboundConnectionJob } from "./inbound-connection.js";
@@ -71,6 +72,7 @@ const EVENT_NAMES = [
   "sofia::unregister",
   "sofia::expire",
   "outbound_dialer::inbound_waiting_started",
+  "outbound_dialer::inbound_forward_finished",
   "outbound_dialer::inbound_fallback_started",
   "outbound_dialer::inbound_fallback_completed",
   "outbound_dialer::inbound_fallback_failed",
@@ -367,6 +369,7 @@ async function persistFreeSwitchEvent(
       })))
   )
     return;
+  if (await persistInboundForwardingEvent(pool, frame.headers)) return;
   if (await persistInboundFallbackEvent(pool, frame.headers)) return;
   if (await persistInboundQueueEvent(pool, frame.headers, frame.body)) return;
   if (isInitialIngressEvent(frame.headers)) return;

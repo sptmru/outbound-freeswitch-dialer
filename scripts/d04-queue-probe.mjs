@@ -1,3 +1,4 @@
+import { runForwarding } from "./f04-forwarding-probe.mjs";
 import { runFallback } from "./f03-fallback-probe.mjs";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -120,7 +121,8 @@ async function startCall(caller = "+14155550199") {
   const result = invite({
     port: 5090,
     caller,
-    timeoutMs: process.env.F03_FALLBACK === "1" ? 45000 : 17000,
+    timeoutMs: process.env.F03_FALLBACK === "1" || process.env.F04_FORWARDING === "1" ? 45000 : 17000,
+    frequency: process.env.F04_FORWARDING === "1" ? 440 : undefined,
     control: (c) => (control = c)
   });
   result.catch(() => {});
@@ -194,6 +196,22 @@ try {
       }
     }
   };
+  if (process.env.F04_FORWARDING === "1")
+    await runForwarding({
+      f,
+      queue,
+      directory,
+      config,
+      startCall,
+      recover,
+      call,
+      clean,
+      checked,
+      pass,
+      executor: limited.executor,
+      esl,
+      command
+    });
   if (process.env.F03_FALLBACK === "1")
     await runFallback({
       f,

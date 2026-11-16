@@ -3,7 +3,7 @@
 Task: [F03 #31](https://github.com/sptmru/outbound-freeswitch-dialer/issues/31).
 Implementation is staged behind an explicitly supplied C03 executor. I05 owns
 worker scheduling/bootstrap and enablement; this module starts no daemon and
-changes no feature flag. F04 owns external forwarding.
+changes no feature flag. [F04](inbound-forwarding.md) adds reserved external forwarding.
 
 ## Admission and saved intent
 
@@ -23,9 +23,11 @@ or compatibility marker is changed.
 The SQL-only producer commits one fixed C03 operation per step before wake-up.
 Unique call/step keys survive repeated timers and worker restart. Only a resolved,
 successful step can advance to the next playback. Missing configuration, failed
-playback, expired flow or unsupported forwarding selects a fixed terminal hangup.
-A `forward_external` action currently records `forwarding_unavailable` and ends;
-F04 must supply its reserved-capacity continuation adapter before forwarding enablement.
+playback or expired flow selects a fixed terminal hangup.
+A `forward_external` action uses the explicit F04 trunk policy and reserved external
+leg. Its failure takes the next saved action; a connected conversation does not
+enter failure playback. Missing policy or exhausted capacity records a never-sent
+failure and takes that same bounded continuation.
 
 ## Native execution and evidence
 
