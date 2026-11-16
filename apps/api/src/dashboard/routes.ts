@@ -1690,6 +1690,7 @@ export function registerDashboardRoutes(
 
     const extension = getSupportedRecordingExtension(file.filename);
     if (!extension) {
+      file.file.resume();
       return reply.code(400).send({ message: "Recording must be a WAV or MP3 file" });
     }
 
@@ -1697,7 +1698,7 @@ export function registerDashboardRoutes(
     const campaignIdResult = z.guid().safeParse(getMultipartFieldValue(file.fields.campaignId));
     if (!campaignIdResult.success) {
       file.file.resume();
-      return reply.code(400).send({ message: "Choose a campaign before uploading voicemail" });
+      return reply.code(400).send({ message: "Choose a campaign before uploading audio" });
     }
     const campaignId = campaignIdResult.data;
     const useForCampaign = parseBooleanField(getMultipartFieldValue(file.fields.useForCampaign));
@@ -1709,6 +1710,9 @@ export function registerDashboardRoutes(
 
     try {
       await pipeline(file.file, createWriteStream(sourcePath, { flags: "wx", mode: 0o600 }));
+      if (file.file.truncated) {
+        return reply.code(413).send({ message: "Recording file is too large" });
+      }
       const uploaded = await stat(sourcePath);
       if (!uploaded.isFile() || uploaded.size === 0) {
         return reply.code(400).send({ message: "Recording file is empty" });
@@ -1835,7 +1839,9 @@ export function registerDashboardRoutes(
         .send({ message: "Replace or disable this campaign's voicemail before deleting the recording" });
     }
     if (deleted.status === "in_use") {
-      return reply.code(409).send({ message: "Recording is assigned to an active call or voicemail job" });
+      return reply.code(409).send({
+        message: "Recording is referenced by inbound configuration, retained snapshots or active call work"
+      });
     }
 
     try {

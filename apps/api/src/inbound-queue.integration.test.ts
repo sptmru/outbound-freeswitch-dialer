@@ -454,6 +454,15 @@ test(
         /deadline is immutable/
       );
       await f.end(row.uuid);
+      // F02 also pins captured ingress until its terminal journal sequence is
+      // imported. Native call terminal state alone must not orphan that capture.
+      assert.equal((await deleteRecording(f.pool, id)).status, "in_use");
+      await importIngressRecord(f.pool, {
+        ...row,
+        sequence: 2,
+        terminalUs: Date.now() * 1000,
+        terminalReason: "channel_absent_on_recovery"
+      });
       assert.equal((await deleteRecording(f.pool, id)).status, "deleted");
     } finally {
       await f.cleanup();

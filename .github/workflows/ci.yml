@@ -35,6 +35,10 @@ jobs:
           node-version: 22.13.0
           cache: npm
       - run: npm ci
+      - name: Install shared audio decoder fixtures
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
       - name: Required inbound DB harness (no skips)
         run: npm run test:inbound:db
       - run: npm run quality

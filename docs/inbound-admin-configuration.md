@@ -5,7 +5,7 @@ Base: `62413ee98622798450fa55972c6c2fe278de91b0`; local branch
 `feat/f01-inbound-configuration`.
 
 F01 mounts the B05 configuration contracts. It saves administrative configuration;
-playback/forwarding execution remains F03/F04, audio storage/preview remains F02,
+playback/forwarding execution remains F03/F04, [audio storage/preview](inbound-audio-library.md) is supplied by F02,
 and the administrator UI remains F05. Provider acceptance and activation remain
 I04/I05. Saving or enabling a DID does not establish provider ownership or delivery.
 `FREESWITCH_INBOUND_CONFIG_ENABLED=false` remains the default; no new environment

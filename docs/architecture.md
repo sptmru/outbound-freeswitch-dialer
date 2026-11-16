@@ -188,7 +188,9 @@ The event record is the source of lifecycle evidence. A local completion event s
 2. The API writes a temporary source, runs ffprobe, rejects invalid/no-audio/over-five-minute input, and invokes ffmpeg.
 3. Output is normalized to mono, 8,000 Hz, `pcm_s16le` WAV with `loudnorm=I=-16:TP=-1.5:LRA=11`.
 4. Only a non-empty, successfully probed canonical file is persisted and activated in PostgreSQL.
-5. Exactly one global recording may be default; deleting/deactivating the default promotes another active recording when present.
+5. Assets belong to a campaign. Outbound uses `campaigns.voicemail_recording_id`;
+   inbound queue/flow assignments remain independent. Global default mutation returns 410. [F02 audio reference protection](inbound-audio-library.md) retains immutable
+   flow/published ingress snapshots and live/uncertain call assets before deletion.
 
 ### Browser playback
 

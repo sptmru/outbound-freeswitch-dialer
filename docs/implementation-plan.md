@@ -46,7 +46,9 @@ browser consumer, manual/automatic intent separation and isolated U/B fixtures.
 verified staged media contract.
 [F01 inbound administration](inbound-admin-configuration.md) adds admin-only number,
 queue and immutable-flow CRUD, bounded validation, replay/audit and desired/applied/error
-state. F02–F05 runtime/media/UI and I05 activation remain separate.
+state. [F02 inbound audio](inbound-audio-library.md) reuses upload/preview and protects
+retained/active media references through replacement/deletion races. F03–F05
+runtime/UI and I05 activation remain separate.
 
 ## Completed Repository Work
 

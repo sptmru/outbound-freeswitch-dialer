@@ -434,8 +434,8 @@ add(
 add(
   "GET",
   "/admin/recordings",
-  "List voicemail recordings",
-  "Returns assigned-to-campaign voicemail assets; excludes legacy unassigned recordings.",
+  "List campaign audio recordings",
+  "Returns campaign-owned audio for outbound voicemail and inbound waiting/no-answer assignments; excludes legacy unassigned recordings. isAssigned describes only outbound voicemail.",
   {
     querystring: {
       ...libraryQuery,
@@ -911,8 +911,8 @@ const recordingUpload = object(
 add(
   "POST",
   "/admin/recordings",
-  "Upload voicemail recording",
-  "Uploads and converts a WAV or MP3 file into the canonical voicemail format.",
+  "Upload campaign audio recording",
+  "Normalizes WAV/MP3 audio to mono 8 kHz PCM WAV for voicemail or inbound use. Send campaignId and useForCampaign before the file part. Leave useForCampaign false for inbound-only audio; assign it using inbound queue/flow APIs.",
   {
     body: recordingUpload,
     consumes: ["multipart/form-data"],
@@ -961,7 +961,7 @@ add(
   "DELETE",
   "/admin/recordings/:recordingId",
   "Delete voicemail recording",
-  "Deletes an unused voicemail recording and its file.",
+  "Deletes unreferenced campaign audio and its file. Returns 409 for outbound assignments, inbound queues, immutable flow/published route snapshots, or active/uncertain call work. Disable/replacement does not release retained snapshots.",
   {
     params: recordingParams,
     success: ref("DeleteResponse"),

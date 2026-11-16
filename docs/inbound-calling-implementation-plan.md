@@ -588,6 +588,9 @@ and resources return to baseline after rejected work and reconciliation.
 
 ## 7. No-Answer Flows and Audio
 
+[F02 audio library](inbound-audio-library.md) reuses campaign-owned upload/preview
+and protects current, published/pre-import and executing media references.
+
 [F01 administration APIs](inbound-admin-configuration.md) save validated number/queue
 configuration and immutable finite flows with revision/replay/audit protection.
 Playback and forwarding execution remain F03/F04; saved configuration is not

@@ -19,6 +19,7 @@ import { withCallAdmission } from "../apps/api/dist-test/call-admission.js";
 import { enqueueCallCommand } from "../apps/api/dist-test/call-executor.js";
 import { createCommandDriver } from "../apps/api/dist-test/call-command-transport.js";
 import { reconcileCoordinatedCallCleanup } from "../apps/api/dist-test/call-cleanup.js";
+import { runInboundAudioReplacement } from "./f02-audio-probe.mjs";
 const directory = process.argv[2];
 assert.match(directory ?? "", /^\/tmp\/outbound-d04\.[A-Za-z0-9]+$/);
 const socket = join(directory, "agent.sock");
@@ -187,6 +188,20 @@ try {
       }
     }
   };
+  if (process.env.F02_AUDIO === "1")
+    await runInboundAudioReplacement({
+      f,
+      queue,
+      directory,
+      config,
+      startCall,
+      recover,
+      call,
+      clean,
+      command,
+      checked,
+      pass
+    });
   const contact = (
     await f.pool.query(
       "insert into contacts(campaign_id,display_name,phone_number,normalized_phone_number,status,attempt_count) values($1,'D04 known','+14155550199','+14155550199','new',2) returning *",

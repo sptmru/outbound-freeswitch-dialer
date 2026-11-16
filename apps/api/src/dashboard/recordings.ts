@@ -42,7 +42,8 @@ export async function transcodeRecordingToCanonicalWav(
 
   try {
     await execFileAsync(ffmpegPath, buildCanonicalTranscodeArgs(inputPath, outputPath), {
-      maxBuffer: 2_000_000
+      maxBuffer: 2_000_000,
+      timeout: 60_000
     });
   } catch (error) {
     throw mapProcessorError(error, "Could not decode and transcode this audio file");
@@ -65,6 +66,8 @@ export function buildCanonicalTranscodeArgs(inputPath: string, outputPath: strin
     "error",
     "-nostdin",
     "-y",
+    "-protocol_whitelist",
+    "file,pipe",
     "-i",
     inputPath,
     "-map",
@@ -83,7 +86,10 @@ export function buildCanonicalTranscodeArgs(inputPath: string, outputPath: strin
 }
 
 export function parseProbeOutput(value: string): { durationSeconds: number; hasAudio: boolean } {
-  let parsed: { format?: { duration?: string | number }; streams?: Array<{ codec_type?: string }> };
+  let parsed: {
+    format?: { duration?: string | number; format_name?: string };
+    streams?: Array<{ codec_type?: string }>;
+  };
   try {
     parsed = JSON.parse(value) as typeof parsed;
   } catch {
@@ -91,6 +97,9 @@ export function parseProbeOutput(value: string): { durationSeconds: number; hasA
   }
   const durationSeconds = Number(parsed.format?.duration ?? 0);
   const hasAudio = parsed.streams?.some((stream) => stream.codec_type === "audio") ?? false;
+  if (parsed.format?.format_name && !["wav", "mp3"].includes(parsed.format.format_name)) {
+    throw new RecordingProcessingError("Recording must contain WAV or MP3 audio", "invalid_audio");
+  }
   if (!hasAudio || !Number.isFinite(durationSeconds) || durationSeconds <= 0) {
     throw new RecordingProcessingError("File does not contain a supported audio stream", "invalid_audio");
   }
@@ -141,8 +150,18 @@ export async function probeRecording(
   try {
     const result = await execFileAsync(
       ffprobePath,
-      ["-v", "error", "-show_entries", "format=duration:stream=codec_type", "-of", "json", inputPath],
-      { maxBuffer: 1_000_000 }
+      [
+        "-v",
+        "error",
+        "-protocol_whitelist",
+        "file,pipe",
+        "-show_entries",
+        "format=duration,format_name:stream=codec_type",
+        "-of",
+        "json",
+        inputPath
+      ],
+      { maxBuffer: 1_000_000, timeout: 15_000 }
     );
     return parseProbeOutput(result.stdout);
   } catch (error) {
@@ -353,6 +372,9 @@ export async function deleteRecording(pool: pg.Pool, recordingId: string): Promi
   const client = await pool.connect();
   try {
     await client.query("begin");
+    // Configuration/publisher lock precedes admission and campaign audio locks.
+    // Never take it from a call-admission participant (reverse ordering).
+    await client.query("select pg_advisory_xact_lock(72204,0)");
     const owner = await client.query<{ campaign_id: string }>(
       "select campaign_id from recordings where id = $1 and campaign_id is not null and is_active = true",
       [recordingId]
@@ -379,13 +401,19 @@ export async function deleteRecording(pool: pg.Pool, recordingId: string): Promi
       return { status: "assigned" };
     }
     const activeReference = await client.query(
-      `select 1 from calls where recording_id = $1 and ended_at is null
-       and state not in ('completed', 'failed', 'canceled') limit 1`,
+      `select 1 from calls c where recording_id = $1 and
+       ((ended_at is null and state not in ('completed', 'failed', 'canceled')) or exists(
+         select 1 from call_operations o where o.call_id=c.id and o.resolved_at is null)) limit 1`,
       [recordingId]
     );
     const inboundReference = await client.query(
       `select 1 from inbound_flow_versions where first_audio_id = $1 or second_audio_id = $1
        union all select 1 from inbound_queues where waiting_audio_id = $1
+       union all select 1 from inbound_ingress_route_snapshots where waiting_audio_id = $1
+       union all select 1 from inbound_ingress_evidence e left join calls c on c.id=e.call_id
+         where e.route_snapshot #>> '{configuration,waiting_audio_id}'=$1::text
+           and (e.terminal_at is null or c.ended_at is null or exists(
+             select 1 from call_operations o where o.call_id=c.id and o.resolved_at is null))
        union all select 1 from inbound_queue_admissions a join calls c on c.id=a.call_id
          where a.waiting_audio_id=$1 and (c.ended_at is null or exists(
            select 1 from call_operations o where o.call_id=c.id and o.resolved_at is null)) limit 1`,
