@@ -827,7 +827,12 @@ test(
       drop trigger notify_agent_auto_next_intents_updated on agent_auto_next_intents;
       delete from schema_migrations where filename='037_inbound_offer_dispatch.sql'`);
       const before = (await f.pool.query("select * from call_offers order by id")).rows;
-      const previous = (await f.pool.query("select * from schema_migrations order by filename")).rows;
+      // Compare the predecessor checksum prefix; later additive migrations may already exist.
+      const previous = (
+        await f.pool.query(
+          "select * from schema_migrations where filename<'037_inbound_offer_dispatch.sql' order by filename"
+        )
+      ).rows;
       const settings = (await f.pool.query("select * from system_settings order by key")).rows;
       await runMigrations(f.pool);
       assert.deepEqual((await f.pool.query("select * from call_offers order by id")).rows, before);

@@ -839,7 +839,18 @@ test(
         "schema_migrations"
       ];
       const before = Object.fromEntries(
-        await Promise.all(tables.map(async (t) => [t, (await f.pool.query(`select * from ${t}`)).rows]))
+        await Promise.all(
+          tables.map(async (t) => [
+            t,
+            (
+              await f.pool.query(
+                t === "schema_migrations"
+                  ? "select * from schema_migrations where filename<'038_inbound_acceptance.sql'"
+                  : `select * from ${t}`
+              )
+            ).rows
+          ])
+        )
       );
       await runMigrations(f.pool);
       for (const t of tables)

@@ -97,6 +97,37 @@ function add(
   });
 }
 
+// F01 mounts the former B05 administrative contracts.
+for (const [collection, singular, save, list] of [
+  ["inbound-numbers", "InboundNumberSnapshot", "SaveInboundNumberRequest", "InboundNumbersResponse"],
+  ["inbound-queues", "InboundQueueSnapshot", "SaveInboundQueueRequest", "InboundQueuesResponse"],
+  ["inbound-flows", "InboundFlowSnapshot", "SaveInboundFlowRequest", "InboundFlowsResponse"]
+]) {
+  const description =
+    "Administrator-only versioned configuration. Save does not apply FreeSWITCH routing or enable provider delivery. Mutations require a body idempotencyKey and expectedRevision (null on create); PATCH replaces the full configuration. Linear flow failure continues to the next saved action; exhaustion hangs up. Referenced flows must be unassigned before disable/delete. Queue campaigns are immutable; number deletion requires disabling first. Flow deletion retains historical versions.";
+  add("GET", `/admin/${collection}`, "List inbound configuration", description, {
+    success: ref(list),
+    errors: [401, 403, 500]
+  });
+  add("POST", `/admin/${collection}`, "Create inbound configuration", description, {
+    body: ref(save),
+    success: ref(singular),
+    errors: [400, 401, 403, 409, 500]
+  });
+  add("PATCH", `/admin/${collection}/:id`, "Replace inbound configuration", description, {
+    params: params("id", "Configuration identifier"),
+    body: ref(save),
+    success: ref(singular),
+    errors: [400, 401, 403, 404, 409, 500]
+  });
+  add("DELETE", `/admin/${collection}/:id`, "Delete unreferenced inbound configuration", description, {
+    params: params("id", "Configuration identifier"),
+    body: ref("InboundAdminMutation"),
+    success: ref("DeleteResponse"),
+    errors: [400, 401, 403, 404, 409, 500]
+  });
+}
+
 const adminErrors = [400, 401, 403, 500];
 const agentErrors = [400, 401, 403, 500];
 const callParams = params("callId", "Call identifier");

@@ -82,6 +82,7 @@ import { ExecutionError } from "../call-executor.js";
 import { CapacityError } from "../call-capacity.js";
 import { admitNativeCallControl, CallControlError } from "../native-call-control.js";
 import { requireUser } from "../auth/routes.js";
+import { registerInboundAdminRoutes } from "./inbound-admin.js";
 import { registerDeskSessionRoutes } from "./desk-sessions.js";
 import { registerServiceInviteRoutes } from "./service-invites.js";
 import { registerCallOfferRoutes } from "./call-offers.js";
@@ -442,6 +443,7 @@ export function registerDashboardRoutes(
   nativeSupervisor?: { wakeExecutor(operationId: string): Promise<void> },
   inboundConnection?: { wakeExecutor(operationId: string): Promise<void> }
 ): void {
+  registerInboundAdminRoutes(app, config, pool);
   registerDeskSessionRoutes(app, config, pool);
   registerServiceInviteRoutes(app, config, pool);
   registerCallOfferRoutes(app, config, pool, inboundConnection);

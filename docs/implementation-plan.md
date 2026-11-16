@@ -42,8 +42,11 @@ claims, verified native originate/bridge, bounded cleanup and original-deadline
 retries behind an explicit executor dependency.
 [E03 Agent Desk offers](inbound-agent-desk-offers.md) supplies the staged native
 browser consumer, manual/automatic intent separation and isolated U/B fixtures.
-E04 service-INVITE/media integration and
-I05 activation remain separate.
+[E04 service-INVITE/media authorization](inbound-service-invites.md) supplies the
+verified staged media contract.
+[F01 inbound administration](inbound-admin-configuration.md) adds admin-only number,
+queue and immutable-flow CRUD, bounded validation, replay/audit and desired/applied/error
+state. F02–F05 runtime/media/UI and I05 activation remain separate.
 
 ## Completed Repository Work
 

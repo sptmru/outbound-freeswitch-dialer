@@ -241,6 +241,8 @@ export interface SaveInboundQueueRequest extends InboundAdminMutation {
   configuration: InboundQueueConfiguration;
 }
 export interface SaveInboundFlowRequest extends InboundAdminMutation {
+  /** Defaults to true. Disable requires removal of queue references first. */
+  enabled?: boolean;
   campaignId: string;
   name: string;
   definition: InboundFlowDefinition;
@@ -271,6 +273,7 @@ export interface InboundQueueSnapshot {
   apply: InboundAppliedState;
 }
 export interface InboundFlowSnapshot {
+  enabled: boolean;
   campaignId: string;
   id: string;
   revision: string;

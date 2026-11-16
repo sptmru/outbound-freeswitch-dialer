@@ -603,6 +603,10 @@
     "properties": {
       "idempotencyKey": { "type": "string" },
       "expectedRevision": { "anyOf": [{ "$ref": "DeskRevision#" }, { "type": "null" }] },
+      "enabled": {
+        "type": "boolean",
+        "description": "Defaults to true. Disable requires removal of queue references first."
+      },
       "campaignId": { "type": "string" },
       "name": { "type": "string" },
       "definition": { "$ref": "InboundFlowDefinition#" }
@@ -666,6 +670,7 @@
     "$id": "InboundFlowSnapshot",
     "type": "object",
     "properties": {
+      "enabled": { "type": "boolean" },
       "campaignId": { "type": "string" },
       "id": { "type": "string" },
       "revision": { "type": "string" },
@@ -673,7 +678,7 @@
       "versionId": { "type": "string" },
       "definition": { "$ref": "InboundFlowDefinition#" }
     },
-    "required": ["campaignId", "id", "revision", "name", "versionId", "definition"],
+    "required": ["enabled", "campaignId", "id", "revision", "name", "versionId", "definition"],
     "additionalProperties": false
   },
   "InboundNumbersResponse": {

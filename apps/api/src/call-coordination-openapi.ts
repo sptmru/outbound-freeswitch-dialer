@@ -31,24 +31,6 @@ export const plannedCallCoordinationOperations: ContractOperation[] = [
     role: "authenticated"
   }
 ];
-for (const [collection, singular, save, list] of [
-  ["inbound-numbers", "InboundNumberSnapshot", "SaveInboundNumberRequest", "InboundNumbersResponse"],
-  ["inbound-queues", "InboundQueueSnapshot", "SaveInboundQueueRequest", "InboundQueuesResponse"],
-  ["inbound-flows", "InboundFlowSnapshot", "SaveInboundFlowRequest", "InboundFlowsResponse"]
-]) {
-  plannedCallCoordinationOperations.push(
-    { method: "get", path: `/admin/${collection}`, response: list, role: "admin" },
-    { method: "post", path: `/admin/${collection}`, request: save, response: singular, role: "admin" },
-    { method: "patch", path: `/admin/${collection}/{id}`, request: save, response: singular, role: "admin" },
-    {
-      method: "delete",
-      path: `/admin/${collection}/{id}`,
-      request: "InboundAdminMutation",
-      response: "DeleteResponse",
-      role: "admin"
-    }
-  );
-}
 
 export function plannedCallCoordinationCatalog() {
   const paths: Record<string, Record<string, unknown>> = {};

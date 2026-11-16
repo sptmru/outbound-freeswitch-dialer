@@ -285,7 +285,9 @@ test(
         "drop table service_invite_dialogs; drop function preserve_service_invite_dialog(); delete from schema_migrations where filename='039_service_invite_authorization.sql'"
       );
       const before = await f.snapshot(),
-        history = (await f.pool.query("select * from schema_migrations order by filename")).rows;
+        history = (
+          await f.pool.query("select * from schema_migrations where filename<'039' order by filename")
+        ).rows;
       await runMigrations(f.pool);
       assert.deepEqual(await f.snapshot(), before);
       assert.deepEqual(

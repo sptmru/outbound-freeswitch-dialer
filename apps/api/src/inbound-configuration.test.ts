@@ -82,3 +82,19 @@ test("B01.1–B01.2 bounded flows retain normalized targets, action order and du
     inboundFlowVersionSchema.safeParse({ actions: [audio(), forward()], flowTimeoutMs: 50000 }).success
   );
 });
+
+test("F01.1–F01.2 flow validation keeps finite failure continuations and rejects dial/graph injection", () => {
+  for (const actions of [[audio(), { type: "hangup" }], [forward()], [audio(), forward(), audio()]])
+    assert.ok(inboundFlowVersionSchema.safeParse({ actions }).success);
+  for (const actions of [
+    [{ ...forward(), target: undefined }],
+    [{ ...audio(), recordingId: undefined }],
+    [{ ...forward(), retry: true }],
+    [{ type: "forward_external", target: "+14155550100", timeoutMs: 20000, onFailure: recordingId }],
+    [{ type: "flow", flowId: recordingId }],
+    [{ type: "hangup", target: "+14155550100" }]
+  ])
+    assert.equal(inboundFlowVersionSchema.safeParse({ actions }).success, false);
+  const saved = inboundFlowVersionSchema.parse({ actions: [forward()] });
+  assert.equal(saved.actions[0].type === "forward_external" && saved.actions[0].target, "+14155550100");
+});

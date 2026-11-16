@@ -588,6 +588,11 @@ and resources return to baseline after rejected work and reconciliation.
 
 ## 7. No-Answer Flows and Audio
 
+[F01 administration APIs](inbound-admin-configuration.md) save validated number/queue
+configuration and immutable finite flows with revision/replay/audit protection.
+Playback and forwarding execution remain F03/F04; saved configuration is not
+provider delivery or activation.
+
 Support a bounded finite action sequence:
 
 | Action             | Parameters                                                    |

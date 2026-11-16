@@ -109,6 +109,7 @@ export const saveInboundQueueSchema = z
   .strict() satisfies z.ZodType<SaveInboundQueueRequest>;
 export const saveInboundFlowSchema = z
   .object({
+    enabled: z.boolean().default(true),
     ...adminMutationFields,
     campaignId: uuid,
     name: z.string().trim().min(1).max(160),

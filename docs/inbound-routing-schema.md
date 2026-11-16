@@ -149,3 +149,12 @@ not listen on `127.0.0.1` (`EPERM`). The successful full run used permission for
 fixture sockets. Initial compilation also exposed a missing TypeScript declaration
 for the existing fixture's `databaseConfig`; the declaration is included in this
 change. No SIP/provider code was altered to resolve either verification issue.
+
+## F01 administration extension
+
+[Migration 040 and the F01 APIs](inbound-admin-configuration.md) implement the
+configuration validation/revision obligations listed above, including owned-DID
+loop prevention in either edit order. They add flow enabled/tombstone state and
+transactional actor-scoped replay/audit receipts. Saved versions and captured
+active-call configuration remain immutable. D02 owns actual application;
+F02–F04 own storage/playback/forwarding and I04/I05 provider/activation gates.

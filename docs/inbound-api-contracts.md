@@ -273,3 +273,14 @@ credentials, WSS URL and ICE configuration. Mutation results persist no credenti
 See [D01 lifecycle, replay, verification and activation boundaries](inbound-desk-sessions.md).
 The normal Desk response/native executor bootstrap remains staged under I05;
 this update does not enable inbound calling.
+
+## F01 administrative implementation
+
+The twelve configuration operations for `/admin/inbound-numbers`,
+`/admin/inbound-queues` and `/admin/inbound-flows` are now mounted and documented
+in live OpenAPI. See [F01](inbound-admin-configuration.md) for full replacement,
+revision/idempotency, finite continuation, active reference, delete/disable, audit
+and application-state semantics. `SaveInboundFlowRequest.enabled` is optional
+(default true); returned flow snapshots include `enabled`. Only transfer operations
+remain in the contract-only catalog. Provider delivery and I05 activation are
+separate; configuration saves do not execute media.
