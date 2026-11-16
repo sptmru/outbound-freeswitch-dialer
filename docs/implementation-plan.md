@@ -31,6 +31,9 @@ not installed in `server.ts`; this is not product inbound/transfer enablement.
 [C05 durable auto-next](inbound-auto-next.md) adds automatic source/revision
 validation, queue priority and persistent replay/cancellation at that same staged
 DB/API boundary.
+[D04 durable inbound queue admission](inbound-queue-admission.md) adds the staged
+queue/capacity/waiting and customer lifecycle service. Its coordinator requires an
+explicit C03 dependency; default server bootstrap and I05 enablement remain separate.
 
 ## Completed Repository Work
 

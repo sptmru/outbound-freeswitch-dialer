@@ -478,6 +478,10 @@ it does not automatically create another transfer offer.
 
 ## 6. Inbound Path and States
 
+[D04 staged queue admission](inbound-queue-admission.md) supplies atomic queue/media
+claims, fixed waiting operations and concrete inbound lifecycle classification.
+Its coordinator requires an explicitly injected C03 executor; I05 owns activation.
+
 A02 has an opt-in [isolated ingress prototype and evidence report](inbound-ingress-prototype.md).
 It exercises a loopback trust/DID gate, correlation-header rejection, bounded refusal,
 and answered waiting audio on the pinned FreeSWITCH base image. Provider trust, DID

@@ -80,6 +80,13 @@ export class IngressJournal {
       CREATE TABLE IF NOT EXISTS metadata(id TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS evidence(uuid TEXT PRIMARY KEY, sequence INTEGER NOT NULL,
         ack INTEGER NOT NULL DEFAULT 0, record TEXT NOT NULL);`);
+    if (
+      !this.db
+        .prepare("PRAGMA table_info(evidence)")
+        .all()
+        .some((r) => r.name === "admission")
+    )
+      this.db.exec("ALTER TABLE evidence ADD COLUMN admission TEXT");
     if (!this.db.prepare("SELECT id FROM metadata").get())
       this.db.prepare("INSERT INTO metadata VALUES (?)").run(randomUUID());
     this.id = String(this.db.prepare("SELECT id FROM metadata").get()!.id);
@@ -156,6 +163,21 @@ export class IngressJournal {
       }
       return row;
     });
+  }
+  admit(uuid: string, operationId: string) {
+    assert.match(operationId, ingressUuid);
+    this.transaction(() => {
+      const r = this.db.prepare("SELECT record,admission FROM evidence WHERE uuid=?").get(uuid);
+      assert.ok(r && JSON.parse(String(r.record)).terminalUs === null, "Live capture required");
+      assert.ok(r.admission === null || r.admission === operationId, "Admission identity changed");
+      this.db.prepare("UPDATE evidence SET admission=? WHERE uuid=?").run(operationId, uuid);
+    });
+  }
+  admission(uuid: string) {
+    const row = this.db.prepare("SELECT record,admission FROM evidence WHERE uuid=?").get(uuid);
+    return row && JSON.parse(String(row.record)).terminalUs === null && row.admission
+      ? `admitted:${row.admission}`
+      : "pending";
   }
   acknowledge(uuid: string, sequence: number) {
     assert.ok(Number.isSafeInteger(sequence) && sequence > 0);

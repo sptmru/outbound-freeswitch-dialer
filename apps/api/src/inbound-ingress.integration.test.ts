@@ -120,7 +120,7 @@ test(
         assert.equal((await f.pool.query(`select count(*)::int as n from ${table}`)).rows[0].n, 0);
       await assert.rejects(
         f.pool.query("update calls set state='received',ended_at=null where id=$1", [f.row.uuid]),
-        /Terminal ingress/
+        /Terminal (ingress|inbound)/
       );
     } finally {
       await f.cleanup();
@@ -180,7 +180,11 @@ test(
       drop function guard_ingress_snapshot();
       alter table inbound_ingress_evidence drop column route_snapshot,drop column calling_number;
       delete from schema_migrations where filename='035_durable_ingress.sql'`);
-      const history = (await f.pool.query("select * from schema_migrations order by filename")).rows;
+      const history = (
+        await f.pool.query(
+          "select * from schema_migrations where filename<'035_durable_ingress.sql' order by filename"
+        )
+      ).rows;
       await f.pool.query(
         `insert into inbound_ingress_evidence(ingress_id,journal_id,arrived_at,validated_did,route_revision,queue_deadline_at,evidence_sequence)
       values($1,'pre-035',now(),'+12025550100',1,now()+interval '1 minute',1)`,

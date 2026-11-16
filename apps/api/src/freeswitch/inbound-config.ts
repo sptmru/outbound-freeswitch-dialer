@@ -93,14 +93,27 @@ export async function renderInboundConfiguration(routes: InboundRoute[], policy:
       throw new Error("Invalid or duplicate inbound route");
     dids.add(route.normalized_did);
   }
-  const [bundle, routeTemplate, ingressScript] = await Promise.all([
+  const [bundle, routeTemplate, ingressScript, waitingScript, waitingPlan] = await Promise.all([
     readFile(new URL("public.xml.tpl", templateRoot), "utf8"),
     readFile(new URL("route.xml.tpl", templateRoot), "utf8"),
-    readFile(new URL("outbound-ingress.lua", templateRoot), "utf8")
+    readFile(new URL("outbound-ingress.lua", templateRoot), "utf8"),
+    readFile(new URL("outbound-wait.lua", templateRoot), "utf8"),
+    readFile(new URL("../dialplan/inbound-wait.xml.tpl", templateRoot), "utf8")
   ]);
   // Hash includes templates and policy: a binary/policy change is a new desired revision.
   const hash = createHash("sha256")
-    .update(JSON.stringify({ ordered, policy, cidrs, bundle, routeTemplate, ingressScript }))
+    .update(
+      JSON.stringify({
+        ordered,
+        policy,
+        cidrs,
+        bundle,
+        routeTemplate,
+        ingressScript,
+        waitingScript,
+        waitingPlan
+      })
+    )
     .digest("hex");
   const action = (app: string, data: string) => `    <action application="${app}" data="${data}"/>`;
   const renderedRoutes = ordered

@@ -7,6 +7,9 @@ product still returns `503 Admission unavailable` before answer/audio. D04 owns
 queue/capacity admission, its acknowledgement, waiting audio and lifecycle
 classification. I01–I05 retain integrated/browser/provider/load/enablement gates.
 A durable capture receipt is storage evidence, never media authorization.
+[D04](inbound-queue-admission.md) now provides the staged queue coordinator and
+post-commit receipt/waiting continuation. It requires an explicitly injected C03
+executor; the default capture/import bootstrap still does not activate admission.
 
 ## Capture and acknowledgement protocol
 
@@ -44,7 +47,7 @@ Discovery cannot manufacture an old missing receipt outside its capture window.
 Terminal records are processed first. A live snapshot never revives terminal
 history. Initial tagged ingress events return before generic handlers that assume
 a persisted product call; the periodic importer handles their durable evidence.
-D04 must extend this initial-ingress adapter for its admitted lifecycle.
+The staged D04 adapter extends this boundary for admitted lifecycle events.
 
 `importIngressRecord` makes one `calls.id = ingress UUID` and one B04
 `inbound_ingress_evidence` row. It uses admission advisory lock `(72202,0)`, then
@@ -100,7 +103,7 @@ must survive API, daemon and FS restarts. Do not delete it to clear an alarm.
 Use `.env.example`, Compose and `scripts/deploy.sh`; no alternate deployment path
 is introduced. Node 22.13+ is required for flag-free `node:sqlite`; the existing
 Node 22 API image supplies it. This work changes sources only and does not deploy
-or enable anything. D04 must coordinate queue commit/admission ACK and concrete
+or enable anything. The staged D04 coordinator supplies queue commit/admission ACK and concrete
 terminal cleanup under common admission/C03 before advancing `received` calls;
 the D03 importer fails closed for an admitted state it does not own.
 

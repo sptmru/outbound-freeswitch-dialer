@@ -21,12 +21,16 @@ function outbound_ingress_ended(s)
   end
 end
 session:setHangupHook("outbound_ingress_ended")
--- D04 must add the bounded DB admission/ack continuation here. Until then the
--- generated dialplan refuses. Native pre-admission/trunk guards remain held.
--- Bounded pre-admission waiting only, without SIP answer or media. D04 owns
--- replacing "pending" with a receipt tied to its committed queue/capacity claim.
+-- A committed admission receipt only allows parking until its fixed C03 transfer.
+-- It never answers or starts media. The original native three-second guard stays
+-- armed until the verified waiting continuation replaces it with queue deadline.
 for attempt = 1, 10 do
   if not session:ready() then return end
-  if post("admission") ~= "pending" then return end
+  local admitted = post("admission")
+  if string.match(admitted, "^admitted:[0-9a-f%-]+$") then
+    session:execute("park")
+    return
+  end
+  if admitted ~= "pending" then return end
   session:sleep(100)
 end

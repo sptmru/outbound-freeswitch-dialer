@@ -48,9 +48,10 @@ export async function startIngressAgent(
             journal.capture(captureFromDump(uuid, await command(`uuid_dump ${uuid}`)));
             res.end(`stored:${uuid}`);
           } else if (!control && req.url === "/admission") {
-            // D04 installs the durable queue-commit acknowledgement; capture alone
-            // deliberately cannot produce an admitted response.
-            res.end("pending");
+            res.end(journal.admission(uuid));
+          } else if (control && req.url === "/admit") {
+            journal.admit(uuid, p.get("operationId") ?? "");
+            res.end("admitted");
           } else if (req.url === "/terminal") {
             assert.equal((await command(`uuid_exists ${uuid}`)).trim(), "false", "Absence not confirmed");
             const row = journal.terminal(uuid);

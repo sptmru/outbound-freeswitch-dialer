@@ -189,7 +189,8 @@ D02 adds an opt-in configuration publisher and physical ingress guards; it does 
 ### Durable ingress (D03)
 
 `FREESWITCH_INGRESS_ENABLED=false` keeps FS-local capture/import off. Setting it
-true does not admit, answer or enqueue calls: D04 and I05 remain required.
+true alone does not admit, answer or enqueue calls. The [D04 coordinator](inbound-queue-admission.md)
+requires an explicitly supplied native C03 executor; I05 owns bootstrap/activation.
 `FREESWITCH_INGRESS_SOCKET` defaults to
 `/var/lib/outbound-dialer/ingress/agent.sock`; API and the independent journal must
 share this mounted private socket. `FREESWITCH_INGRESS_JOURNAL_SLOTS` defaults to

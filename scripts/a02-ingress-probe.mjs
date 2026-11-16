@@ -113,6 +113,7 @@ export async function invite({
   source = "127.0.0.2",
   did = "+12025550100",
   forged = false,
+  caller = "+12025550199",
   codec = "PCMU",
   timeoutMs = 5000,
   allowNoFinal = false,
@@ -135,7 +136,7 @@ export async function invite({
     const address = `${source}:${sip.address().port}`;
     const uri = `sip:${did}@127.0.0.1:${port}`;
     const branch = `z9hG4bK${randomUUID()}`;
-    const from = `<sip:+12025550199@a02.invalid>;tag=a02`;
+    const from = `<sip:${caller}@a02.invalid>;tag=a02`;
     const to = `<${uri}>`;
     const payloadType = codec === "PCMA" ? 8 : 0;
     const sdp = [
@@ -168,6 +169,8 @@ export async function invite({
     }
     let final;
     let bye = false;
+    let dialogTarget = uri,
+      dialogTo = to;
     sip.on("message", (raw, peer) => {
       const parsed = parseHeaders(raw.toString());
       messages.push({
@@ -180,8 +183,13 @@ export async function invite({
       if (parsed.first.startsWith("SIP/2.0") && parsed.headers.cseq === "1 INVITE" && status >= 200) {
         final = status;
         const target = status < 300 ? (parsed.headers.contact?.match(/<([^>]+)>/)?.[1] ?? uri) : uri;
+        if (status < 300) {
+          dialogTarget = target;
+          dialogTo = parsed.headers.to;
+        }
         send("ACK", target, 1, parsed.headers.to, [], "", status < 300 ? `z9hG4bK${randomUUID()}` : branch);
       }
+      if (status === 200 && parsed.headers.cseq === "2 BYE") bye = true;
       if (parsed.first.startsWith("BYE ")) {
         bye = true;
         const response = [
@@ -217,7 +225,10 @@ export async function invite({
       ],
       sdp
     );
-    control?.({ cancel: () => send("CANCEL", uri, 1, to) });
+    control?.({
+      cancel: () => send("CANCEL", uri, 1, to),
+      hangup: () => send("BYE", dialogTarget, 2, dialogTo, [], "", `z9hG4bK${randomUUID()}`)
+    });
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline && !(final >= 300 || (final === 200 && bye))) await delay(10);
     assert.ok(final || allowNoFinal, "INVITE had no final response within deadline");

@@ -221,6 +221,8 @@ render "$TEMPLATE_DIR/dialplan/agent-ingress/reject.xml.tpl" "$CONFIG_DIR/dialpl
 render "$TEMPLATE_DIR/dialplan/public/reject.xml.tpl" "$CONFIG_DIR/dialplan/public/reject.xml"
 mkdir -p "$CONFIG_DIR/scripts"
 cp "$TEMPLATE_DIR/inbound/outbound-ingress.lua" "$CONFIG_DIR/scripts/outbound-ingress.lua"
+cp "$TEMPLATE_DIR/inbound/outbound-wait.lua" "$CONFIG_DIR/scripts/outbound-wait.lua"
+render "$TEMPLATE_DIR/dialplan/inbound-wait.xml.tpl" "$CONFIG_DIR/dialplan/inbound-wait.xml"
 render "$TEMPLATE_DIR/dialplan/agent-ingress.xml.tpl" "$CONFIG_DIR/dialplan/agent-ingress.xml"
 render "$TEMPLATE_DIR/dialplan/public.xml.tpl" "$CONFIG_DIR/dialplan/public.xml"
 # Startup restores only the previously verified bundle, never an interrupted

@@ -1,3 +1,4 @@
+import { persistInboundQueueEvent, persistInboundQueueJob } from "./inbound-queue.js";
 import { isInitialIngressEvent } from "./inbound-ingress.js";
 import { lockEligibilityAgents, withEligibilityTransaction } from "./eligibility.js";
 import { persistSupervisorJob, persistCoordinatedSupervisorEvent } from "./supervisor-coordination.js";
@@ -67,6 +68,7 @@ const EVENT_NAMES = [
   "sofia::register",
   "sofia::unregister",
   "sofia::expire",
+  "outbound_dialer::inbound_waiting_started",
   "outbound_dialer::voicemail_playback_started",
   "outbound_dialer::voicemail_playback_completed",
   "outbound_dialer::voicemail_playback_failed"
@@ -341,6 +343,16 @@ async function persistFreeSwitchEvent(
   frame: EslFrame,
   logger?: Pick<Logger, "info">
 ): Promise<void> {
+  if (
+    frame.headers["event-name"] === "BACKGROUND_JOB" &&
+    (await persistInboundQueueJob(pool, {
+      jobUuid: frame.headers["job-uuid"] ?? "",
+      body: frame.body,
+      headers: frame.headers
+    }))
+  )
+    return;
+  if (await persistInboundQueueEvent(pool, frame.headers, frame.body)) return;
   if (isInitialIngressEvent(frame.headers)) return;
   const eventName = frame.headers["event-name"];
   if (

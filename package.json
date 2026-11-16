@@ -38,7 +38,8 @@
     "test:desk:freeswitch": "bash scripts/test-d01-desk.sh",
     "test:desk:browser": "bash scripts/test-d01-desk.sh --browser",
     "test:config:freeswitch": "bash scripts/test-d02-config.sh",
-    "test:ingress:freeswitch": "bash scripts/test-d03-ingress.sh"
+    "test:ingress:freeswitch": "bash scripts/test-d03-ingress.sh",
+    "test:queue:freeswitch": "bash scripts/test-d04-queue.sh"
   },
   "engines": {
     "node": ">=22.13.0"

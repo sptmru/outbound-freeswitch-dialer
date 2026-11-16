@@ -91,7 +91,10 @@ async function fixture(upgrade = false) {
     const before = (await pool.query("select * from calls where id=$1", [call])).rows[0];
     if (upgrade) await runMigrations(pool);
     await runMigrations(pool);
-    assert.deepEqual((await pool.query("select * from calls where id=$1", [call])).rows[0], before);
+    const after = (await pool.query("select * from calls where id=$1", [call])).rows[0];
+    for (const [key, value] of Object.entries(before)) assert.deepEqual(after[key], value, key);
+    assert.equal(after.inbound_context_contact_id, null);
+    assert.equal(after.inbound_end_reason, null);
     return { pool, cleanup, agentIds, sessions, campaign, call, participant };
   } catch (error) {
     await cleanup();

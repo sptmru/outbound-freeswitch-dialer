@@ -385,7 +385,10 @@ export async function deleteRecording(pool: pg.Pool, recordingId: string): Promi
     );
     const inboundReference = await client.query(
       `select 1 from inbound_flow_versions where first_audio_id = $1 or second_audio_id = $1
-       union all select 1 from inbound_queues where waiting_audio_id = $1 limit 1`,
+       union all select 1 from inbound_queues where waiting_audio_id = $1
+       union all select 1 from inbound_queue_admissions a join calls c on c.id=a.call_id
+         where a.waiting_audio_id=$1 and (c.ended_at is null or exists(
+           select 1 from call_operations o where o.call_id=c.id and o.resolved_at is null)) limit 1`,
       [recordingId]
     );
     if (activeReference.rowCount || inboundReference.rowCount) {

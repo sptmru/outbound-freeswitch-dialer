@@ -306,3 +306,8 @@ DB budgets in both commit orders plus rollback. The queue/requeue, lower-limit,
 released-VM, uncertain-command and full-token cleanup cases retain reports
 `c02-*-report.json`. Command sends are simulated and verified after SQL commit;
 no real ESL, browser media, FS safeguards or provider acceptance is implied.
+
+D04 adds `npm run test:queue:freeswitch` for real isolated queue admission, waiting
+SIP/RTP, CANCEL/overflow and later bridge evidence. See [scope, fixtures and proof
+boundaries](../inbound-queue-admission.md). The E02 winner is explicitly seeded;
+this does not prove a browser acceptance workflow or provider enablement.

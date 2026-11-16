@@ -121,6 +121,12 @@ test("D03 U: Unix control socket is private; network capture cannot ACK and unkn
       body: new URLSearchParams({ uuid: row.uuid, sequence: "1" })
     });
     assert.equal(denied.status, 404);
+    const deniedAdmission = await fetch(`http://127.0.0.1:${agent.capturePort}/admit`, {
+      method: "POST",
+      body: new URLSearchParams({ uuid: row.uuid, operationId: randomUUID() })
+    });
+    assert.equal(deniedAdmission.status, 404);
+    assert.equal(agent.journal.admission(row.uuid), "pending");
     assert.equal(agent.journal.status().unacknowledged, 1);
     await assert.rejects(ingressRequest(socket, "/terminal", { uuid: row.uuid }), /unavailable/);
     assert.equal(agent.journal.records()[0].terminalUs, null);
@@ -138,9 +144,10 @@ test("D03 U: initial tagged ingress precedes all generic call lookup/event handl
   const id = randomUUID();
   let queries = 0;
   const pool = {
-    query: async () => {
+    query: async (sql: string) => {
       queries++;
-      throw new Error("Generic handler must not run");
+      assert.equal(sql, "select 1 from inbound_ingress_evidence where call_id=$1");
+      return { rowCount: 0, rows: [] };
     }
   } as unknown as pg.Pool;
   for (const event of ["CHANNEL_CREATE", "CHANNEL_ANSWER", "CHANNEL_HANGUP_COMPLETE", "CHANNEL_BRIDGE"]) {
@@ -154,7 +161,7 @@ test("D03 U: initial tagged ingress precedes all generic call lookup/event handl
       }
     });
   }
-  assert.equal(queries, 0);
+  assert.equal(queries, 4);
 });
 
 test("D03.3 U: actual SQLITE_FULL rolls back capture without inventing a receipt", async () => {
@@ -167,6 +174,30 @@ test("D03.3 U: actual SQLITE_FULL rolls back capture without inventing a receipt
     row.routeData = Buffer.from(JSON.stringify({ padding: "x".repeat(2800) })).toString("base64url");
     assert.throws(() => journal.capture(row), /full/);
     assert.equal(journal.records().length, 0);
+  } finally {
+    journal.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("D04 U: admission receipt survives restart, stays immutable and needs private control authority", async () => {
+  const dir = await mkdtemp("/tmp/d04-receipt-");
+  const path = join(dir, "db");
+  const row = capture();
+  const op = randomUUID();
+  let journal = new IngressJournal(path);
+  try {
+    journal.capture(row);
+    assert.equal(journal.admission(row.uuid), "pending");
+    journal.admit(row.uuid, op);
+    journal.admit(row.uuid, op);
+    assert.throws(() => journal.admit(row.uuid, randomUUID()), /identity changed/);
+    journal.close();
+    journal = new IngressJournal(path);
+    assert.equal(journal.admission(row.uuid), `admitted:${op}`);
+    journal.terminal(row.uuid);
+    assert.equal(journal.admission(row.uuid), "pending");
+    assert.throws(() => journal.admit(row.uuid, op), /Live capture/);
   } finally {
     journal.close();
     await rm(dir, { recursive: true, force: true });

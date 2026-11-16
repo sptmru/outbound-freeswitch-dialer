@@ -965,7 +965,14 @@ test(
       assert.equal(upgraded.binding_generation, null);
       const response = await db.api(req);
       assert.equal(response.statusCode, 409, response.body);
-      noDialChanges(before, await db.snapshot());
+      const after = await db.snapshot();
+      for (const row of after.calls) {
+        assert.equal(row.inbound_context_contact_id, null);
+        assert.equal(row.inbound_end_reason, null);
+        delete row.inbound_context_contact_id;
+        delete row.inbound_end_reason;
+      }
+      noDialChanges(before, after);
       const canceled = (await db.pool.query("select * from agent_auto_next_intents where id=$1", [old.id]))
         .rows[0];
       assert.equal(canceled.state, "canceled");

@@ -93,10 +93,13 @@ export async function importIngressRecord(
     ).rows[0];
     assert.equal(call.direction, "inbound");
     assert.ok(
-      call.state === "received" || call.ended_at,
+      call.state === "received" ||
+        call.ended_at ||
+        (await client.query("select 1 from inbound_queue_admissions where call_id=$1", [row.uuid])).rowCount,
       "D04 admitted lifecycle requires its own terminal coordinator"
     );
     if (terminal && !call.ended_at) {
+      assert.equal(call.state, "received", "Admitted ingress requires D04 terminal coordination");
       await client.query(
         `update calls set state='failed',outcome='failed',ended_at=${timestamp(2)},updated_at=clock_timestamp() where id=$1`,
         [row.uuid, row.terminalUs]
@@ -122,7 +125,8 @@ export async function reconcileIngress(
   pool: pg.Pool,
   socket: string,
   command: IngressCommand,
-  checkpoint?: (point: "before-insert" | "after-commit") => Promise<void>
+  checkpoint?: (point: "before-insert" | "after-commit") => Promise<void>,
+  queue?: { beforeImport(row: IngressRecord): Promise<void>; afterImport(row: IngressRecord): Promise<void> }
 ) {
   setIngressStatus(JSON.parse(await ingressRequest(socket, "/status")));
   // Begin with the independent journal, including entries with no calls row.
@@ -155,7 +159,9 @@ export async function reconcileIngress(
           );
       }
     }
+    await queue?.beforeImport(row);
     await importIngressRecord(pool, row, checkpoint);
+    await queue?.afterImport(row);
     // A delayed live ACK cannot acknowledge a newer terminal sequence (journal CAS).
     await ingressRequest(socket, "/ack", { uuid: row.uuid, sequence: String(row.sequence) });
     await pool.query(
