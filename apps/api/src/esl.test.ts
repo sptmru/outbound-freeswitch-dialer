@@ -3,6 +3,7 @@ import net from "node:net";
 import { describe, it, type TestContext } from "node:test";
 import type { AppConfig } from "./config.js";
 import { __testing, sendFreeSwitchApiCommand } from "./esl.js";
+import type { DurableCommand } from "./call-executor.js";
 
 async function eslFixture(t: TestContext, onCommand: (socket: net.Socket) => void): Promise<AppConfig> {
   const sockets = new Set<net.Socket>();
@@ -280,4 +281,53 @@ describe("ESL helpers", () => {
       raw: "Content-Type: api/response\nContent-Length: 5\n\n+OK\n!"
     });
   });
+});
+
+it("E04.3 native outbound constructor replaces AOR lookup with the exact controlling contact and correlation", () => {
+  const endpoint =
+    "sofia/internal-webrtc/sip:desk_11111111111141118111111111111111@127.0.0.1:7443;transport=ws";
+  const operation = {
+    id: "44444444-4444-4444-8444-444444444444",
+    call_id: "22222222-2222-4222-8222-222222222222",
+    command_kind: "originate",
+    target_uuid: "11111111-1111-4111-8111-111111111111",
+    request: {
+      endpoint,
+      sipUsername: "desk_11111111111141118111111111111111",
+      customerUuid: "33333333-3333-4333-8333-333333333333",
+      destinationNumber: "+14155550100",
+      intent: { deskSessionId: "55555555-5555-4555-8555-555555555555", bindingGeneration: "2" }
+    }
+  } as unknown as DurableCommand;
+  const config = {
+    FREESWITCH_DOMAIN: "fixture.invalid",
+    SIP_TRUNK_MODE: "registration",
+    SIP_TRUNK_PROXY: "fixture.invalid",
+    SIP_TRUNK_USERNAME: "fixture-only",
+    SIP_TRUNK_CALLER_ID: "15551112222",
+    FREESWITCH_WEBRTC_REWRITE_TIMESTAMPS: true,
+    FREESWITCH_TRUNK_JITTER_BUFFER_MSEC: "off"
+  } as unknown as AppConfig;
+  const input = {
+    callId: operation.call_id,
+    agentLegUuid: operation.target_uuid!,
+    customerLegUuid: String(operation.request.customerUuid),
+    destinationNumber: "+14155550100",
+    sipUsername: "legacy-agent",
+    serviceOperation: operation
+  };
+  const command = __testing.buildAgentBridgeOriginateCommand(config, input);
+  assert.ok(command.includes(`}${endpoint} &bridge(`));
+  assert.ok(!command.includes("user/"));
+  assert.ok(command.includes(`Operation-ID=${operation.id}`));
+  assert.ok(command.includes("rtp_rewrite_timestamps=true"));
+  assert.ok(command.includes("bridge_early_media=true"));
+  assert.ok(command.includes("origination_caller_id_number=15551112222"));
+  assert.ok(command.includes("sofia/gateway/sip-trunk/14155550100"));
+  assert.throws(() =>
+    __testing.buildAgentBridgeOriginateCommand(config, {
+      ...input,
+      callId: "66666666-6666-4666-8666-666666666666"
+    })
+  );
 });

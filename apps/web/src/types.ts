@@ -84,3 +84,4 @@ export type {
   InboundQueuesResponse,
   InboundFlowsResponse
 } from "@outbound-dialer/shared";
+export type { ServiceInviteRequest, ServiceInviteResponse } from "@outbound-dialer/shared";

@@ -4,6 +4,11 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 IMAGE="safarov/freeswitch@sha256:b31c743f4c911a19687c61e3214968f2a24f93f9d3d667cc26284192e158ffc6"
 PG_IMAGE="postgres@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73"
+storage_args=()
+if [[ "${E04_SERVICE_INVITES:-}" == "1" ]]; then
+  # Disposable correctness reference; does not establish target disk durability.
+  storage_args=(--tmpfs /var/lib/postgresql/data:rw,size=128m,mode=0700)
+fi
 RUN_DIR="$(mktemp -d /tmp/outbound-d01.XXXXXXXX)"
 FS_CONTAINER="outbound-d01-fs-$(basename "$RUN_DIR")"
 PG_CONTAINER="outbound-d01-pg-$(basename "$RUN_DIR")"
@@ -35,16 +40,18 @@ cd "$ROOT_DIR"
 npm --workspace @outbound-dialer/shared run build
 node node_modules/typescript/bin/tsc -p apps/api/tsconfig.test.json
 "$NODE_BIN" "$PROBE" render "$RUN_DIR"
-sha256sum "$ROOT_DIR"/scripts/d01-*.mjs "$ROOT_DIR"/scripts/a0{4,5}-*.mjs "$0" \
+sha256sum "$ROOT_DIR"/apps/api/src/service-invite*.ts "$ROOT_DIR"/apps/api/src/dashboard/service-invites.ts "$ROOT_DIR"/tests/fixtures/inbound/service-invite.* \
+  "$ROOT_DIR"/scripts/d01-*.mjs "$ROOT_DIR"/scripts/a0{4,5}-*.mjs "$0" \
   "$ROOT_DIR"/apps/api/src/desk-sessions*.ts "$ROOT_DIR"/apps/api/src/dashboard/desk-sessions.ts \
-  "$ROOT_DIR"/apps/api/src/freeswitch/provisioning.ts "$ROOT_DIR"/apps/api/src/call-admission.ts \
+  "$ROOT_DIR"/apps/api/src/esl.ts "$ROOT_DIR"/apps/api/src/freeswitch/provisioning.ts "$ROOT_DIR"/apps/api/src/call-admission.ts \
   "$ROOT_DIR"/apps/api/src/eligibility.ts "$ROOT_DIR"/packages/shared/src/*.ts \
-  "$ROOT_DIR"/apps/web/src/{softphone,desk-session,api,browser-media,audio-setup,sip-dialog-recovery}.ts \
+  "$ROOT_DIR"/apps/web/src/{softphone,desk-session,api,service-invites,browser-media,audio-setup,sip-dialog-recovery}.ts \
   "$ROOT_DIR"/scripts/fixtures/d01-browser/* \
   "$ROOT_DIR"/apps/api/db/migrations/*.sql "$ROOT_DIR"/tests/fixtures/inbound/cleanup.mjs > "$RUN_DIR/source-sha256.txt"
 docker run -d --name "$NET_CONTAINER" --network none --memory 32m --pids-limit 8 \
   --cap-drop ALL --entrypoint sleep "$IMAGE" 3600 > "$RUN_DIR/net-id.txt"
 docker run -d --name "$PG_CONTAINER" --network "container:$NET_CONTAINER" --memory 256m --pids-limit 128 \
+  "${storage_args[@]}" \
   --mount "type=bind,src=$RUN_DIR/socket,dst=/db-socket" \
   -e POSTGRES_HOST_AUTH_METHOD=trust -e POSTGRES_DB=d01 "$PG_IMAGE" \
   -c unix_socket_directories=/var/run/postgresql,/db-socket -c listen_addresses= > "$RUN_DIR/pg-id.txt"

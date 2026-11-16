@@ -658,6 +658,8 @@ as a completed dependency; this link does not enable product transfers.
 
 ## 9. API and UI
 
+[E04 service INVITE authorization](inbound-service-invites.md) defines the staged native media contract and its U/DB/browser/FS verification boundary. It does not install I05 bootstrap or enable provider traffic.
+
 B05 selects the [v1 shared API/transition contract](inbound-api-contracts.md).
 Its future operations are cataloged separately from live OpenAPI paths.
 [C04 manual admission](inbound-manual-outbound.md) supplies atomic native starts

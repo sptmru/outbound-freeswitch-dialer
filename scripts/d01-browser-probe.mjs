@@ -21,10 +21,15 @@ import { cleanupFixture } from "../tests/fixtures/inbound/cleanup.mjs";
 import { DeskSessions } from "../apps/api/dist-test/desk-sessions.js";
 import { registerDeskSessionRoutes } from "../apps/api/dist-test/dashboard/desk-sessions.js";
 import { signAuthToken } from "../apps/api/dist-test/auth/tokens.js";
+import { decryptSecret } from "../apps/api/dist-test/auth/crypto.js";
 import { provisionAgentDirectory } from "../apps/api/dist-test/freeswitch/provisioning.js";
 import { withCallAdmission } from "../apps/api/dist-test/call-admission.js";
 import { reserveAgentCallSlot } from "../apps/api/dist-test/agent-call-slots.js";
 import { enqueueCallCommand } from "../apps/api/dist-test/call-executor.js";
+import { registerServiceInviteRoutes } from "../apps/api/dist-test/dashboard/service-invites.js";
+import { serviceOperation } from "../tests/fixtures/inbound/service-invite.mjs";
+import { serviceInviteCommand } from "../apps/api/dist-test/service-invite-command.js";
+const serviceMatrix = process.env.E04_SERVICE_INVITES === "1";
 
 const [mode, directory] = process.argv.slice(2);
 assert.match(directory ?? "", /^\/tmp\/outbound-d01\.[A-Za-z0-9]+$/);
@@ -90,6 +95,7 @@ if (mode === "render") {
   await writeFile(join(directory, "microphone.wav"), wav);
   await build({
     configFile: false,
+    envDir: false,
     root: new URL("./fixtures/d01-browser", import.meta.url).pathname,
     plugins: [react()],
     build: { target: "esnext", outDir: join(directory, "web"), emptyOutDir: true }
@@ -355,9 +361,15 @@ try {
   const service = new DeskSessions(f.pool, config);
   app = Fastify();
   await app.register(cookie);
-  await app.register(async (scoped) => registerDeskSessionRoutes(scoped, config, f.pool, service), {
-    prefix: "/api"
-  });
+  await app.register(
+    async (scoped) => {
+      registerDeskSessionRoutes(scoped, config, f.pool, service);
+      registerServiceInviteRoutes(scoped, config, f.pool);
+    },
+    {
+      prefix: "/api"
+    }
+  );
   app.get("/fixture/bootstrap", async () => ({
     user: { id: user.id, email: user.email, name: user.name, role: "agent", isActive: true },
     campaignId: f.campaignId,
@@ -406,6 +418,20 @@ try {
   for (const direction of process.env.D01_BROWSER_SMOKE === "1"
     ? ["inbound"]
     : ["inbound", "outbound", "transfer"]) {
+    let oldContext, oldPage, oldSnapshot, oldSip, oldClient;
+    if (serviceMatrix) {
+      oldContext = await browser.newContext({ ignoreHTTPSErrors: true, permissions: ["microphone"] });
+      await oldContext.addCookies([{ name: "outbound_dialer_session", value: token, url: address }]);
+      oldPage = await oldContext.newPage();
+      await oldPage.goto(address);
+      await oldPage.waitForFunction(() => window.d01?.deskSession?.ready && window.d01.registered, null, {
+        timeout: 20000
+      });
+      oldSnapshot = await oldPage.evaluate(() => window.d01.deskSession);
+      oldSip = (await f.pool.query("select * from agent_desk_sessions where id=$1", [oldSnapshot.id]))
+        .rows[0];
+      await oldPage.route("**/api/agent/desk-sessions/*", (route) => route.abort());
+    }
     const context = await browser.newContext({ ignoreHTTPSErrors: true, permissions: ["microphone"] });
     await context.addCookies([{ name: "outbound_dialer_session", value: token, url: address }]);
     await context.addInitScript(() => {
@@ -420,7 +446,6 @@ try {
       };
     });
     const page = await context.newPage();
-    const traceStart = report.signaling.length;
     page.on("websocket", (ws) => {
       for (const [event, direction] of [
         ["framesent", "sent"],
@@ -447,37 +472,215 @@ try {
       throw error;
     }
     const initial = await page.evaluate(() => window.d01.deskSession);
+    if (serviceMatrix) {
+      // Fault injection: retain a revoked generation's directory as if obsolete
+      // cleanup were delayed. Both distinct endpoint identities really REGISTER.
+      const secret = decryptSecret(config, oldSip.sip_secret_encrypted);
+      await provisionAgentDirectory(config, {
+        sipUsername: oldSip.sip_username,
+        sipPassword: secret,
+        displayName: "Obsolete Desk fixture"
+      });
+      await command("reloadxml");
+      oldClient = await endpoint({
+        username: oldSip.sip_username,
+        password: secret,
+        source: "127.0.0.7",
+        frequency: 660
+      });
+      await oldClient.register();
+      assert.match(
+        await command(`sofia_contact internal-webrtc/${oldSip.sip_username}@a04.invalid`),
+        /127\.0\.0\.7/
+      );
+    }
     const seeded =
       direction === "transfer"
         ? await seedTransferReservation(config)
         : await f.seed({ inbound: direction === "inbound" });
+    const authorized = await serviceOperation(f, seeded, initial.id, direction, !serviceMatrix);
     const contact = (
       await f.pool.query("select verified_endpoint from agent_desk_sessions where id=$1", [initial.id])
     ).rows[0].verified_endpoint;
+    if (serviceMatrix) {
+      const rejected = [];
+      for (const [name, change] of [
+        ...(direction !== "outbound" ? [["unaccepted", (s) => s]] : []),
+        ["unsolicited", (s) => s.replace(/,sip_h_X-Outbound-Dialer-Operation-ID=[^,}]+/, "")],
+        ["wrong operation", (s) => s.replace(authorized.operation.id, randomUUID())],
+        ["wrong session", (s) => s.replace(initial.id, randomUUID())],
+        [
+          "stale binding",
+          (s) => s.replace(`Binding-Generation=${initial.bindingGeneration}`, "Binding-Generation=9999")
+        ],
+        ["wrong leg", (s) => s.replace(`Leg-ID=${seeded.agentUuid}`, `Leg-ID=${randomUUID()}`)]
+      ]) {
+        const uuid = randomUUID();
+        const invalid = change(serviceInviteCommand(authorized.operation)).replace(
+          `origination_uuid=${seeded.agentUuid}`,
+          `origination_uuid=${uuid}`
+        );
+        const before = await page.evaluate(() => window.d01Peers.length);
+        await observer.command(`bgapi ${invalid}`);
+        await until(
+          () =>
+            observer.events.some(
+              (e) => e["event-name"] === "CHANNEL_HANGUP_COMPLETE" && e["unique-id"] === uuid
+            ),
+          `rejected ${name}`
+        );
+        assert.equal(
+          await page.evaluate(() => window.d01Peers.length),
+          before,
+          "rejection never captures media"
+        );
+        assert.equal(await page.evaluate(() => window.d01.callState), "none");
+        rejected.push(name);
+        if (name === "unaccepted")
+          await f.pool.query(
+            "update call_offers set state='accepted',reason='user_accepted',closed_at=clock_timestamp() where call_id=$1 and state='pending'",
+            [seeded.callId]
+          );
+      }
+      assert.equal(
+        (
+          await f.pool.query("select count(*)::int n from service_invite_dialogs where operation_id=$1", [
+            authorized.operation.id
+          ])
+        ).rows[0].n,
+        0
+      );
+      await pass(`${direction}: unauthorized INVITE delivery rejected before media`, { rejected });
+    }
     for (const [uuid, destination] of [
       [seeded.agentUuid, contact],
       [seeded.customerUuid, target],
       ...(seeded.sourceUuid ? [[seeded.sourceUuid, seeded.sourceTarget]] : [])
     ]) {
+      let committed, release, unblock, fulfilled, finish;
+      if (serviceMatrix && uuid === seeded.agentUuid) {
+        committed = new Promise((resolve) => {
+          unblock = resolve;
+        });
+        fulfilled = new Promise((resolve) => {
+          finish = resolve;
+        });
+        const held = new Promise((resolve) => {
+          release = resolve;
+        });
+        await page.route("**/api/agent/service-invites/authorize", async (route) => {
+          const response = await route.fetch();
+          assert.equal(response.status(), 200);
+          unblock();
+          await held;
+          await route.fulfill({ response });
+          finish();
+        });
+      }
       assert.match(
         (
           await observer.command(
-            `bgapi originate {origination_uuid=${uuid},originate_timeout=15,media_webrtc=${uuid === seeded.agentUuid},absolute_codec_string=PCMU,hangup_after_bridge=false,park_after_bridge=true}${destination} &park()`
+            uuid === seeded.agentUuid
+              ? `bgapi ${serviceInviteCommand(authorized.operation)}`
+              : `bgapi originate {origination_uuid=${uuid},originate_timeout=15,absolute_codec_string=PCMU,hangup_after_bridge=false,park_after_bridge=true}${destination} &park()`
           )
         ).headers["reply-text"],
         /^\+OK/
       );
+      if (committed) {
+        await committed;
+        assert.equal(
+          await page.evaluate(() => window.d01Peers.length),
+          0,
+          "no media while authorization response is held"
+        );
+        assert.equal(
+          (
+            await f.pool.query("select count(*)::int n from service_invite_dialogs where operation_id=$1", [
+              authorized.operation.id
+            ])
+          ).rows[0].n,
+          1
+        );
+        release();
+        await fulfilled;
+        await page.unroute("**/api/agent/service-invites/authorize");
+      }
       await until(
         () => observer.events.some((e) => e["event-name"] === "CHANNEL_ANSWER" && e["unique-id"] === uuid),
         `answered ${uuid}`,
         18000
-      );
+      ).catch(async (error) => {
+        report.failedBrowser = await page.evaluate(() => ({
+          state: window.d01.state,
+          callState: window.d01.callState,
+          error: window.d01.error,
+          peers: window.d01Peers.map((p) => ({
+            connection: p.connectionState,
+            ice: p.iceGatheringState,
+            signaling: p.signalingState
+          }))
+        }));
+        await save();
+        throw error;
+      });
     }
     await command(`uuid_bridge ${seeded.agentUuid} ${seeded.customerUuid}`);
     await page.waitForFunction(() => window.d01?.callState === "active");
     const baseline = await media(page);
+    if (serviceMatrix)
+      await pass(`${direction}: held authorization response produces one media session`, {
+        peers: baseline.browser.peers,
+        operationId: authorized.operation.id
+      });
+    if (serviceMatrix) {
+      assert.equal(oldClient.invites.length, 0, "obsolete registered endpoint receives no service leg");
+      for (const method of ["PATCH", "DELETE"]) {
+        const stale = await app.inject({
+          method,
+          url: `/api/agent/desk-sessions/${oldSnapshot.id}`,
+          headers: { authorization: `Bearer ${token}` },
+          payload: {
+            deskSessionId: oldSnapshot.id,
+            bindingGeneration: oldSnapshot.bindingGeneration,
+            expectedRevision: oldSnapshot.revision,
+            idempotencyKey: randomUUID(),
+            ...(method === "PATCH" ? { campaignId: f.campaignId, ready: true } : {})
+          }
+        });
+        assert.equal(stale.statusCode, 409);
+      }
+      await oldClient.register(0);
+      oldClient.close();
+      await oldPage.reload();
+      await oldPage.waitForFunction(() => window.d01?.state === "failed", null, { timeout: 10000 });
+      await oldContext.close();
+      const preserved = await media(page);
+      assert.equal(preserved.browser.peers, baseline.browser.peers);
+      assert.equal(await command(`uuid_exists ${seeded.agentUuid}`), "true");
+      await pass(
+        `${direction}: two registered Desk identities, stale refresh/close and occupied takeover preserve current media`,
+        { currentSession: initial.id, obsoleteSession: oldSnapshot.id, obsoleteInvites: 0, preserved }
+      );
+      // A separate INVITE with the same durable operation cannot create a peer.
+      const duplicate = randomUUID();
+      await observer.command(
+        `bgapi ${serviceInviteCommand(authorized.operation).replace(`origination_uuid=${seeded.agentUuid}`, `origination_uuid=${duplicate}`)}`
+      );
+      await until(
+        () =>
+          observer.events.some(
+            (e) => e["event-name"] === "CHANNEL_HANGUP_COMPLETE" && e["unique-id"] === duplicate
+          ),
+        "duplicate service dialog rejected"
+      );
+      assert.equal((await media(page)).browser.peers, baseline.browser.peers);
+      await pass(`${direction}: duplicate operation INVITE creates no replacement media`, {
+        peers: baseline.browser.peers
+      });
+    }
     const cases = [];
-    for (const state of process.env.D01_BROWSER_SMOKE === "1"
+    for (const state of process.env.D01_BROWSER_SMOKE === "1" || serviceMatrix
       ? ["active"]
       : ["reserved", "connecting", "active", "releasing", "uncertain"]) {
       await f.pool.query("update agent_call_slots set state=$2 where agent_id=$1", [f.agentId, state]);
@@ -594,7 +797,7 @@ try {
         cases.at(-1)
       );
     }
-    if (direction === "inbound" && process.env.D01_BROWSER_SMOKE !== "1") {
+    if (direction === "inbound" && process.env.D01_BROWSER_SMOKE !== "1" && !serviceMatrix) {
       const before = report.signaling.filter(
         (e) => e.direction === "sent" && e.callId && / INVITE$/.test(e.cseq ?? "")
       ).length;
@@ -629,9 +832,11 @@ try {
         recovered
       });
     }
-    const dialog = report.signaling
-      .slice(traceStart)
-      .find((e) => e.direction === "received" && e.line.startsWith("INVITE "))?.callId;
+    const dialog = (
+      await f.pool.query("select dialog_id from service_invite_dialogs where operation_id=$1", [
+        authorized.operation.id
+      ])
+    ).rows[0]?.dialog_id;
     assert.ok(dialog, "real browser dialog correlation");
     const terminalStart = report.signaling.length;
     const terminalBegan = Date.now();
@@ -694,6 +899,24 @@ try {
       confirmationMs: Date.now() - terminalBegan,
       endedWhileDisconnected: direction === "transfer"
     });
+    if (serviceMatrix) {
+      const replay = randomUUID();
+      await observer.command(
+        `bgapi ${serviceInviteCommand(authorized.operation).replace(`origination_uuid=${seeded.agentUuid}`, `origination_uuid=${replay}`)}`
+      );
+      await until(
+        () =>
+          observer.events.some(
+            (e) => e["event-name"] === "CHANNEL_HANGUP_COMPLETE" && e["unique-id"] === replay
+          ),
+        "ended operation cannot reconnect a new session"
+      );
+      assert.equal(await page.evaluate(() => window.d01Peers.length), baseline.browser.peers);
+      assert.equal(await page.evaluate(() => window.d01.callState), "none");
+      await pass(`${direction}: ended operation replay cannot reconnect media`, {
+        peers: baseline.browser.peers
+      });
+    }
     await f.pool.query("update call_legs set ended_at=clock_timestamp(),state='ended' where call_id=$1", [
       seeded.callId
     ]);
@@ -709,6 +932,14 @@ try {
         async () => (await command(`uuid_exists ${uuid}`)) === "false",
         "fixture terminal leg absence"
       );
+    await f.pool.query(
+      "update call_operations set state='succeeded',result='{}',resolved_at=clock_timestamp(),resolution_evidence='fixture single sender finished and all concrete legs absent; not product recovery' where call_id=$1 and resolved_at is null",
+      [seeded.callId]
+    );
+    await f.pool.query(
+      "update inbound_connection_attempts set settled_at=clock_timestamp(),outcome='ended' where call_id=$1 and settled_at is null",
+      [seeded.callId]
+    );
     await f.pool.query(
       "update call_capacity_reservations set state='released',released_at=clock_timestamp() where call_id=$1 and state<>'released'",
       [seeded.callId]
@@ -753,6 +984,20 @@ try {
     0
   );
   report.status = "passed";
+  report.authorizedDialogs = (
+    await f.pool.query("select * from service_invite_dialogs order by authorized_at")
+  ).rows;
+  report.finalState = (
+    await f.pool.query(
+      "select (select count(*)::int from agent_call_slots where state<>'free') occupied_slots,(select count(*)::int from call_capacity_reservations where state<>'released') retained_capacity,(select count(*)::int from call_operations where resolved_at is null) unresolved_operations,(select count(*)::int from inbound_connection_attempts where settled_at is null) unresolved_connections"
+    )
+  ).rows[0];
+  assert.deepEqual(report.finalState, {
+    occupied_slots: 0,
+    retained_capacity: 0,
+    unresolved_operations: 0,
+    unresolved_connections: 0
+  });
 } catch (error) {
   report.status = "failed";
   report.error = error.stack;

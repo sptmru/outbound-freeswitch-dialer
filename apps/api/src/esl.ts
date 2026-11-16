@@ -1,5 +1,8 @@
 import net from "node:net";
 import { randomUUID } from "node:crypto";
+import assert from "node:assert/strict";
+import type { DurableCommand } from "./call-executor.js";
+import { serviceInviteCommand } from "./service-invite-command.js";
 import type { SupervisorMode } from "@outbound-dialer/shared";
 import type { AppConfig } from "./config.js";
 
@@ -25,6 +28,8 @@ export interface OriginateAgentBridgeCallInput {
   customerLegUuid: string;
   destinationNumber: string;
   sipUsername: string;
+  /** Native C04/C05 operation; its verified endpoint replaces legacy AOR lookup. */
+  serviceOperation?: DurableCommand;
 }
 
 export interface OriginateSupervisorEavesdropInput {
@@ -101,7 +106,10 @@ export async function originateSupervisorEavesdrop(
   };
 }
 
-function buildAgentBridgeOriginateCommand(config: AppConfig, input: OriginateAgentBridgeCallInput): string {
+export function buildAgentBridgeOriginateCommand(
+  config: AppConfig,
+  input: OriginateAgentBridgeCallInput
+): string {
   const customerDialString = buildCustomerDialString(config, input.destinationNumber);
   const callerId = input.callerId === undefined ? config.SIP_TRUNK_CALLER_ID : input.callerId;
   const agentVariables = buildOriginateVariables([
@@ -136,6 +144,29 @@ function buildAgentBridgeOriginateCommand(config: AppConfig, input: OriginateAge
         ]),
     callerId ? `origination_caller_id_number=${escapeOriginateVariable(callerId)}` : null
   ]);
+  if (input.serviceOperation) {
+    const op = input.serviceOperation;
+    assert.equal(op.command_kind, "originate");
+    assert.equal(op.call_id, input.callId);
+    assert.equal(op.target_uuid, input.agentLegUuid);
+    assert.equal(op.request.customerUuid, input.customerLegUuid);
+    assert.equal(op.request.destinationNumber, input.destinationNumber);
+    // Preserve the established customer/trunk policy, but use exactly the same
+    // D01-pinned browser destination and service headers as inbound/transfer.
+    const prefix = serviceInviteCommand(op, [
+      "outbound_dialer_leg_type=agent",
+      "bridge_early_media=true",
+      "continue_on_fail=false",
+      ...(config.FREESWITCH_WEBRTC_REWRITE_TIMESTAMPS
+        ? [
+            "rtp_rewrite_timestamps=true",
+            "rtp_autoflush_during_bridge=true",
+            "rtp_notimer_during_bridge=false"
+          ]
+        : [])
+    ]);
+    return `${prefix.slice(0, -"&park()".length)}&bridge({${customerVariables}}${customerDialString})`;
+  }
   return `originate {${agentVariables}}user/${input.sipUsername}@${config.FREESWITCH_DOMAIN} &bridge({${customerVariables}}${customerDialString})`;
 }
 

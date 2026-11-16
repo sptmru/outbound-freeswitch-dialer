@@ -41,7 +41,8 @@
     "test:ingress:freeswitch": "bash scripts/test-d03-ingress.sh",
     "test:queue:freeswitch": "bash scripts/test-d04-queue.sh",
     "test:acceptance:freeswitch": "bash scripts/test-e02-acceptance.sh",
-    "test:desk:offers:browser": "playwright test --config playwright.e03.config.ts"
+    "test:desk:offers:browser": "playwright test --config playwright.e03.config.ts",
+    "test:service-invites:freeswitch": "E04_SERVICE_INVITES=1 bash scripts/test-d01-desk.sh --browser"
   },
   "engines": {
     "node": ">=22.13.0"

@@ -34,6 +34,7 @@ test("E02 U: fixed originate/bridge/guard/cleanup commands use one verified D01 
   assert.ok(command.startsWith(`originate {origination_uuid=${agentUuid},`));
   assert.ok(command.endsWith(`${endpoint} &park()`));
   assert.ok(command.includes(`sip_h_X-Outbound-Dialer-Operation-ID=${op.id}`));
+  assert.ok(command.includes(`sip_h_X-Outbound-Dialer-Leg-ID=${agentUuid}`));
   for (const bad of [
     `${endpoint},${endpoint}`,
     `${endpoint}|${endpoint}`,

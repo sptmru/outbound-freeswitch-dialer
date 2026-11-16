@@ -291,6 +291,17 @@ for (const [method, requestType] of [
   );
 }
 add(
+  "POST",
+  "/agent/service-invites/authorize",
+  "Authorize one service SIP dialog",
+  "Consumes durable media authorization for an already accepted operation and exact controlling Desk binding. Never accepts an offer or updates call ownership.",
+  {
+    body: ref("ServiceInviteRequest"),
+    success: ref("ServiceInviteResponse"),
+    errors: [400, 401, 409, 500]
+  }
+);
+add(
   "GET",
   "/agent/softphone/provisioning",
   "Get softphone provisioning",

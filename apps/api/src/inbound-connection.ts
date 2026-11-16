@@ -11,7 +11,7 @@ import { reconcileCoordinatedCallCleanup } from "./call-cleanup.js";
 import { inboundRetryDelay } from "./inbound-acceptance.js";
 import { ingressUuid } from "./ingress-journal.js";
 import { sendFreeSwitchApiCommand } from "./esl.js";
-import { verifiedDeskContact } from "./desk-sessions.js";
+import { serviceInviteCommand } from "./service-invite-command.js";
 import { finishAgentCall } from "./agent-availability.js";
 
 export function inboundConnectionCommand(op: DurableCommand) {
@@ -24,13 +24,8 @@ export function inboundConnectionCommand(op: DurableCommand) {
   );
   switch (r.connectionAction) {
     case "originate": {
-      const endpoint = String(r.endpoint);
-      // Only a D01-verified literal contact, never a browser-provided dial string.
-      assert.equal(verifiedDeskContact(endpoint, String(r.sipUsername)), endpoint);
       assert.equal(op.target_uuid, r.agentUuid);
-      const intent = r.intent as { deskSessionId: string; bindingGeneration: string };
-      assert.ok(ingressUuid.test(intent.deskSessionId) && /^[1-9][0-9]*$/.test(intent.bindingGeneration));
-      return `originate {origination_uuid=${op.target_uuid},originate_timeout=4,ignore_early_media=true,hangup_after_bridge=true,outbound_dialer_call_id=${op.call_id},sip_h_X-Outbound-Dialer-Call-ID=${op.call_id},sip_h_X-Outbound-Dialer-Operation-ID=${op.id},sip_h_X-Outbound-Dialer-Desk-Session-ID=${intent.deskSessionId},sip_h_X-Outbound-Dialer-Binding-Generation=${intent.bindingGeneration}}${endpoint} &park()`;
+      return serviceInviteCommand(op);
     }
     case "bridge":
       return `uuid_bridge ${op.call_id} ${r.agentUuid}`;

@@ -60,6 +60,14 @@ import type {
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "/api";
 
+export function authorizeServiceInvite(input: import("./types").ServiceInviteRequest, signal: AbortSignal) {
+  return apiFetch<import("./types").ServiceInviteResponse>("/agent/service-invites/authorize", {
+    method: "POST",
+    body: JSON.stringify(input),
+    signal
+  });
+}
+
 type LoginResponse = {
   token: string;
   user: PublicUser;

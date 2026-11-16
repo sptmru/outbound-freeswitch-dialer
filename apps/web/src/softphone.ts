@@ -1,9 +1,10 @@
 import { DeskSessionController, type DeskControl } from "./desk-session";
 import { watchRecoveredDialog } from "./sip-dialog-recovery";
+import { serviceInviteIdentity, serviceInviteMatches } from "./service-invites";
 import type { DeskSessionSnapshot } from "./types";
 import { useEffect, useRef, useState } from "react";
 import { Invitation, Registerer, RegistererState, SessionState, UserAgent } from "sip.js";
-import { fetchSoftphoneProvisioning, submitBrowserMediaTelemetry } from "./api";
+import { authorizeServiceInvite, fetchSoftphoneProvisioning, submitBrowserMediaTelemetry } from "./api";
 import {
   buildMicrophoneConstraints,
   classifyAudioSignal,
@@ -180,6 +181,7 @@ export function useSoftphoneRegistration(
   deskControl?: DeskControl
 ): SoftphoneRuntime {
   const [deskSession, setDeskSession] = useState<DeskSessionSnapshot | null>(null);
+  const deskSessionRef = useRef<DeskSessionSnapshot | null>(null);
   const deskControllerRef = useRef<DeskSessionController | null>(null);
   const deskControlRef = useRef(deskControl);
   deskControlRef.current = deskControl;
@@ -187,6 +189,7 @@ export function useSoftphoneRegistration(
     deskControllerRef.current?.selectCampaign(deskControl?.campaignId ?? null);
   }, [deskControl?.campaignId]);
   const invitationRef = useRef<Invitation | null>(null);
+  const authorizedInvitationsRef = useRef(new WeakSet<Invitation>());
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
   const browserMediaTelemetryRef = useRef<ActiveBrowserMediaTelemetry | null>(null);
   const browserRingbackRef = useRef<BrowserRingbackController | null>(null);
@@ -302,6 +305,8 @@ export function useSoftphoneRegistration(
   }
 
   async function answerIncomingCall() {
+    // Native service media is answered only by the durable authorization path.
+    if (deskControlRef.current) return;
     const invitation = invitationRef.current;
     if (!invitation) {
       return;
@@ -390,7 +395,10 @@ export function useSoftphoneRegistration(
     }
 
     const deskController = deskControlRef.current
-      ? new DeskSessionController(deskControlRef.current, setDeskSession)
+      ? new DeskSessionController(deskControlRef.current, (session) => {
+          deskSessionRef.current = session;
+          setDeskSession(session);
+        })
       : null;
     deskControllerRef.current = deskController;
     const deskHeartbeat = deskController
@@ -409,6 +417,8 @@ export function useSoftphoneRegistration(
     let registrationDetail = "";
     let dialogRecovery: ReturnType<typeof watchRecoveredDialog> | null = null;
     let recoveryInvitation: Invitation | null = null;
+    const consumedOperations = new Set<string>();
+    const pendingAuthorizations = new Set<AbortController>();
     const isCurrent = () => !cancelled && registrationGenerationRef.current === generation;
     const clearRegistrationTimer = () => {
       if (registrationTimer) {
@@ -611,24 +621,45 @@ export function useSoftphoneRegistration(
           logBuiltinEnabled: sipDiagnosticsEnabled,
           logLevel: sipDiagnosticsEnabled ? "debug" : "warn",
           delegate: {
-            onInvite: (invitation) => {
+            onInvite: async (invitation) => {
               if (!isCurrent()) {
                 void invitation.reject().catch(() => undefined);
                 return;
               }
               if (invitationRef.current) {
-                void invitation.reject();
+                if (invitationRef.current !== invitation) void invitation.reject().catch(() => undefined);
+                return;
+              }
+              if (
+                !deskController &&
+                [
+                  "X-Outbound-Dialer-Operation-ID",
+                  "X-Outbound-Dialer-Desk-Session-ID",
+                  "X-Outbound-Dialer-Binding-Generation"
+                ].some((h) => invitation.request.getHeader(h))
+              ) {
+                void invitation.reject().catch(() => undefined);
                 return;
               }
 
               const incomingCallLabel = invitation.remoteIdentity.displayName || "Outbound Dialer Test";
               invitationRef.current = invitation;
+              invitation.delegate = {
+                ...invitation.delegate,
+                onRefer: (referral) => {
+                  void referral.reject().catch(() => undefined);
+                }
+              };
               const ownsInvitation = () => isCurrent() && invitationRef.current === invitation;
               invitation.stateChange.addListener((state) => {
                 if (!ownsInvitation()) {
                   return;
                 }
                 if (state === SessionState.Established) {
+                  if (deskController && !authorizedInvitationsRef.current.has(invitation)) {
+                    void stopInvitation(invitation);
+                    return;
+                  }
                   setRuntime((current) => ({
                     ...current,
                     callState: "active",
@@ -655,12 +686,43 @@ export function useSoftphoneRegistration(
                 }
               });
 
-              void acceptInvitation(invitation, incomingCallLabel, ownsInvitation).catch((error: unknown) => {
+              const accept = async () => {
+                if (deskController) {
+                  const input = serviceInviteIdentity(invitation.request, deskSessionRef.current);
+                  if (!input || consumedOperations.has(input.operationId))
+                    throw new Error("Service invitation is unavailable");
+                  const abort = new AbortController();
+                  pendingAuthorizations.add(abort);
+                  const timer = window.setTimeout(() => abort.abort(), 2500);
+                  try {
+                    const result = await authorizeServiceInvite(input, abort.signal);
+                    // HTTP response and acceptance click timing are not media authority.
+                    // Recheck lifecycle/binding after the asynchronous SQL authorization.
+                    if (
+                      abort.signal.aborted ||
+                      !ownsInvitation() ||
+                      invitation.state === SessionState.Terminated ||
+                      !serviceInviteIdentity(invitation.request, deskSessionRef.current) ||
+                      !serviceInviteMatches(input, result)
+                    ) {
+                      throw new Error("Service invitation is no longer current");
+                    }
+                    consumedOperations.add(input.operationId);
+                    authorizedInvitationsRef.current.add(invitation);
+                  } finally {
+                    window.clearTimeout(timer);
+                    pendingAuthorizations.delete(abort);
+                  }
+                }
+                if (ownsInvitation()) await acceptInvitation(invitation, incomingCallLabel, ownsInvitation);
+              };
+              void accept().catch((error: unknown) => {
                 if (!ownsInvitation()) {
                   void invitation.reject().catch(() => undefined);
                   return;
                 }
                 invitationRef.current = null;
+                void stopInvitation(invitation);
                 clearRemoteAudio();
                 setRuntime((current) => ({
                   ...toCallIdleRuntime(current, `${provisioning.sipUsername}@${provisioning.domain}`),
@@ -825,6 +887,7 @@ export function useSoftphoneRegistration(
 
     return () => {
       cancelled = true;
+      for (const abort of pendingAuthorizations) abort.abort();
       if (deskHeartbeat !== null) window.clearInterval(deskHeartbeat);
       void deskController?.close();
       if (deskControllerRef.current === deskController) deskControllerRef.current = null;

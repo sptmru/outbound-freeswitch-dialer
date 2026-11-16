@@ -3125,5 +3125,43 @@
       "alertmanagerTelegramEnabled"
     ],
     "additionalProperties": false
+  },
+  "ServiceInviteRequest": {
+    "$id": "ServiceInviteRequest",
+    "type": "object",
+    "properties": {
+      "callId": { "type": "string" },
+      "operationId": { "type": "string" },
+      "deskSessionId": { "type": "string" },
+      "bindingGeneration": { "type": "string" },
+      "legUuid": { "type": "string" },
+      "dialogId": { "type": "string" }
+    },
+    "required": ["callId", "operationId", "deskSessionId", "bindingGeneration", "legUuid", "dialogId"],
+    "additionalProperties": false,
+    "description": "Server-authorized service media; this does not accept an offer or grant call control."
+  },
+  "ServiceInviteResponse": {
+    "$id": "ServiceInviteResponse",
+    "type": "object",
+    "properties": {
+      "callId": { "type": "string" },
+      "operationId": { "type": "string" },
+      "deskSessionId": { "type": "string" },
+      "bindingGeneration": { "type": "string" },
+      "legUuid": { "type": "string" },
+      "dialogId": { "type": "string" },
+      "authorized": { "type": "boolean", "const": true }
+    },
+    "required": [
+      "authorized",
+      "bindingGeneration",
+      "callId",
+      "deskSessionId",
+      "dialogId",
+      "legUuid",
+      "operationId"
+    ],
+    "additionalProperties": false
   }
 }

@@ -29,6 +29,12 @@ The browser reexports the same built types from `apps/web/src/types.ts`.
 
 ## Live compatibility boundary
 
+[E04 service INVITE authorization](inbound-service-invites.md) adds the live
+`POST /agent/service-invites/authorize` handshake and shared
+`ServiceInviteRequest`/`ServiceInviteResponse`. It consumes one SIP dialog for
+an already accepted native operation; it does not accept offers, start an
+executor or enable the staged Desk snapshot/bootstrap.
+
 Existing paths remain `/agent/desk`, `/agent/events`, `/agent/call-next`,
 `/agent/manual-dial/start`, `/agent/leads/:contactId/call` and current controls.
 `AgentDeskResponse.coordination` is optional during rolling upgrades. Its absence

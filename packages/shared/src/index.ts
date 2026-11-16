@@ -990,3 +990,15 @@ export type UpdateAdminSystemSettingsRequest = Omit<
   AdminSystemSettings,
   "availableAlertChannels" | "alertmanagerApplyStatus" | "updatedAt"
 >;
+/** Server-authorized service media; this does not accept an offer or grant call control. */
+export interface ServiceInviteRequest {
+  callId: string;
+  operationId: string;
+  deskSessionId: string;
+  bindingGeneration: string;
+  legUuid: string;
+  dialogId: string;
+}
+export interface ServiceInviteResponse extends ServiceInviteRequest {
+  authorized: true;
+}

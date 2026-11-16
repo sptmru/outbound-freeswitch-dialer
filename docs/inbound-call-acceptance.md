@@ -14,7 +14,8 @@ Origin/CSRF protection. Responses have `Cache-Control: no-store`.
 Acceptance requires an explicitly supplied native `wakeExecutor` dependency.
 The default `server.ts` does not install one: an authenticated request fails with
 `409 coordination_unavailable` before mutation. I05 owns bootstrap and enablement.
-E03/E04 own browser controls, service INVITE correlation/answering and browser media.
+E03 supplies browser controls; [E04](inbound-service-invites.md) supplies staged
+service INVITE correlation/authorization and browser media verification.
 
 Under the common admission lock graph, acceptance rechecks the active actor/auth
 version, controlling Desk/revision, fresh D01-verified contact, campaign/readiness,
@@ -54,7 +55,8 @@ The fixed chain is:
    `verifiedDeskContact`, with the fixed agent UUID, a four-second endpoint timeout
    and `&park()`. SIP headers include `X-Outbound-Dialer-Call-ID`,
    `X-Outbound-Dialer-Operation-ID`, `X-Outbound-Dialer-Desk-Session-ID` and
-   `X-Outbound-Dialer-Binding-Generation`. E04 must consume these in the browser.
+   `X-Outbound-Dialer-Binding-Generation` and `X-Outbound-Dialer-Leg-ID`.
+   E04 consumes them through durable authorization before SIP answer.
 2. Only after the fixed originate job and actual answered leg, run the dependent
    `uuid_bridge <customer UUID> <agent UUID>`. Waiting audio stops at this native
    bridge boundary. A command ACK or agent answer cannot set `agent_connected_at`.

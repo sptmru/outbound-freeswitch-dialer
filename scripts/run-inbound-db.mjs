@@ -27,6 +27,7 @@ const commands = [
       "apps/api/dist-test/call-admission.integration.test.js",
       "apps/api/dist-test/eligibility.integration.test.js",
       "apps/api/dist-test/desk-sessions.integration.test.js",
+      "apps/api/dist-test/service-invites.integration.test.js",
       "apps/api/dist-test/supervisor-coordination.integration.test.js",
       "apps/api/dist-test/call-capacity.integration.test.js",
       "apps/api/dist-test/call-executor.integration.test.js",

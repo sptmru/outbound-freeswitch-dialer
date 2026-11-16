@@ -22,6 +22,7 @@ import { acceptInboundOffer } from "./inbound-acceptance.js";
 import { settleInboundConnection, validateInboundConnection } from "./inbound-connection.js";
 import { admitManualOutbound } from "./manual-outbound.js";
 import { type DurableCommand } from "./call-executor.js";
+import { authorizeServiceInvite } from "./service-invites.js";
 const options = { skip: !process.env.TEST_DATABASE_URL, timeout: 60000 };
 async function fixture() {
   const schema = `e02_${randomUUID().replaceAll("-", "")}`;
@@ -820,7 +821,10 @@ test(
         callId = await queued(f),
         offer = (await dispatchInboundOffers(f.pool, a.id))!,
         input = mutation(a);
-      await f.pool.query(`drop table call_offer_accept_mutations;drop table inbound_connection_attempts;
+      await f.pool.query(`drop table service_invite_dialogs;
+      drop function preserve_service_invite_dialog();
+      delete from schema_migrations where filename='039_service_invite_authorization.sql';
+      drop table call_offer_accept_mutations;drop table inbound_connection_attempts;
       drop function preserve_inbound_accept_mutation();drop function preserve_inbound_connection();
       delete from schema_migrations where filename='038_inbound_acceptance.sql'`);
       const tables = [
@@ -870,6 +874,98 @@ test(
       assert.equal((await counts(f)).originates, 1);
       await runMigrations(f.pool);
     } finally {
+      await f.cleanup();
+    }
+  }
+);
+
+test(
+  "E04.2 DB/API: durable INVITE authorization precedes a held real Accept HTTP response",
+  options,
+  async () => {
+    const f = await fixture(),
+      app = Fastify();
+    let release!: () => void, committed!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const checkpoint = new Promise<void>((resolve) => {
+      committed = resolve;
+    });
+    try {
+      const a = await f.agent(),
+        callId = await queued(f),
+        offer = (await dispatchInboundOffers(f.pool, a.id))!;
+      const config = {
+        JWT_SECRET: "e04-held-accept-only",
+        JWT_EXPIRES_SECONDS: 3600
+      } as unknown as AppConfig;
+      await f.pool.query("update agent_desk_sessions set endpoint_pin=verified_endpoint where id=$1", [
+        a.session
+      ]);
+      registerCallOfferRoutes(app, config, f.pool, { async wakeExecutor() {} });
+      app.addHook("onSend", async (_request, _reply, payload) => {
+        committed();
+        await held;
+        return payload;
+      });
+      const token = signAuthToken(config, {
+        sub: a.user,
+        role: "agent",
+        ver: 1,
+        email: "fixture@example.test"
+      });
+      let replied = false;
+      const response = app
+        .inject({
+          method: "POST",
+          url: `/agent/call-offers/${offer.id}/accept`,
+          headers: { authorization: `Bearer ${token}` },
+          payload: mutation(a)
+        })
+        .then((r) => {
+          replied = true;
+          return r;
+        });
+      await checkpoint;
+      const op = (
+        await f.pool.query(
+          "select o.* from inbound_connection_attempts x join call_operations o on o.id=x.operation_id where x.offer_id=$1",
+          [offer.id]
+        )
+      ).rows[0] as DurableCommand;
+      assert.ok(op, "native Accept committed before its HTTP response");
+      const input = {
+        callId,
+        operationId: op.id,
+        deskSessionId: a.session,
+        bindingGeneration: "1",
+        legUuid: op.target_uuid!,
+        dialogId: randomUUID()
+      };
+      assert.equal(
+        await authorizeServiceInvite(f.pool, actor(a), input),
+        false,
+        "a committed but unsent intent alone is not media authorization"
+      );
+      await f.pool.query(
+        "insert into call_execution_attempts(operation_id,owner_id,backend_pid,replica,seat) values($1,$2,pg_backend_pid(),0,0)",
+        [op.id, randomUUID()]
+      );
+      await f.pool.query("update call_operations set state='uncertain' where id=$1", [op.id]);
+      assert.equal(await authorizeServiceInvite(f.pool, actor(a), input), true);
+      assert.equal(replied, false, "media authorization does not depend on receipt of Accept result");
+      assert.equal(
+        await authorizeServiceInvite(f.pool, actor(a), { ...input, dialogId: randomUUID() }),
+        false
+      );
+      release();
+      const result = await response;
+      assert.equal(result.statusCode, 200, result.body);
+      assert.equal(result.json().operationId, op.id);
+    } finally {
+      release();
+      await app.close();
       await f.cleanup();
     }
   }

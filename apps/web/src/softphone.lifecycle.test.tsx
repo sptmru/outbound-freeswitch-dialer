@@ -4,6 +4,7 @@ import type { PublicUser } from "./types";
 
 const mocks = vi.hoisted(() => ({
   fetchProvisioning: vi.fn(),
+  authorizeInvite: vi.fn(),
   createDesk: vi.fn(),
   updateDesk: vi.fn(),
   leaveDesk: vi.fn(),
@@ -23,6 +24,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("./api", () => ({
   fetchSoftphoneProvisioning: mocks.fetchProvisioning,
+  authorizeServiceInvite: mocks.authorizeInvite,
   createDeskSession: mocks.createDesk,
   updateDeskSession: mocks.updateDesk,
   leaveDeskSession: mocks.leaveDesk,
@@ -242,6 +244,195 @@ describe("softphone registration lifecycle", () => {
     unmount();
   });
 
+  async function nativePhone() {
+    setGetUserMedia(async () => mediaStream());
+    const id = "10000000-0000-4000-8000-000000000001";
+    const session = {
+      id,
+      revision: "1",
+      bindingGeneration: "2",
+      campaignId: null,
+      endpointVerified: true,
+      ready: true,
+      expiresAt: "2099-11-15T12:00:00Z"
+    };
+    mocks.createDesk.mockResolvedValue({
+      session,
+      revision: "1",
+      sip: {
+        username: "desk_fixture",
+        password: "fixture",
+        domain: "fixture.invalid",
+        websocketUrl: "wss://fixture.invalid",
+        iceServers: []
+      }
+    });
+    mocks.updateDesk.mockResolvedValue({ session, revision: "1" });
+    mocks.leaveDesk.mockResolvedValue({ session: null, revision: "2" });
+    const hook = renderHook(() =>
+      useSoftphoneRegistration(user, { campaignId: null, expectedRevision: null })
+    );
+    await waitFor(() => expect(mocks.register).toHaveBeenCalled());
+    return { ...hook, session };
+  }
+  function serviceInvitation(operation = "20000000-0000-4000-8000-000000000001") {
+    let listener: ((state: string) => void) | undefined;
+    const headers: Record<string, string> = {
+      "X-Outbound-Dialer-Call-ID": "30000000-0000-4000-8000-000000000001",
+      "X-Outbound-Dialer-Operation-ID": operation,
+      "X-Outbound-Dialer-Desk-Session-ID": "10000000-0000-4000-8000-000000000001",
+      "X-Outbound-Dialer-Binding-Generation": "2",
+      "X-Outbound-Dialer-Leg-ID": "40000000-0000-4000-8000-000000000001",
+      "Call-ID": "real-dialog@fixture"
+    };
+    const invitation = {
+      state: "Initial",
+      accept: vi.fn().mockResolvedValue(undefined),
+      reject: vi.fn().mockResolvedValue(undefined),
+      bye: vi.fn().mockResolvedValue(undefined),
+      remoteIdentity: { displayName: "Service" },
+      request: { getHeader: (key: string) => headers[key] },
+      stateChange: {
+        addListener: (fn: (state: string) => void) => {
+          listener = fn;
+        }
+      },
+      delegate: {} as { onRefer?: (r: { reject: () => Promise<void> }) => void }
+    };
+    return {
+      invitation,
+      headers,
+      emit: (state: string) => {
+        invitation.state = state;
+        listener?.(state);
+      }
+    };
+  }
+  it("E04.1: rejects uncorrelated, wrong-session, stale-binding and server-denied service INVITEs without media", async () => {
+    const { unmount, result } = await nativePhone();
+    for (const key of [
+      "X-Outbound-Dialer-Call-ID",
+      "X-Outbound-Dialer-Desk-Session-ID",
+      "X-Outbound-Dialer-Binding-Generation"
+    ]) {
+      const s = serviceInvitation();
+      s.headers[key] = "wrong";
+      await act(async () => {
+        mocks.userAgents[0].options.delegate?.onInvite?.(s.invitation as never);
+      });
+      expect(s.invitation.reject).toHaveBeenCalled();
+      expect(s.invitation.accept).not.toHaveBeenCalled();
+    }
+    expect(mocks.authorizeInvite).not.toHaveBeenCalled();
+    mocks.authorizeInvite.mockRejectedValue(new Error("not accepted"));
+    const s = serviceInvitation();
+    await act(async () => {
+      mocks.userAgents[0].options.delegate?.onInvite?.(s.invitation as never);
+    });
+    expect(s.invitation.reject).toHaveBeenCalled();
+    expect(s.invitation.accept).not.toHaveBeenCalled();
+    expect(result.current.callState).toBe("none");
+    unmount();
+  });
+  it("E04.2: INVITE before start HTTP response needs durable authorization, admits once and refuses REFER", async () => {
+    const { unmount, result } = await nativePhone();
+    const auth = deferred<object>();
+    mocks.authorizeInvite.mockReturnValue(auth.promise);
+    const first = serviceInvitation(),
+      duplicate = serviceInvitation();
+    await act(async () => {
+      mocks.userAgents[0].options.delegate?.onInvite?.(first.invitation as never);
+    });
+    await act(async () => {
+      await result.current.answerIncomingCall();
+      mocks.userAgents[0].options.delegate?.onInvite?.(duplicate.invitation as never);
+    });
+    expect(first.invitation.accept).not.toHaveBeenCalled();
+    expect(duplicate.invitation.reject).toHaveBeenCalled();
+    expect(mocks.authorizeInvite).toHaveBeenCalledTimes(1);
+    const input = mocks.authorizeInvite.mock.calls[0][0];
+    await act(async () => {
+      auth.resolve({ authorized: true, ...input });
+      await auth.promise;
+    });
+    expect(first.invitation.accept).toHaveBeenCalledTimes(1);
+    const reject = vi.fn().mockResolvedValue(undefined);
+    first.invitation.delegate.onRefer?.({ reject });
+    expect(reject).toHaveBeenCalledOnce();
+    act(() => first.emit("Terminated"));
+    const replay = serviceInvitation();
+    await act(async () => {
+      mocks.userAgents[0].options.delegate?.onInvite?.(replay.invitation as never);
+    });
+    expect(replay.invitation.accept).not.toHaveBeenCalled();
+    expect(replay.invitation.reject).toHaveBeenCalled();
+    expect(mocks.authorizeInvite).toHaveBeenCalledTimes(1);
+    unmount();
+  });
+  it("E04.2: cancellation while authorization is held cannot accept or clear a newer invitation", async () => {
+    const { unmount, result } = await nativePhone();
+    const auth = deferred<object>();
+    mocks.authorizeInvite.mockReturnValueOnce(auth.promise);
+    const old = serviceInvitation();
+    await act(async () => {
+      mocks.userAgents[0].options.delegate?.onInvite?.(old.invitation as never);
+    });
+    const input = mocks.authorizeInvite.mock.calls[0][0];
+    act(() => old.emit("Terminated"));
+    mocks.authorizeInvite.mockImplementationOnce(async (input) => ({ authorized: true, ...input }));
+    const next = serviceInvitation("20000000-0000-4000-8000-000000000002");
+    await act(async () => {
+      mocks.userAgents[0].options.delegate?.onInvite?.(next.invitation as never);
+    });
+    expect(next.invitation.accept).toHaveBeenCalledOnce();
+    await act(async () => {
+      auth.resolve({ authorized: true, ...input });
+      await auth.promise;
+    });
+    expect(old.invitation.accept).not.toHaveBeenCalled();
+    expect(result.current.callState).toBe("answering");
+    expect(next.invitation.bye).not.toHaveBeenCalled();
+    unmount();
+  });
+  it("E04.2: unmount aborts authorization and rejects a late allow", async () => {
+    const { unmount } = await nativePhone();
+    const auth = deferred<object>();
+    mocks.authorizeInvite.mockReturnValue(auth.promise);
+    const s = serviceInvitation();
+    await act(async () => {
+      mocks.userAgents[0].options.delegate?.onInvite?.(s.invitation as never);
+    });
+    const [input, signal] = mocks.authorizeInvite.mock.calls[0];
+    unmount();
+    expect(signal.aborted).toBe(true);
+    await act(async () => {
+      auth.resolve({ authorized: true, ...input });
+      await auth.promise;
+    });
+    expect(s.invitation.accept).not.toHaveBeenCalled();
+  });
+  it("E04.2: an authorization response arriving after its abort deadline cannot answer", async () => {
+    const { unmount } = await nativePhone();
+    vi.useFakeTimers();
+    const auth = deferred<object>();
+    mocks.authorizeInvite.mockReturnValue(auth.promise);
+    const s = serviceInvitation();
+    await act(async () => {
+      mocks.userAgents[0].options.delegate?.onInvite?.(s.invitation as never);
+    });
+    const [input, signal] = mocks.authorizeInvite.mock.calls[0];
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2500);
+    });
+    expect(signal.aborted).toBe(true);
+    await act(async () => {
+      auth.resolve({ authorized: true, ...input });
+      await auth.promise;
+    });
+    expect(s.invitation.accept).not.toHaveBeenCalled();
+    expect(s.invitation.reject).toHaveBeenCalled();
+    unmount();
+  });
   it("D01 native Desk uses generation credentials, verifies after REGISTER and leaves its own binding", async () => {
     setGetUserMedia(async () => mediaStream());
     const session = {
