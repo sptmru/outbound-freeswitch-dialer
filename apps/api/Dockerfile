@@ -20,7 +20,7 @@ WORKDIR /app
 ENV NODE_ENV=production
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates ffmpeg \
+  && apt-get install -y --no-install-recommends ca-certificates ffmpeg util-linux \
   && rm -rf /var/lib/apt/lists/*
 
 COPY package.json package-lock.json* ./
@@ -31,6 +31,7 @@ RUN npm ci --omit=dev
 COPY --from=build /app/packages/shared/dist packages/shared/dist
 COPY --from=build /app/apps/api/dist apps/api/dist
 COPY apps/api/db apps/api/db
+COPY infra/freeswitch/templates/inbound infra/freeswitch/templates/inbound
 
 EXPOSE 3000
 CMD ["npm", "--workspace", "@outbound-dialer/api", "run", "start"]

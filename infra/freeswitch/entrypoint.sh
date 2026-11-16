@@ -7,6 +7,17 @@ CONFIG_DIR="${FREESWITCH_CONFIG_DIR:-/usr/share/freeswitch/conf/vanilla}"
 LOG_DIR="${FREESWITCH_LOG_DIR:-/var/log/freeswitch}"
 DB_DIR="${FREESWITCH_DB_DIR:-/var/lib/freeswitch/db}"
 
+bounded_integer() {
+  case "$2" in ''|*[!0-9]*) echo "$1 must be an integer" >&2; exit 1;; esac
+  if [ "$2" -lt "$3" ] || [ "$2" -gt "$4" ]; then echo "$1 must be between $3 and $4" >&2; exit 1; fi
+}
+
+FREESWITCH_MAX_SESSIONS="${FREESWITCH_MAX_SESSIONS:-80}"
+FREESWITCH_SESSIONS_PER_SECOND="${FREESWITCH_SESSIONS_PER_SECOND:-20}"
+bounded_integer FREESWITCH_MAX_SESSIONS "$FREESWITCH_MAX_SESSIONS" 16 200
+bounded_integer FREESWITCH_SESSIONS_PER_SECOND "$FREESWITCH_SESSIONS_PER_SECOND" 1 100
+case "${FREESWITCH_INBOUND_CONFIG_ENABLED:-false}" in true|false) ;; *) echo 'FREESWITCH_INBOUND_CONFIG_ENABLED must be true or false' >&2; exit 1;; esac
+
 required() {
   name="$1"
   value="$(eval "printf '%s' \"\${$name:-}\"")"
@@ -126,6 +137,12 @@ configure_rtp_port_range() {
 
   grep -Fq "<param name=\"rtp-start-port\" value=\"${FREESWITCH_RTP_START_PORT}\"/>" "$switch_conf"
   grep -Fq "<param name=\"rtp-end-port\" value=\"${FREESWITCH_RTP_END_PORT}\"/>" "$switch_conf"
+  sed -i \
+    -e "/<param name=\"max-sessions\"/c\\    <param name=\"max-sessions\" value=\"${FREESWITCH_MAX_SESSIONS}\"/>" \
+    -e "/<param name=\"sessions-per-second\"/c\\    <param name=\"sessions-per-second\" value=\"${FREESWITCH_SESSIONS_PER_SECOND}\"/>" \
+    "$switch_conf"
+  grep -Fq "<param name=\"max-sessions\" value=\"${FREESWITCH_MAX_SESSIONS}\"/>" "$switch_conf"
+  grep -Fq "<param name=\"sessions-per-second\" value=\"${FREESWITCH_SESSIONS_PER_SECOND}\"/>" "$switch_conf"
 }
 
 legacy_env() {
@@ -198,7 +215,21 @@ render "$TEMPLATE_DIR/sip_profiles/internal-webrtc.xml.tpl" "$CONFIG_DIR/sip_pro
 render "$TEMPLATE_DIR/dialplan/default/voicemail-drop.xml.tpl" "$CONFIG_DIR/dialplan/default/voicemail-drop.xml"
 render "$TEMPLATE_DIR/dialplan/agent-ingress/reject.xml.tpl" "$CONFIG_DIR/dialplan/agent-ingress/reject.xml"
 render "$TEMPLATE_DIR/dialplan/public/reject.xml.tpl" "$CONFIG_DIR/dialplan/public/reject.xml"
+render "$TEMPLATE_DIR/dialplan/agent-ingress.xml.tpl" "$CONFIG_DIR/dialplan/agent-ingress.xml"
+render "$TEMPLATE_DIR/dialplan/public.xml.tpl" "$CONFIG_DIR/dialplan/public.xml"
+# Startup restores only the previously verified bundle, never an interrupted
+# candidate. The shared directory is a sibling of agent-directory provisioning.
+mkdir -p "$GENERATED_DIR/dialplan/public" "$GENERATED_DIR/inbound"
+inbound_bundle="$GENERATED_DIR/dialplan/public/00-inbound.xml"
+if [ "${FREESWITCH_INBOUND_CONFIG_ENABLED:-false}" = true ] && [ -f "$GENERATED_DIR/inbound/last-good.xml" ]; then
+  cp "$GENERATED_DIR/inbound/last-good.xml" "$inbound_bundle.startup"
+else
+  printf '%s\n' '<include><extension name="d02_disabled"><condition><action application="respond" data="503 Admission unavailable"/><action application="hangup" data="NORMAL_TEMPORARY_FAILURE"/></condition></extension></include>' > "$inbound_bundle.startup"
+fi
+mv "$inbound_bundle.startup" "$inbound_bundle"
+ln -s "$inbound_bundle" "$CONFIG_DIR/dialplan/public/00-inbound.xml"
 configure_rtp_port_range
+ensure_module_load "mod_hash"
 ensure_module_load "mod_avmd"
 ensure_module_load "mod_amd"
 if [ "${FREESWITCH_AGENT_OPUS_ENABLED:-false}" = "true" ]; then

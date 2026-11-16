@@ -4,6 +4,41 @@ import type pg from "pg";
 import type { AppConfig } from "../config.js";
 import { decryptSecret } from "../auth/crypto.js";
 import { sendFreeSwitchApiCommand } from "../esl.js";
+import { InboundConfigurationPublisher } from "./inbound-config.js";
+
+export function startInboundConfigurationReconciler(
+  pool: pg.Pool,
+  config: AppConfig,
+  logger: AgentDirectoryReconciliationLogger,
+  intervalMilliseconds = 30_000
+): () => void {
+  if (!config.FREESWITCH_INBOUND_CONFIG_ENABLED) return () => {};
+  const publisher = new InboundConfigurationPublisher(pool, config);
+  let stopped = false,
+    running = false;
+  const run = async () => {
+    if (stopped || running) return;
+    running = true;
+    try {
+      if ((await publisher.reconcile()) === "error")
+        logger.warn(
+          {},
+          "Inbound FreeSWITCH configuration apply failed; inspect inbound_freeswitch_configuration.apply_error"
+        );
+    } catch {
+      logger.warn({}, "Inbound FreeSWITCH configuration reconciliation failed; it will retry");
+    } finally {
+      running = false;
+    }
+  };
+  void run();
+  const timer = setInterval(() => void run(), intervalMilliseconds);
+  timer.unref();
+  return () => {
+    stopped = true;
+    clearInterval(timer);
+  };
+}
 
 const AGENT_SIP_PROFILE = "internal-webrtc";
 

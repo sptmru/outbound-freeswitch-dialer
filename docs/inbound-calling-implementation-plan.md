@@ -753,6 +753,8 @@ takeover, and takeover attempts during inbound, outbound, and transfer calls.
 
 ## 10. FreeSWITCH Configuration and Recovery
 
+D02 implements the [versioned configuration publisher and ingress safeguards](inbound-freeswitch-configuration.md). It remains opt-in and fails closed before answer until D03 supplies durable admission; applied configuration is not provider delivery or product enablement.
+
 - Change repo-owned templates/renderers, not generated files manually.
 - Render DID/flow config from DB into existing `FREESWITCH_GENERATED_CONFIG_DIR`/volume.
 - Apply desired revision through validation/atomic write, `reloadxml`, then applied/error.

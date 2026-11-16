@@ -109,6 +109,7 @@ async function bind(socket, host) {
 }
 
 export async function invite({
+  port = 5080,
   source = "127.0.0.2",
   did = "+12025550100",
   forged = false,
@@ -132,7 +133,7 @@ export async function invite({
         packets.push({ ms: Date.now() - started, type: data[1] & 127, payload: [...data.subarray(12)] });
     });
     const address = `${source}:${sip.address().port}`;
-    const uri = `sip:${did}@127.0.0.1:5080`;
+    const uri = `sip:${did}@127.0.0.1:${port}`;
     const branch = `z9hG4bK${randomUUID()}`;
     const from = `<sip:+12025550199@a02.invalid>;tag=a02`;
     const to = `<${uri}>`;
@@ -163,7 +164,7 @@ export async function invite({
         "",
         body
       ].join("\r\n");
-      sip.send(data, 5080, "127.0.0.1");
+      sip.send(data, port, "127.0.0.1");
     }
     let final;
     let bye = false;

@@ -24,6 +24,14 @@ const envSchema = z.object({
   PUBLIC_APP_URL: z.string().url().default("http://localhost:3000"),
   DATABASE_URL: z.string().min(1),
   FREESWITCH_ESL_HOST: z.string().default("freeswitch"),
+  FREESWITCH_INBOUND_CONFIG_ENABLED: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((v) => v === "true"),
+  FREESWITCH_INBOUND_TRUSTED_CIDRS: z.string().default(""),
+  FREESWITCH_INBOUND_PRE_ADMISSION_LIMIT: z.coerce.number().int().min(1).max(16).default(8),
+  FREESWITCH_TRUNK_CHANNEL_LIMIT: z.coerce.number().int().min(2).max(80).default(40),
+  FREESWITCH_INBOUND_WAIT_SECONDS: z.coerce.number().int().min(1).max(3).default(3),
   FREESWITCH_ESL_PORT: z.coerce.number().int().positive().default(8021),
   FREESWITCH_ESL_PASSWORD: z.string().default("ClueCon"),
   FREESWITCH_ESL_ENABLED: z

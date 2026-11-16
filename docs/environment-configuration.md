@@ -181,3 +181,7 @@ When adding or changing an environment value:
 4. add a preflight assertion when a wrong value can make production unsafe;
 5. update this guide or the relevant runbook when operator behavior changes;
 6. run `npm run quality`, the Compose interpolation check, and `git diff --check`.
+
+## Versioned inbound FreeSWITCH configuration
+
+D02 adds an opt-in configuration publisher and physical ingress guards; it does not enable product inbound. See [inbound-freeswitch-configuration.md](inbound-freeswitch-configuration.md) for the canonical variable table, shared-volume paths, desired/applied/error state, last-good recovery, and D03/I04/I05 activation boundaries. `.env.example` contains every new variable; Compose passes publisher policy to API and startup guards to FS. All replicas must share the same policy and generated-config volume.

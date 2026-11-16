@@ -17,7 +17,7 @@ export function parse(raw) {
 }
 
 const md5 = (value) => createHash("md5").update(value).digest("hex");
-export function digest(challenge, username, password, uri) {
+export function digest(challenge, username, password, uri, method = "REGISTER") {
   const fields = Object.fromEntries(
     [...challenge.matchAll(/(\w+)=(?:"([^"]*)"|([^,\s]+))/g)].map((m) => [m[1], m[2] ?? m[3]])
   );
@@ -25,7 +25,7 @@ export function digest(challenge, username, password, uri) {
   assert.ok(!fields.algorithm || fields.algorithm.toUpperCase() === "MD5");
   const cnonce = randomUUID().replaceAll("-", "");
   const ha1 = md5(`${username}:${fields.realm}:${password}`);
-  const ha2 = md5(`REGISTER:${uri}`);
+  const ha2 = md5(`${method}:${uri}`);
   const qop = fields.qop ? "auth" : null;
   if (qop) assert.ok(fields.qop.split(",").includes("auth"));
   const response = md5(

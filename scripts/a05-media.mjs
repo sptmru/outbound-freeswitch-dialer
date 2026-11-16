@@ -211,18 +211,37 @@ export async function endpoint({ username, password, source, frequency }) {
       const auth = digest(challenge.headers["www-authenticate"], username, password, uri);
       assert.match((await roundtrip(make(2, [`Authorization: ${auth}`]), id, "2 REGISTER")).first, /200/);
     },
-    async dial() {
+    async dial({ expectedStatus = 200, authenticate = false, destination = "customer" } = {}) {
       const id = randomUUID();
-      const uri = "sip:customer@127.0.0.1:5080";
+      const uri = `sip:${destination}@127.0.0.1:5080`;
       const from = `<sip:${username}@${address}>;tag=a05`;
       const to = `<${uri}>`;
       dialogs.set(id, { from, to, uri });
-      const result = await roundtrip(
+      let result = await roundtrip(
         request("INVITE", uri, from, to, id, 1, ["Content-Type: application/sdp"], sdp),
         id,
         "1 INVITE"
       );
-      assert.match(result.first, /200/);
+      if (authenticate && /SIP\/2.0 (?:401|407)/.test(result.first)) {
+        const proxy = result.headers["proxy-authenticate"];
+        const auth = digest(proxy ?? result.headers["www-authenticate"], username, password, uri, "INVITE");
+        result = await roundtrip(
+          request(
+            "INVITE",
+            uri,
+            from,
+            to,
+            id,
+            2,
+            ["Content-Type: application/sdp", `${proxy ? "Proxy-Authorization" : "Authorization"}: ${auth}`],
+            sdp
+          ),
+          id,
+          "2 INVITE"
+        );
+      }
+      assert.ok(result.first.startsWith(`SIP/2.0 ${expectedStatus}`), result.first);
+      if (expectedStatus !== 200) dialogs.delete(id);
       return id;
     },
     async bye() {

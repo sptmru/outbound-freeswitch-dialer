@@ -14,7 +14,11 @@ import { registerDashboardRoutes } from "./dashboard/routes.js";
 import { startRetentionScheduler } from "./dashboard/retention-scheduler.js";
 import { createPool, runMigrations } from "./db.js";
 import { startFreeSwitchEventListener } from "./esl-events.js";
-import { provisionAllAgentDirectories, startAgentDirectoryReconciler } from "./freeswitch/provisioning.js";
+import {
+  provisionAllAgentDirectories,
+  startAgentDirectoryReconciler,
+  startInboundConfigurationReconciler
+} from "./freeswitch/provisioning.js";
 import { registerHealthRoutes } from "./health.js";
 import { registerMetrics } from "./metrics.js";
 import { startPcapCaptureFinalizer } from "./pcap-capture.js";
@@ -58,6 +62,7 @@ let stopAgentRegistrationReconciler: (() => void) | null = null;
 let stopDatabaseLiveEventListener: (() => void) | null = null;
 let stopRetentionScheduler: (() => void) | null = null;
 let stopAgentDirectoryReconciler: (() => void) | null = null;
+let stopInboundConfigurationReconciler: (() => void) | null = null;
 let stopCallRecordingFinalizer: (() => void) | null = null;
 let stopPcapCaptureFinalizer: (() => void) | null = null;
 
@@ -161,12 +166,14 @@ async function start() {
   stopFreeSwitchEventListener = startFreeSwitchEventListener(config, pool, app.log);
   stopAgentRegistrationReconciler = startAgentRegistrationReconciler(config, pool, app.log);
   stopAgentDirectoryReconciler = startAgentDirectoryReconciler(pool, config, app.log);
+  stopInboundConfigurationReconciler = startInboundConfigurationReconciler(pool, config, app.log);
 }
 
 const shutdown = async () => {
   app.log.info("shutting down");
   stopAgentRegistrationReconciler?.();
   stopAgentDirectoryReconciler?.();
+  stopInboundConfigurationReconciler?.();
   stopFreeSwitchEventListener?.();
   stopCallRecordingFinalizer?.();
   stopPcapCaptureFinalizer?.();
