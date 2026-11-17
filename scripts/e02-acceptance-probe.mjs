@@ -1,3 +1,4 @@
+import { proveTransferExecution, proveOutboundTransferExecution } from "./g02-transfer-execution.mjs";
 import assert from "node:assert/strict";
 import { proveTransferSourceContinuity } from "./g01-transfer-continuity.mjs";
 import { randomUUID } from "node:crypto";
@@ -72,7 +73,8 @@ let f,
   phone,
   eventError,
   draining = false,
-  cursor = 0;
+  cursor = 0,
+  transferRuntime;
 const log = await open(join(directory, "agent.log"), "a");
 let inflight;
 async function drain() {
@@ -105,6 +107,7 @@ async function clean(id) {
     () =>
       checked(async () => {
         try {
+          if (transferRuntime) await transferRuntime.reconcile();
           await reconcileCoordinatedCallCleanup(f.pool, id);
         } catch (error) {
           if (!adapter.isTransientPersistenceError(error)) throw error;
@@ -294,6 +297,8 @@ try {
   );
   await until(() => phone.received.length >= 2400, "agent receives customer RTP");
   const reverseTone = assertTone(phone.received.slice(-2400), 880);
+  if (process.env.G02_TRANSFERS === "1")
+    transferRuntime = await proveTransferExecution({ f, c, phone, command, pass, limited });
   if (process.env.G01_TRANSFERS === "1") await proveTransferSourceContinuity({ f, c, phone, command, pass });
   await delay(400);
   await until(
@@ -308,6 +313,7 @@ try {
   });
   c.control.hangup();
   const media = await c.result;
+  if (transferRuntime) await transferRuntime.reconcile();
   const tone = assertTone(
     media.rtp.slice(-15).flatMap((p) => p.payload.map(decodeUlaw)),
     660
@@ -321,6 +327,20 @@ try {
     invites: phone.invites.length - before
   });
 
+  if (process.env.G02_TRANSFERS === "1")
+    await proveOutboundTransferExecution({ f, phone, command, limited, pass });
+  if (process.env.G02_TRANSFERS === "1") {
+    for (const direction of ["inbound", "outbound"])
+      for (const lossBoundary of [
+        "customer_terminal_before_originate",
+        "before_originate",
+        "before_park",
+        "after_park",
+        "after_bridge"
+      ]) {
+        await proveOutboundTransferExecution({ f, phone, command, limited, pass, direction, lossBoundary });
+      }
+  }
   const early = await startCall(),
     earlyOffer = await offerFor(early),
     earlyInput = intent();
@@ -551,6 +571,8 @@ try {
 } catch (error) {
   report.status = "failed";
   report.error = error.stack;
+  await save();
+  if (process.env.G02_TRANSFERS === "1") await command("hupall NORMAL_CLEARING");
   throw error;
 } finally {
   if (timer) clearInterval(timer);

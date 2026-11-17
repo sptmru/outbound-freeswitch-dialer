@@ -138,8 +138,17 @@ export async function persistCoordinatedCallEvent(pool: pg.Pool, input: Concrete
                 )
               ).rows[0]?.outcome
             : null;
-          const outcome: CallOutcome =
-            input.playback === "completed"
+          const transferFailure = (
+            await client.query(
+              `select 1 from call_operations o join call_execution_attempts a on a.operation_id=o.id
+            where o.call_id=$1 and o.target_uuid::text=$2 and o.request->>'transferOfferAcceptance'='true'
+              and o.request->>'transferAction'='cleanup_customer' limit 1`,
+              [input.callId, input.legUuid]
+            )
+          ).rowCount;
+          const outcome: CallOutcome = transferFailure
+            ? "failed"
+            : input.playback === "completed"
               ? "voicemail_dropped"
               : input.playback === "failed"
                 ? "failed"

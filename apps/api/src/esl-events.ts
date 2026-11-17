@@ -1,3 +1,4 @@
+import { persistTransferEvent, persistTransferJob } from "./transfer-connection.js";
 import { persistInboundForwardingEvent } from "./inbound-forwarding.js";
 import { persistInboundFallbackJob, persistInboundFallbackEvent } from "./inbound-fallback.js";
 import { persistInboundQueueEvent, persistInboundQueueJob } from "./inbound-queue.js";
@@ -59,6 +60,7 @@ const EVENT_NAMES = [
   "CHANNEL_PROGRESS_MEDIA",
   "CHANNEL_ANSWER",
   "CHANNEL_BRIDGE",
+  "CHANNEL_PARK",
   "CHANNEL_HANGUP",
   "CHANNEL_HANGUP_COMPLETE",
   "CHANNEL_DESTROY",
@@ -352,11 +354,16 @@ async function persistFreeSwitchEvent(
 ): Promise<void> {
   if (
     frame.headers["event-name"] === "BACKGROUND_JOB" &&
-    ((await persistInboundFallbackJob(pool, {
+    ((await persistTransferJob(pool, {
       jobUuid: frame.headers["job-uuid"] ?? "",
       body: frame.body,
       headers: frame.headers
     })) ||
+      (await persistInboundFallbackJob(pool, {
+        jobUuid: frame.headers["job-uuid"] ?? "",
+        body: frame.body,
+        headers: frame.headers
+      })) ||
       (await persistInboundConnectionJob(pool, {
         jobUuid: frame.headers["job-uuid"] ?? "",
         body: frame.body,
@@ -369,6 +376,7 @@ async function persistFreeSwitchEvent(
       })))
   )
     return;
+  await persistTransferEvent(pool, frame.headers);
   if (await persistInboundForwardingEvent(pool, frame.headers)) return;
   if (await persistInboundFallbackEvent(pool, frame.headers)) return;
   if (await persistInboundQueueEvent(pool, frame.headers, frame.body)) return;

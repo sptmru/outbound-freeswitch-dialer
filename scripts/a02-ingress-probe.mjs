@@ -255,6 +255,7 @@ export async function invite({
       sdp
     );
     control?.({
+      packets: () => packets,
       cancel: () => send("CANCEL", uri, 1, to),
       hangup: () => send("BYE", dialogTarget, 2, dialogTo, [], "", `z9hG4bK${randomUUID()}`)
     });

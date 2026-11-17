@@ -70,7 +70,7 @@ export async function authorizeServiceInvite(
                   and x.settled_at is null and x.deadline_at>clock_timestamp() and f.state='accepted'))
             or (o.command_kind in ('originate','rebridge') and exists(select 1 from call_transfers t
               where t.operation_id=o.id and t.call_id=c.id and t.recipient_agent_id=a.id
-                and t.state in ('connecting','switching') and t.closed_at is null and t.deadline_at>clock_timestamp()
+                and t.state in ('connecting','switching') and t.closed_at is null
                 and exists(select 1 from call_offers f where f.transfer_id=t.id and f.agent_id=a.id
                   and f.state='accepted' and f.desk_session_id=d.id and f.binding_generation=d.binding_generation)))
           )`,

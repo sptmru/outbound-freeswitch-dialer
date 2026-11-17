@@ -204,3 +204,7 @@ through an independent FS-local SQLite journal and a Unix control socket. It
 creates pre-queue `received`/terminal history with original route/deadline and
 post-commit sequence ACKs. Capture defaults off and still refuses before answer;
 D04 queue/admission ACK and I01–I05 acceptance/activation remain separate.
+
+[G02 transfer connection](inbound-transfer-connection.md) adds staged durable recipient
+originate, customer-preserving park/rebridge, confirmed ownership and fenced cleanup.
+Its verification record distinguishes DB simulation, local FS/RTP and unrun target gates.
