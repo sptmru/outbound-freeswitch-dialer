@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { proveTransferSourceContinuity } from "./g01-transfer-continuity.mjs";
 import { randomUUID } from "node:crypto";
 import { fork } from "node:child_process";
 import { once } from "node:events";
@@ -293,6 +294,7 @@ try {
   );
   await until(() => phone.received.length >= 2400, "agent receives customer RTP");
   const reverseTone = assertTone(phone.received.slice(-2400), 880);
+  if (process.env.G01_TRANSFERS === "1") await proveTransferSourceContinuity({ f, c, phone, command, pass });
   await delay(400);
   await until(
     () => Date.now() > connected.queue_deadline_at.getTime() + 150,
@@ -537,7 +539,13 @@ try {
   assert.equal(report.snapshot.call_capacity_reservations.filter((r) => r.state !== "released").length, 0);
   assert.equal(report.snapshot.call_operations.filter((r) => !r.resolved_at).length, 0);
   assert.equal(report.snapshot.agent_call_slots.filter((r) => r.state !== "free").length, 0);
-  assert.equal(JSON.parse(await command("show channels as json")).row_count, 0);
+  // CHANNEL_DESTROY persistence can precede final removal from FS channel tables.
+  // Require bounded observed convergence; never kill a channel to make this pass.
+  await until(
+    async () => JSON.parse(await command("show channels as json")).row_count === 0,
+    "all actual channels removed",
+    5000
+  );
   if (eventError) throw eventError;
   report.status = "passed";
 } catch (error) {

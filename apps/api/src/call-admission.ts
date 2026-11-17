@@ -197,7 +197,8 @@ export class CallAdmission {
       const o = offer.rows[0];
       if (o) this.assertCall(o.call_id);
       if (o?.state === "expired") reason = "offer_expired";
-      else if (!o || o.state !== "pending" || o.ended_at || o.excluded) reason = "offer_closed";
+      else if (!o || o.state !== "pending" || o.ended_at || (o.kind === "inbound" && o.excluded))
+        reason = "offer_closed";
       else if (
         o.desk_session_id !== input.deskSessionId ||
         o.desk_revision !== input.expectedRevision ||

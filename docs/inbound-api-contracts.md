@@ -211,8 +211,8 @@ No unimplemented operation is added to the main live `paths`. It specifies:
 | Operations                                                                          | Request / response                                                       |
 | ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
 | GET `/agent/calls/{callId}/transfer-targets`                                        | no body / TransferTargetsResponse                                        |
-| POST `/agent/calls/{callId}/transfers`                                              | CreateTransferRequest / TransferSnapshot                                 |
-| DELETE `/agent/calls/{callId}/transfers/{transferId}`                               | DeskMutationRequest / TransferSnapshot                                   |
+| POST `/agent/calls/{callId}/transfers`                                              | CreateTransferRequest / CreateTransferResponse                           |
+| DELETE `/agent/calls/{callId}/transfers/{transferId}`                               | DeskMutationRequest / CoordinationMutationResponse                       |
 | GET, POST `/admin/inbound-numbers`, `/admin/inbound-queues`, `/admin/inbound-flows` | list or SaveInbound*Request / typed list or snapshot                     |
 | PATCH, DELETE each `/admin/inbound-*/{id}` collection above                         | SaveInbound*Request or InboundAdminMutation / snapshot or DeleteResponse |
 
@@ -281,6 +281,13 @@ The twelve configuration operations for `/admin/inbound-numbers`,
 in live OpenAPI. See [F01](inbound-admin-configuration.md) for full replacement,
 revision/idempotency, finite continuation, active reference, delete/disable, audit
 and application-state semantics. `SaveInboundFlowRequest.enabled` is optional
-(default true); returned flow snapshots include `enabled`. Only transfer operations
-remain in the contract-only catalog. Provider delivery and I05 activation are
+(default true); returned flow snapshots include `enabled`. G01 subsequently mounts transfer operations; the contract-only catalog is empty. Provider delivery and I05 activation are
 separate; configuration saves do not execute media.
+
+## G01 transfer offer implementation
+
+The transfer-target/create/cancel routes and transfer branches of shared offer
+actions are mounted and described in live OpenAPI. See [G01](inbound-transfer-offers.md)
+for replay, expiry, source preservation, capacity and execution boundaries. A separate
+G02 adapter is required for HTTP acceptance; the default bootstrap refuses it before
+reservation. Native media execution and I05 activation remain staged.

@@ -94,8 +94,10 @@ export async function withOfferRecipient<T>(
 async function snapshot(client: pg.PoolClient, agentId: string): Promise<CallOfferSnapshot | null> {
   const row = (
     await client.query(
-      `select o.*,c.campaign_id,c.calling_number from call_offers o join calls c on c.id=o.call_id
-     where o.agent_id=$1 and o.kind='inbound' and o.state='pending'`,
+      `select o.*,c.campaign_id,
+       case when c.direction='outbound' then c.normalized_destination_number else c.calling_number end as calling_number
+     from call_offers o join calls c on c.id=o.call_id
+     where o.agent_id=$1 and o.state='pending'`,
       [agentId]
     )
   ).rows[0];
@@ -154,6 +156,15 @@ async function refresh(
         or call.queue_exited_at is not null or call.fallback_started_at is not null or call.queue_deadline_at<=stamp.at)`,
     [agentId, blocked !== null, desk?.id ?? null, desk?.revision ?? null, desk?.binding_generation ?? null]
   );
+  await c.query(
+    `with stamp as materialized(select clock_timestamp() as at)
+    update call_transfers t set state='canceled',reason='eligibility_changed',closed_at=stamp.at
+    from stamp,call_offers o where o.transfer_id=t.id and t.state='offered' and o.state='pending'
+      and o.agent_id=$1 and ($2::boolean or o.desk_session_id is distinct from $3::uuid
+        or o.desk_revision is distinct from $4::bigint or o.binding_generation is distinct from $5::bigint)`,
+    [agentId, blocked !== null, desk?.id ?? null, desk?.revision ?? null, desk?.binding_generation ?? null]
+  );
+  await expireInboundOffers(c, [agentId]);
   if (!create || blocked !== null || !desk) return snapshot(c, agentId);
   if (a.startPaused) return snapshot(c, agentId);
   // A pending transfer also occupies the single offer position.
@@ -286,7 +297,7 @@ export function startInboundOfferDispatcher(pool: pg.Pool, report: (error: unkno
         await pool.query(
           `select id from agents where id>$1 and
         (exists(select 1 from agent_desk_sessions d where d.agent_id=agents.id and d.revoked_at is null)
-        or exists(select 1 from call_offers o where o.agent_id=agents.id and o.kind='inbound' and o.state='pending'))
+        or exists(select 1 from call_offers o where o.agent_id=agents.id and o.state='pending'))
         order by id limit 20`,
           [after]
         )

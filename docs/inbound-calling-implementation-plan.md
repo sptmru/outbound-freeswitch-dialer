@@ -635,6 +635,10 @@ from deletion and define replacement/disable behavior.
 
 ## 8. Agent Transfers
 
+[G01 transfer offers and admission](inbound-transfer-offers.md) implements staged
+proposal/closure APIs and recipient reservations. G02 owns execution and confirmed
+handover; I05 owns activation.
+
 Preserve one product call through all directions and transfers.
 
 1. Select a colleague; availability lists are hints, not reservations.

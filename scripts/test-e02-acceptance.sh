@@ -34,7 +34,7 @@ node node_modules/typescript/bin/tsc -p apps/api/tsconfig.test.json
 mkdir "$RUN_DIR/socket"
 chmod 777 "$RUN_DIR/socket"
 git rev-parse HEAD > "$RUN_DIR/base-revision.txt"
-sha256sum apps/api/src/service-invite*.ts apps/api/src/esl.ts apps/api/src/freeswitch/*.ts infra/freeswitch/entrypoint.sh infra/freeswitch/templates/inbound/* apps/api/src/ingress-*.ts apps/api/src/inbound-ingress*.ts apps/api/src/inbound-queue*.ts apps/api/src/esl-events.ts apps/api/src/call-cleanup.ts infra/freeswitch/templates/dialplan/inbound-wait.xml.tpl \
+sha256sum apps/api/src/transfer-offers.ts apps/api/src/call-offer-expiry.ts scripts/g01-transfer-continuity.mjs apps/api/src/service-invite*.ts apps/api/src/esl.ts apps/api/src/freeswitch/*.ts infra/freeswitch/entrypoint.sh infra/freeswitch/templates/inbound/* apps/api/src/ingress-*.ts apps/api/src/inbound-ingress*.ts apps/api/src/inbound-queue*.ts apps/api/src/esl-events.ts apps/api/src/call-cleanup.ts infra/freeswitch/templates/dialplan/inbound-wait.xml.tpl \
   apps/api/db/migrations/*.sql apps/api/src/call-executor.ts apps/api/src/call-admission.ts apps/api/src/call-capacity.ts apps/api/src/dashboard/recordings.ts apps/api/src/inbound-acceptance*.ts apps/api/src/inbound-connection.ts scripts/e02-acceptance-probe.mjs scripts/a02-ingress-probe.mjs scripts/a05-media.mjs tests/fixtures/inbound/cleanup.mjs tests/fixtures/inbound/supervisor.mjs "$0" > "$RUN_DIR/source-sha256.txt"
 docker image inspect "$IMAGE" "$PG_IMAGE" --format '{{.Id}} {{json .RepoDigests}}' > "$RUN_DIR/images.txt"
 docker run -d --name "$NET_CONTAINER" --network none --memory 32m --pids-limit 8 \

@@ -138,7 +138,7 @@ const supervisorSessionParams = params("sessionId", "Supervisor session identifi
 add(
   "POST",
   "/agent/call-offers/:offerId/accept",
-  "Accept own inbound offer",
+  "Accept own inbound or transfer offer",
   "Atomically claims one winning slot and durable connection intent. Returns connecting before media; only correlated FreeSWITCH bridge evidence confirms connection. Requires the staged native executor dependency.",
   {
     params: params("offerId", "Inbound offer identifier"),
@@ -151,7 +151,7 @@ add(
 add(
   "GET",
   "/agent/call-offers",
-  "Read own inbound offer",
+  "Read own inbound or transfer offer",
   "Authoritative controller-scoped snapshot; expires due offers using database time. Realtime events only request a refresh.",
   {
     querystring: object({ deskSessionId: uuid("Controlling Desk session") }),
@@ -162,13 +162,50 @@ add(
 add(
   "POST",
   "/agent/call-offers/:offerId/ignore",
-  "Ignore own inbound offer",
-  "Atomically closes only the actor's pending inbound offer and persists its permanent call-agent exclusion. Transfer decline remains staged under G01. Replays never affect a later offer.",
+  "Ignore inbound or decline transfer offer",
+  "Atomically closes only the actor's pending inbound offer and persists its permanent call-agent exclusion. Transfer decline preserves the source conversation. Replays never affect a later offer.",
   {
     params: params("offerId", "Inbound offer identifier"),
     body: ref("DeskMutationRequest"),
     success: ref("CoordinationMutationResponse"),
     errors: [400, 401, 403, 409]
+  }
+);
+
+add(
+  "GET",
+  "/agent/calls/:callId/transfer-targets",
+  "List transfer recipients",
+  "Controller-scoped availability hints; create revalidates the selected recipient under admission.",
+  {
+    params: callParams,
+    querystring: object({ deskSessionId: uuid("Controlling Desk session") }),
+    success: ref("TransferTargetsResponse"),
+    errors: [400, 401, 409]
+  }
+);
+add(
+  "POST",
+  "/agent/calls/:callId/transfers",
+  "Offer a transfer",
+  "Creates one pending offer without reserving recipient media. Source ownership and conversation remain unchanged.",
+  {
+    params: callParams,
+    body: ref("CreateTransferRequest"),
+    success: ref("CreateTransferResponse"),
+    errors: [400, 401, 409]
+  }
+);
+add(
+  "DELETE",
+  "/agent/calls/:callId/transfers/:transferId",
+  "Cancel a pending transfer",
+  "Only the initiating owner can cancel an offered transfer. Accepted reservations require G02 reconciliation.",
+  {
+    params: object({ callId: uuid("Call identifier"), transferId: uuid("Transfer identifier") }),
+    body: ref("DeskMutationRequest"),
+    success: ref("CoordinationMutationResponse"),
+    errors: [400, 401, 409]
   }
 );
 

@@ -27,6 +27,7 @@ const commands = [
       "apps/api/dist-test/inbound-queue.integration.test.js",
       "apps/api/dist-test/inbound-dispatcher.integration.test.js",
       "apps/api/dist-test/inbound-acceptance.integration.test.js",
+      "apps/api/dist-test/transfer-offers.integration.test.js",
       "apps/api/dist-test/call-admission.integration.test.js",
       "apps/api/dist-test/eligibility.integration.test.js",
       "apps/api/dist-test/desk-sessions.integration.test.js",
@@ -49,7 +50,9 @@ const commands = [
 for (const [command, args] of commands) {
   const code = await new Promise((resolve, reject) => {
     const child = spawn(command, args, { stdio: "inherit" });
-    const timer = setTimeout(() => child.kill("SIGKILL"), 300000);
+    // The expanded real-PG matrix includes G01 process/rollback schedules.
+    // This suite watchdog is separate from unchanged admission/ESL budgets.
+    const timer = setTimeout(() => child.kill("SIGKILL"), 480000);
     child.once("error", (error) => {
       clearTimeout(timer);
       reject(error);

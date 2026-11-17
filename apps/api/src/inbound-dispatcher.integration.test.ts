@@ -694,6 +694,7 @@ test(
   async () => {
     const f = await fixture();
     let stop: (() => void) | undefined;
+    let listener: pg.PoolClient | undefined;
     try {
       const a = await f.agent(),
         call = await queued(f),
@@ -709,22 +710,29 @@ test(
       } as unknown as Parameters<typeof startDatabaseLiveEventListener>[2];
       stop = startDatabaseLiveEventListener(f.pool, hub, logger);
       await subscribed;
-      const listener = await f.pool.connect();
+      listener = await f.pool.connect();
       await listener.query("listen outbound_dialer_changes");
       async function fence() {
-        // NOTIFY on a separate channel payload forms an ordered commit fence. All
-        // earlier transaction hints are delivered on the same listener connection.
-        const done = new Promise<void>((resolve) => {
+        // An ordered NOTIFY commit fence proves delivery without timing sleeps.
+        await new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(() => {
+            unsub();
+            reject(new Error(`E01 notification fence timed out: ${JSON.stringify(events)}`));
+          }, 2000);
           const unsub = hub.subscribe((e) => {
             events.push(e.source);
             if (e.source === "e01-fence") {
+              clearTimeout(timer);
               unsub();
               resolve();
             }
           });
+          void listener!.query("select pg_notify('outbound_dialer_changes','e01-fence')").catch((error) => {
+            clearTimeout(timer);
+            unsub();
+            reject(error);
+          });
         });
-        await listener.query("select pg_notify('outbound_dialer_changes','e01-fence')");
-        await done;
       }
       await assert.rejects(
         dispatchInboundOffers(f.pool, a.id, async () => {
@@ -747,9 +755,13 @@ test(
         (await f.pool.query("select state from calls where id=$1", [call])).rows[0].state,
         "queued"
       );
-      await listener.query("unlisten outbound_dialer_changes");
-      listener.release();
     } finally {
+      // Failure must release the extra listener before pool.end; otherwise a
+      // useful assertion is hidden behind the test's global timeout.
+      if (listener) {
+        await listener.query("unlisten outbound_dialer_changes");
+        listener.release();
+      }
       stop?.();
       await f.cleanup();
     }

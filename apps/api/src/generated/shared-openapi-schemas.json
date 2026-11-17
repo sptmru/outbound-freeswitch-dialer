@@ -378,6 +378,18 @@
     ],
     "additionalProperties": false
   },
+  "CreateTransferResponse": {
+    "$id": "CreateTransferResponse",
+    "type": "object",
+    "properties": {
+      "status": { "type": "string", "const": "applied" },
+      "revision": { "$ref": "DeskRevision#" },
+      "transfer": { "$ref": "TransferSnapshot#" },
+      "offerId": { "type": "string" }
+    },
+    "required": ["status", "revision", "transfer", "offerId"],
+    "additionalProperties": false
+  },
   "TransferTargetsResponse": {
     "$id": "TransferTargetsResponse",
     "type": "object",
@@ -469,6 +481,7 @@
       "capacity_exhausted",
       "call_outcome_uncertain",
       "transfer_in_progress",
+      "incoming_pending",
       "voicemail_unavailable"
     ]
   },

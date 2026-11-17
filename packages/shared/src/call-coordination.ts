@@ -160,6 +160,12 @@ export interface DeskCoordination {
 export interface CreateTransferRequest extends DeskMutationRequest {
   recipientAgentId: string;
 }
+export interface CreateTransferResponse {
+  status: "applied";
+  revision: DeskRevision;
+  transfer: TransferSnapshot;
+  offerId: string;
+}
 export interface TransferTargetsResponse {
   revision: DeskRevision;
   items: Array<{ agentId: string; name: string; available: boolean; reason: string | null }>;
@@ -196,6 +202,7 @@ export const coordinationErrorCodes = [
   "capacity_exhausted",
   "call_outcome_uncertain",
   "transfer_in_progress",
+  "incoming_pending",
   "voicemail_unavailable"
 ] as const;
 export type CoordinationErrorCode = (typeof coordinationErrorCodes)[number];

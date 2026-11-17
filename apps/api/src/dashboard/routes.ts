@@ -85,6 +85,7 @@ import { requireUser } from "../auth/routes.js";
 import { registerInboundAdminRoutes } from "./inbound-admin.js";
 import { registerDeskSessionRoutes } from "./desk-sessions.js";
 import { registerServiceInviteRoutes } from "./service-invites.js";
+import { registerTransferRoutes } from "./transfers.js";
 import { registerCallOfferRoutes } from "./call-offers.js";
 import { setAgentAvailability } from "../agent-availability.js";
 import type { AppConfig } from "../config.js";
@@ -447,6 +448,7 @@ export function registerDashboardRoutes(
   registerDeskSessionRoutes(app, config, pool);
   registerServiceInviteRoutes(app, config, pool);
   registerCallOfferRoutes(app, config, pool, inboundConnection);
+  registerTransferRoutes(app, config, pool);
   async function coordinatedSupervisor(
     request: FastifyRequest,
     user: { id: string },

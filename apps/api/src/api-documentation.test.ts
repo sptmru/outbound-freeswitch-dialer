@@ -153,7 +153,15 @@ test("documents every registered API route with request and response contracts",
   const exposed = app.swagger() as unknown as Record<string, unknown>;
   assert.deepEqual(exposed["x-planned-call-coordination"], planned);
   assert.equal(planned.status, "contract-only");
-  assert.equal(plannedCallCoordinationOperations.length, 3);
+  assert.equal(plannedCallCoordinationOperations.length, 0);
+  assert.deepEqual(planned.paths, {});
+  for (const [path, method] of [
+    ["/agent/calls/{callId}/transfer-targets", "get"],
+    ["/agent/calls/{callId}/transfers", "post"],
+    ["/agent/calls/{callId}/transfers/{transferId}", "delete"]
+  ]) {
+    assert.ok(document.paths[path]?.[method], `Mounted G01 route missing: ${method} ${path}`);
+  }
   assert.equal(
     document.paths["/agent/call-offers"].get.responses[200].content["application/json"].schema.$ref,
     "#/components/schemas/CallOffersResponse"

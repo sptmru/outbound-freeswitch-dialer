@@ -9,28 +9,8 @@ type ContractOperation = {
   response: string;
   role: "authenticated" | "admin";
 };
-export const plannedCallCoordinationOperations: ContractOperation[] = [
-  {
-    method: "get",
-    path: "/agent/calls/{callId}/transfer-targets",
-    response: "TransferTargetsResponse",
-    role: "authenticated"
-  },
-  {
-    method: "post",
-    path: "/agent/calls/{callId}/transfers",
-    request: "CreateTransferRequest",
-    response: "TransferSnapshot",
-    role: "authenticated"
-  },
-  {
-    method: "delete",
-    path: "/agent/calls/{callId}/transfers/{transferId}",
-    request: "DeskMutationRequest",
-    response: "TransferSnapshot",
-    role: "authenticated"
-  }
-];
+// All B05 operations now have mounted handlers. Runtime activation is still I05.
+export const plannedCallCoordinationOperations: ContractOperation[] = [];
 
 export function plannedCallCoordinationCatalog() {
   const paths: Record<string, Record<string, unknown>> = {};
