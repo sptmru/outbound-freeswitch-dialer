@@ -2,6 +2,10 @@
 
 This document reconciles the original delivery plan with the current repository. “Implemented” means source and automated coverage exist; it does not mean the target SIP provider, production host, or client has accepted the behavior.
 
+[F05 inbound administration screens](inbound-admin-ui.md) add `/inbound` for
+number/queue/finite-flow configuration, independent audio uploads and explicit
+saved/applied/error feedback. Provider activation remains gated by I04/I05.
+
 ## Outcome
 
 The planned single-tenant operational MVP is implemented in the repository. The remaining path to “complete” is evidence and external decision work: provider configuration, real call/voicemail validation, policy approval, load/recovery/restore drills, accessibility review, training, and sign-off.

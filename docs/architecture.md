@@ -1,5 +1,9 @@
 # Architecture
 
+[F05 inbound administration screens](inbound-admin-ui.md) add `/inbound` for
+number/queue/finite-flow configuration, independent audio uploads and explicit
+saved/applied/error feedback. Provider activation remains gated by I04/I05.
+
 ## System Model
 
 The implemented system is a backend-controlled, single-tenant outbound dialer. The browser is an authenticated agent media endpoint; it never owns PSTN routing or destination authorization. Fastify and FreeSWITCH coordinate call control through ESL, while PostgreSQL is the durable source of product state and event history.

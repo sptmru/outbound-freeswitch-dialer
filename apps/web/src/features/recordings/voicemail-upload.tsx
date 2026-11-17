@@ -5,10 +5,12 @@ import type { AdminOverviewResponse } from "../../types";
 
 export function VoicemailUpload({
   campaigns,
+  inbound = false,
   initialCampaignId = "",
   onUploaded,
   onCancel
 }: {
+  inbound?: boolean;
   campaigns: AdminOverviewResponse["campaigns"];
   initialCampaignId?: string;
   onUploaded: () => Promise<void>;
@@ -17,7 +19,7 @@ export function VoicemailUpload({
   const [campaignId, setCampaignId] = useState(initialCampaignId);
   const [file, setFile] = useState<File | null>(null);
   const [name, setName] = useState("");
-  const [useForCampaign, setUseForCampaign] = useState(true);
+  const [useForCampaign, setUseForCampaign] = useState(!inbound);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   async function submit(event: FormEvent<HTMLFormElement>) {
@@ -30,11 +32,11 @@ export function VoicemailUpload({
         file,
         name: name.trim() || file.name.replace(/\.[^.]+$/, ""),
         campaignId,
-        useForCampaign
+        useForCampaign: inbound ? false : useForCampaign
       });
       await onUploaded();
     } catch (error) {
-      setError(getErrorMessage(error, "Could not upload voicemail"));
+      setError(getErrorMessage(error, inbound ? "Could not upload audio" : "Could not upload voicemail"));
     } finally {
       setPending(false);
     }
@@ -60,7 +62,7 @@ export function VoicemailUpload({
         </select>
       </label>
       <label>
-        Voicemail file
+        {inbound ? "Audio file" : "Voicemail file"}
         <input
           required
           disabled={pending}
@@ -74,31 +76,33 @@ export function VoicemailUpload({
         />
       </label>
       <label>
-        Voicemail name
+        {inbound ? "Audio name" : "Voicemail name"}
         <input
           value={name}
           disabled={pending}
           onChange={(event) => setName(event.target.value)}
-          placeholder="Campaign voicemail"
+          placeholder={inbound ? "Inbound audio" : "Campaign voicemail"}
         />
       </label>
-      <label className="checkbox-label">
-        <input
-          type="checkbox"
-          checked={useForCampaign}
-          disabled={pending}
-          onChange={(event) => setUseForCampaign(event.target.checked)}
-        />
-        Use for this campaign
-      </label>
-      <p>Applies to current calls that have not started a voicemail drop.</p>
+      {!inbound && (
+        <label className="checkbox-label">
+          <input
+            type="checkbox"
+            checked={useForCampaign}
+            disabled={pending}
+            onChange={(event) => setUseForCampaign(event.target.checked)}
+          />
+          Use for this campaign
+        </label>
+      )}
+      {!inbound && <p>Applies to current calls that have not started a voicemail drop.</p>}
       {error && (
         <p className="form-error" role="alert">
           {error}
         </p>
       )}
       <button className="primary-action" type="submit" disabled={pending || !file || !campaignId}>
-        {pending ? "Uploading" : "Upload voicemail"}
+        {pending ? "Uploading" : inbound ? "Upload audio" : "Upload voicemail"}
       </button>
       <button className="secondary-action" type="button" disabled={pending} onClick={onCancel}>
         Cancel

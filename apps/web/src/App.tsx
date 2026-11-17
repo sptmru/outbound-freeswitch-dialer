@@ -28,6 +28,7 @@ import { AnalyticsView } from "./features/analytics/analytics-view";
 import { Campaigns } from "./features/campaigns/campaigns-view";
 import { HistoryView } from "./features/history/history-view";
 import { LiveCallsView } from "./features/live-calls/live-calls-view";
+import { InboundAdmin } from "./features/inbound/inbound-admin";
 import { Recordings } from "./features/recordings/recordings-view";
 import { SettingsView } from "./features/settings/settings-view";
 import { LoginScreen, TopBar } from "./features/shell/app-shell";
@@ -41,10 +42,19 @@ import type { AdminOverviewResponse, AgentDeskResponse, CsvImportSummary, Public
 export { formatCallLifecycleStatus } from "./features/history/history-view";
 
 type View =
-  "desk" | "live" | "analytics" | "campaigns" | "recordings" | "history" | "suppression" | "settings";
+  | "inbound"
+  | "desk"
+  | "live"
+  | "analytics"
+  | "campaigns"
+  | "recordings"
+  | "history"
+  | "suppression"
+  | "settings";
 const selectedCampaignStorageKey = "outbound_dialer_selected_campaign_id";
 
 const viewPaths: Record<View, string> = {
+  inbound: "/inbound",
   desk: "/",
   live: "/live-calls",
   analytics: "/analytics",
@@ -103,6 +113,7 @@ const navItems: Array<{ id: View; label: string; icon: typeof BarChart3 }> = [
   { id: "live", label: "Live calls", icon: Headphones },
   { id: "analytics", label: "Analytics", icon: Activity },
   { id: "campaigns", label: "Campaigns", icon: Upload },
+  { id: "inbound", label: "Inbound routing", icon: Radio },
   { id: "recordings", label: "Recordings", icon: FileAudio },
   { id: "history", label: "Call history", icon: History },
   { id: "suppression", label: "Suppression", icon: Ban },
@@ -127,6 +138,7 @@ const deskRefreshSources = new Set([
 ]);
 
 const adminRefreshSources: Record<Exclude<View, "desk">, ReadonlySet<string>> = {
+  inbound: new Set(["recordings", "campaigns"]),
   live: new Set(["calls", "call_events", "call_supervisor_sessions"]),
   analytics: new Set(["agents", "calls", "call_events", "campaigns", "contacts"]),
   campaigns: new Set(["campaigns", "recordings", "contacts", "csv_imports", "csv_import_failures"]),
@@ -614,6 +626,7 @@ function AdminView({
         selectedCampaignId={selectedCampaignId}
       />
     ),
+    inbound: <InboundAdmin admin={admin} role={user.role} onChanged={onChanged} />,
     recordings: <Recordings admin={admin} onChanged={onChanged} />,
     history: <HistoryView admin={admin} refreshVersion={viewRefreshVersion} />,
     suppression: <SuppressionView admin={admin} onChanged={onChanged} />,

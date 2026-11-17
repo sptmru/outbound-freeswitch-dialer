@@ -943,3 +943,94 @@ test("F01.1–F01.3 DB/API: publisher route bound and disable after campaign arc
     await f.cleanup();
   }
 });
+
+test(
+  "F05.4 DB/API: lowering a queue limit preserves admitted work and records new capacity rejection",
+  options,
+  async () => {
+    const f = await fixture();
+    try {
+      const { admitInboundQueue, persistInboundQueueEvent } = await import("./inbound-queue.js");
+      await f.pool.query(
+        "update call_admission_migration set reconciliation_required=false,reconciled_at=clock_timestamp()"
+      );
+      const q = await f.queue();
+      const n = await f.save<InboundNumberSnapshot>("POST", "numbers", f.numberInput(q.id));
+      async function ingress() {
+        const uuid = randomUUID();
+        await importIngressRecord(f.pool, {
+          uuid,
+          journalId: randomUUID(),
+          sequence: 1,
+          arrivedUs: Date.now() * 1000,
+          did: n.did,
+          routeRevision: n.revision,
+          numberId: n.id,
+          queueId: q.id,
+          queueRevision: q.revision,
+          campaignId: f.campaign,
+          timeoutMs: 60000,
+          routeData: Buffer.from(JSON.stringify({ queue_timeout_ms: 60000, max_waiting_calls: 40 })).toString(
+            "base64url"
+          ),
+          callingNumber: "unknown",
+          terminalUs: null,
+          terminalReason: null
+        });
+        return uuid;
+      }
+      const a = await ingress(),
+        b = await ingress();
+      assert.ok(await admitInboundQueue(f.pool, a));
+      assert.ok(await admitInboundQueue(f.pool, b));
+      const before = (
+        await f.pool.query("select * from calls where id=any($1::uuid[]) order by id", [[a, b]])
+      ).rows;
+      const permits = (await f.pool.query("select * from call_capacity_reservations order by id")).rows;
+      const updated = await f.save<InboundQueueSnapshot>("PATCH", `queues/${q.id}`, {
+        ...f.queueInput(),
+        expectedRevision: q.revision,
+        configuration: { ...q.configuration, maxWaitingCalls: 1 }
+      });
+      assert.equal(updated.configuration.maxWaitingCalls, 1);
+      assert.deepEqual(
+        (await f.pool.query("select * from calls where id=any($1::uuid[]) order by id", [[a, b]])).rows,
+        before
+      );
+      assert.deepEqual(
+        (await f.pool.query("select * from call_capacity_reservations order by id")).rows,
+        permits
+      );
+      const c = await ingress();
+      assert.equal(await admitInboundQueue(f.pool, c), null);
+      const rejected = (await f.pool.query("select state,inbound_end_reason from calls where id=$1", [c]))
+        .rows[0];
+      assert.deepEqual(rejected, { state: "failed", inbound_end_reason: "capacity_exceeded" });
+      for (const table of ["call_offers", "call_operations", "call_capacity_reservations"])
+        assert.equal(
+          (await f.pool.query(`select count(*)::int as n from ${table} where call_id=$1`, [c])).rows[0].n,
+          0
+        );
+      for (const id of [a, b])
+        await persistInboundQueueEvent(f.pool, {
+          "event-name": "CHANNEL_DESTROY",
+          "event-uuid": randomUUID(),
+          "unique-id": id,
+          variable_outbound_dialer_ingress_uuid: id,
+          "hangup-cause": "NORMAL_CLEARING"
+        });
+      assert.equal(
+        (
+          await f.pool.query(
+            "select count(*)::int as n from call_capacity_reservations where state<>'released'"
+          )
+        ).rows[0].n,
+        0
+      );
+      const d = await ingress();
+      assert.ok(await admitInboundQueue(f.pool, d));
+    } finally {
+      await f.cleanup();
+    }
+  }
+);

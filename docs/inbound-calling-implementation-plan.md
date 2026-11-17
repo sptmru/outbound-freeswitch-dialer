@@ -668,6 +668,9 @@ as a completed dependency; this link does not enable product transfers.
 
 ## 9. API and UI
 
+[F05 administrator screens](inbound-admin-ui.md) implement number/queue/flow and
+audio configuration at `/inbound`, with saved/application states kept separate.
+
 [E04 service INVITE authorization](inbound-service-invites.md) defines the staged native media contract and its U/DB/browser/FS verification boundary. It does not install I05 bootstrap or enable provider traffic.
 
 B05 selects the [v1 shared API/transition contract](inbound-api-contracts.md).

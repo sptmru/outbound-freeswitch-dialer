@@ -6,7 +6,15 @@ import type { SoftphoneRuntime } from "../../softphone";
 import type { AgentDeskResponse, PublicUser } from "../../types";
 
 export type AppView =
-  "desk" | "live" | "analytics" | "campaigns" | "recordings" | "history" | "suppression" | "settings";
+  | "inbound"
+  | "desk"
+  | "live"
+  | "analytics"
+  | "campaigns"
+  | "recordings"
+  | "history"
+  | "suppression"
+  | "settings";
 
 export function LoginScreen({
   error,
@@ -98,6 +106,7 @@ export function TopBar({
   view: AppView;
 }) {
   const titles: Record<AppView, { title: string; subtitle: string }> = {
+    inbound: { title: "Inbound routing", subtitle: "Numbers, queues and no-answer handling" },
     desk: {
       title: "Agent desk",
       subtitle: desk.campaign

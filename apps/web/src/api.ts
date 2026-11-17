@@ -89,7 +89,7 @@ export function isApiError(error: unknown): error is ApiError {
   return error instanceof ApiError;
 }
 
-async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> {
+export async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> {
   const isFormData = options.body instanceof FormData;
   const hasBody = options.body !== undefined && options.body !== null;
   const response = await fetch(`${API_BASE_URL}${path}`, {

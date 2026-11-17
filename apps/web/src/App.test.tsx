@@ -1722,7 +1722,8 @@ describe("App Agent Desk empty states", () => {
     render(<App />);
 
     expect(await screen.findByRole("button", { name: "Campaigns" })).toBeDisabled();
-    expect(screen.getAllByTitle("Finish the active call first")).toHaveLength(7);
+    expect(screen.getByRole("button", { name: "Inbound routing" })).toBeDisabled();
+    expect(screen.getAllByTitle("Finish the active call first")).toHaveLength(8);
   });
 
   it("uses Dialer campaign branding and hides the unmapped company placeholder", async () => {

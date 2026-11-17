@@ -3818,3 +3818,68 @@ input[type="checkbox"] {
   min-height: 44px;
   padding: 0.5rem 1.25rem;
 }
+
+.inbound-admin {
+  display: grid;
+  gap: 1rem;
+}
+.inbound-toolbar {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+.inbound-toolbar button[aria-pressed="true"] {
+  outline: 2px solid currentColor;
+}
+.inbound-layout {
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr) minmax(300px, 2fr);
+  gap: 1rem;
+}
+.inbound-admin fieldset {
+  display: grid;
+  gap: 1rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 0.5rem;
+  padding: 1rem;
+  min-width: 0;
+}
+.inbound-admin label {
+  display: grid;
+  gap: 0.4rem;
+}
+.inbound-item {
+  display: grid;
+  gap: 0.5rem;
+  padding: 1rem 0;
+  border-bottom: 1px solid #cbd5e1;
+  overflow-wrap: anywhere;
+}
+.inbound-application {
+  font-size: 0.875rem;
+}
+@media (max-width: 800px) {
+  .inbound-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.inbound-field {
+  display: grid;
+  gap: 0.4rem;
+}
+.inbound-admin button:not(.primary-action):not(.danger-action) {
+  border: 1px solid #cbd5e1;
+  border-radius: 0.5rem;
+  background: #fff;
+  color: #334155;
+  padding: 0.6rem 0.85rem;
+  cursor: pointer;
+}
+.inbound-admin button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+.inbound-admin button:focus-visible {
+  outline: 2px solid #7c3aed;
+  outline-offset: 2px;
+}
