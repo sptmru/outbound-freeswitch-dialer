@@ -15,7 +15,15 @@ export interface CommandIntent {
   scope: string;
   key: string;
   fingerprint: string;
-  kind: "originate" | "bridge" | "rebridge" | "play_audio" | "hangup" | "release_agent" | "forward_external";
+  kind:
+    | "originate"
+    | "bridge"
+    | "rebridge"
+    | "play_audio"
+    | "hangup"
+    | "release_agent"
+    | "forward_external"
+    | "send_dtmf";
   generation: string;
   commandUuid: string;
   targetUuid: string | null;

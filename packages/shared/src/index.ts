@@ -905,6 +905,7 @@ export interface CampaignVoicemailResponse {
 export interface SendDtmfRequest {
   digit: string;
   campaignId?: string;
+  intent?: DeskMutationRequest;
 }
 
 export interface MutationResponse<T> {

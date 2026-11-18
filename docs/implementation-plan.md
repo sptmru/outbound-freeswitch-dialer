@@ -214,3 +214,8 @@ source recipient selector/request/cancel and recipient acceptance/decline, with
 server-owned progress, current-slot control fencing and atomic manual-start UX.
 U/B consumer and real PostgreSQL endpoint checks remain separate from integrated
 media/provider and I05 activation gates.
+
+[G04 post-transfer boundaries](inbound-post-transfer-boundaries.md) adds current-owner
+native controls, exact-leg former-agent telemetry and confirmed supervisor teardown
+before handover. Replacement monitoring requires a new explicit listen-first session.
+Its API/DB/component and local FS evidence remains separate from I01–I05 acceptance.

@@ -14,7 +14,9 @@ vi.mock("../../api", async (original) => ({
   acceptCallOffer: vi.fn(),
   ignoreCallOffer: vi.fn(),
   startNextCall: vi.fn(),
-  endCall: vi.fn()
+  endCall: vi.fn(),
+  dropVoicemail: vi.fn(),
+  sendDtmf: vi.fn()
 }));
 function mount(desk = transferSource()) {
   const changed = vi.fn();
@@ -256,3 +258,41 @@ it("G03.3 late Accept cannot overwrite a failed transfer with Connecting feedbac
   expect(screen.queryByText("Connecting…")).toBeNull();
   expect(view.changed).not.toHaveBeenCalled();
 });
+
+for (const control of ["hangup", "voicemail", "dtmf"] as const) {
+  it(`G04.1 ${control} sends current Desk authority and refetches an accepted operation`, async () => {
+    const desk = transferSource();
+    desk.activeCall!.recordingId = "recording";
+    desk.activeCall!.actions!.dropVoicemail = { allowed: true, reason: null };
+    const fn =
+      control === "hangup" ? api.endCall : control === "voicemail" ? api.dropVoicemail : api.sendDtmf;
+    vi.mocked(fn).mockResolvedValue({
+      status: "accepted",
+      callId: desk.activeCall!.id,
+      operationId: "operation",
+      revision: "1"
+    });
+    const done = structuredClone(desk);
+    done.activeCall = null;
+    vi.mocked(api.fetchAgentDesk).mockResolvedValue(done);
+    const view = mount(desk);
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: control === "hangup" ? "Hang up" : control === "voicemail" ? "Drop voicemail" : "5"
+      })
+    );
+    await waitFor(() => expect(fn).toHaveBeenCalledOnce());
+    expect(vi.mocked(fn).mock.calls[0][1]).toEqual(
+      expect.objectContaining({
+        intent: expect.objectContaining({
+          deskSessionId: desk.coordination!.session!.id,
+          expectedRevision: "1",
+          bindingGeneration: "1",
+          idempotencyKey: expect.any(String)
+        })
+      })
+    );
+    await waitFor(() => expect(view.changed).toHaveBeenCalledWith(done));
+    expect(view.changed).not.toHaveBeenCalledWith(expect.objectContaining({ status: "accepted" }));
+  });
+}

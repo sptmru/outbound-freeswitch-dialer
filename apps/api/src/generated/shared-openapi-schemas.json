@@ -2946,7 +2946,11 @@
   "SendDtmfRequest": {
     "$id": "SendDtmfRequest",
     "type": "object",
-    "properties": { "digit": { "type": "string" }, "campaignId": { "type": "string" } },
+    "properties": {
+      "digit": { "type": "string" },
+      "campaignId": { "type": "string" },
+      "intent": { "$ref": "DeskMutationRequest#" }
+    },
     "required": ["digit"],
     "additionalProperties": false
   },

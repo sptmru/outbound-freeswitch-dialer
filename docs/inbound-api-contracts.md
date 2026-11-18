@@ -291,3 +291,12 @@ actions are mounted and described in live OpenAPI. See [G01](inbound-transfer-of
 for replay, expiry, source preservation, capacity and execution boundaries. A separate
 G02 adapter is required for HTTP acceptance; the default bootstrap refuses it before
 reservation. Native media execution and I05 activation remain staged.
+
+## G04 current-owner controls and participant telemetry
+
+See [G04](inbound-post-transfer-boundaries.md) for native DTMF `intent`, durable
+control responses and exact-leg telemetry at
+`PUT /agent/calls/:callId/legs/:legUuid/browser-media`. The existing telemetry body
+is unchanged; the server resolves the authenticated participant and bounds its
+interval, including delayed former-owner uploads. Legacy request shapes remain
+feature-off compatible; no native production adapter is enabled here.

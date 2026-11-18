@@ -15,7 +15,7 @@ export class CallControlError extends Error {
     super(reason);
   }
 }
-type Action = "end" | "drop-voicemail";
+type Action = "end" | "drop-voicemail" | "dtmf";
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 // A server-owned absolute recording path must fit one literal dialplan destination.
 const path = /^\/[A-Za-z0-9_./-]+$/;
@@ -31,6 +31,7 @@ export async function admitNativeCallControl(
     actorAuthVersion: number;
     action: Action;
     intent: DeskMutationRequest;
+    digit?: string;
     audit?: Record<string, unknown>;
   }
 ): Promise<CallControlResponse & { replayed: boolean }> {
@@ -53,7 +54,10 @@ export async function admitNativeCallControl(
           throw new CallControlError("not_controller");
         const route = `/agent/calls/:callId/${input.action}`;
         const scope = idempotencyScope(input.actorUserId, "POST", route, input.callId);
-        const fingerprint = requestFingerprint("POST", route, input.callId, { intent: input.intent });
+        const fingerprint = requestFingerprint("POST", route, input.callId, {
+          intent: input.intent,
+          ...(input.action === "dtmf" ? { digit: input.digit } : {})
+        });
         const old = (
           await client.query(
             "select * from call_operations where idempotency_scope=$1 and idempotency_key=$2",
@@ -134,6 +138,13 @@ export async function admitNativeCallControl(
           reservationId: owner.reservation_id,
           generation: owner.generation
         };
+        if (
+          input.action === "dtmf" &&
+          (!/^[0-9*#]$/.test(input.digit ?? "") ||
+            !customer ||
+            !["bridged", "agent_connected", "voicemail_signal_detected"].includes(call.state))
+        )
+          throw new CallControlError("not_owner");
         let recording: { id: string; runtime_file_path: string } | undefined;
         if (input.action === "drop-voicemail") {
           if (!customer || !["bridged", "voicemail_signal_detected", "agent_connected"].includes(call.state))
@@ -160,9 +171,11 @@ export async function admitNativeCallControl(
           revision: owner.revision
         };
         const targets =
-          input.action === "drop-voicemail"
-            ? [customer!, agent]
-            : [...legs.filter((l) => l.role === "customer"), agent];
+          input.action === "dtmf"
+            ? [customer!]
+            : input.action === "drop-voicemail"
+              ? [customer!, agent]
+              : [...legs.filter((l) => l.role === "customer"), agent];
         let previous: string | null = null;
         for (const [i, leg] of targets.entries()) {
           const id = i === 0 ? operationId : randomUUID();
@@ -172,12 +185,20 @@ export async function admitNativeCallControl(
             scope: i === 0 ? scope : `native-control-child:${operationId}`,
             key: i === 0 ? input.intent.idempotencyKey : id,
             fingerprint,
-            kind: recording && i === 0 ? "play_audio" : input.action === "end" ? "hangup" : "release_agent",
+            kind:
+              input.action === "dtmf"
+                ? "send_dtmf"
+                : recording && i === 0
+                  ? "play_audio"
+                  : input.action === "end"
+                    ? "hangup"
+                    : "release_agent",
             generation: slot.generation,
             commandUuid: randomUUID(),
             targetUuid: leg.freeswitch_uuid,
             request: {
               controlAction: input.action,
+              digit: input.digit,
               endOutcome: input.action === "end" ? resolveAgentEndOutcome(call.state) : null,
               rootOperationId: operationId,
               dependsOn: previous,
@@ -200,7 +221,7 @@ export async function admitNativeCallControl(
         voicemail_drop_requested_at=clock_timestamp(),updated_at=clock_timestamp() where id=$1`,
             [input.callId, recording.id]
           );
-        await a.transition(slot, "releasing");
+        if (input.action !== "dtmf") await a.transition(slot, "releasing");
         await client.query(
           `insert into call_events(call_id,agent_id,event_type,state,raw_json)
         values($1,$2,$3,$4,$5) on conflict(call_id,event_type) where event_type in (
@@ -210,7 +231,11 @@ export async function admitNativeCallControl(
           [
             input.callId,
             call.agent_id,
-            recording ? "voicemail_drop_requested" : "native_call_end_requested",
+            input.action === "dtmf"
+              ? "native_dtmf_requested"
+              : recording
+                ? "voicemail_drop_requested"
+                : "native_call_end_requested",
             recording ? "voicemail_drop_requested" : call.state,
             { operationId, audit: input.audit ?? null, recordingId: recording?.id }
           ]
@@ -275,7 +300,9 @@ async function validate(operation: DurableCommand, admission: CallAdmission): Pr
       and not s.reconciliation_required
       and exists(select 1 from call_participants a where a.call_id=c.id and a.agent_id=$4
         and a.slot_reservation_id=$5 and a.slot_generation=$6)
-      and ($7<>'play_audio' or (c.ended_at is null and c.recording_id=$8))`,
+      and ($7<>'play_audio' or (c.ended_at is null and c.recording_id=$8))
+      and ($7<>'send_dtmf' or (c.ended_at is null and c.state in ('bridged','agent_connected','voicemail_signal_detected')
+        and not exists(select 1 from call_transfers t where t.call_id=c.id and t.closed_at is null)))`,
     [
       operation.call_id,
       operation.target_uuid,
@@ -293,6 +320,10 @@ async function validate(operation: DurableCommand, admission: CallAdmission): Pr
 export function nativeControlCommand(operation: DurableCommand): string {
   if (!uuid.test(operation.target_uuid ?? "") || !uuid.test(operation.call_id))
     throw new Error("Invalid control UUID");
+  if (operation.command_kind === "send_dtmf") {
+    if (!/^[0-9*#]$/.test(String(operation.request.digit))) throw new Error("Invalid DTMF digit");
+    return `uuid_send_dtmf ${operation.target_uuid} ${operation.request.digit}`;
+  }
   if (operation.command_kind === "play_audio") {
     const file = operation.request.recordingPath;
     if (typeof file !== "string" || !path.test(file) || file.split("/").includes(".."))
@@ -314,6 +345,12 @@ async function resolveJob(operation: DurableCommand, db: pg.PoolClient) {
   ).rows[0]?.raw_json;
   if (!job) return null;
   const positive = String(job.body).trim().startsWith("+OK");
+  if (operation.command_kind === "send_dtmf")
+    return {
+      state: positive ? ("succeeded" as const) : ("failed" as const),
+      result: { jobUuid: operation.command_uuid },
+      evidence: "fixed DTMF job completed; no far-end reception claim"
+    };
   const effect =
     operation.command_kind === "play_audio"
       ? (
@@ -383,7 +420,7 @@ export function nativeCallControlExecutor(
       while (current) {
         const result = await executor.run(
           current.id,
-          current.command_kind === "play_audio" ? "normal" : "critical",
+          ["play_audio", "send_dtmf"].includes(current.command_kind) ? "normal" : "critical",
           driver
         );
         if (result.status !== "terminal") break;

@@ -281,10 +281,13 @@ const dropVoicemailSchema = z
   })
   .strict() satisfies z.ZodType<DropVoicemailRequest>;
 
-const sendDtmfSchema = z.object({
-  digit: z.enum(["1", "2", "3", "4", "5", "6", "7", "8", "9", "*", "0", "#"]),
-  campaignId: z.guid().optional()
-}) satisfies z.ZodType<SendDtmfRequest>;
+const sendDtmfSchema = z
+  .object({
+    digit: z.enum(["1", "2", "3", "4", "5", "6", "7", "8", "9", "*", "0", "#"]),
+    campaignId: z.guid().optional(),
+    intent: deskMutationSchema.optional()
+  })
+  .strict() satisfies z.ZodType<SendDtmfRequest>;
 
 const createCampaignSchema = z.object({
   name: z.string().min(1).max(160),
@@ -697,6 +700,20 @@ export function registerDashboardRoutes(
       return reply.code(404).send({ message: "Call not found" });
     }
     return reply.code(204).send();
+  });
+
+  app.put("/agent/calls/:callId/legs/:legUuid/browser-media", async (request, reply) => {
+    const user = await requireUser(request, config, pool);
+    if (!user) return reply.code(401).send({ message: "Unauthorized" });
+    const params = z.object({ callId: z.guid(), legUuid: z.guid() }).parse(request.params);
+    const saved = await upsertBrowserMediaTelemetry(pool, {
+      ...params,
+      userId: user.id,
+      telemetry: browserMediaTelemetrySchema.parse(request.body)
+    });
+    return saved
+      ? reply.code(204).send()
+      : reply.code(404).send({ message: "Participation not found or sample outside its interval" });
   });
 
   app.get("/admin/overview", async (request, reply): Promise<AdminOverviewResponse | void> => {
@@ -1498,22 +1515,34 @@ export function registerDashboardRoutes(
     }
   );
 
-  app.post("/agent/calls/:callId/dtmf", async (request, reply): Promise<AgentDeskResponse | void> => {
-    const user = await requireUser(request, config, pool);
-    if (!user) {
-      return reply.code(401).send({ message: "Unauthorized" });
-    }
+  app.post(
+    "/agent/calls/:callId/dtmf",
+    async (request, reply): Promise<AgentDeskResponse | CallControlResponse | void> => {
+      const user = await requireUser(request, config, pool);
+      if (!user) {
+        return reply.code(401).send({ message: "Unauthorized" });
+      }
 
-    const publicUser = toPublicUser(user);
-    const params = z.object({ callId: z.guid() }).parse(request.params);
-    const input = sendDtmfSchema.parse(request.body ?? {});
-    const sent = await sendDtmfForCall(pool, config, publicUser.id, params.callId, input.digit);
-    if (!sent.ok) {
-      return reply.code(sent.statusCode).send({ message: sent.message });
-    }
+      const publicUser = toPublicUser(user);
+      const params = z.object({ callId: z.guid() }).parse(request.params);
+      const input = sendDtmfSchema.parse(request.body ?? {});
+      if (input.intent)
+        return nativeControl(request, reply, {
+          callId: params.callId,
+          actorUserId: user.id,
+          actorAuthVersion: user.auth_version,
+          action: "dtmf",
+          intent: input.intent,
+          digit: input.digit
+        });
+      const sent = await sendDtmfForCall(pool, config, publicUser.id, params.callId, input.digit);
+      if (!sent.ok) {
+        return reply.code(sent.statusCode).send({ message: sent.message });
+      }
 
-    return buildAgentDeskResponse(pool, publicUser, input.campaignId, contactRetryPolicy);
-  });
+      return buildAgentDeskResponse(pool, publicUser, input.campaignId, contactRetryPolicy);
+    }
+  );
 
   app.post(
     "/admin/campaigns",

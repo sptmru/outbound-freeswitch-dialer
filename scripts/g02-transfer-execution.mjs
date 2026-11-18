@@ -1,3 +1,4 @@
+import { supervisorHandoverFixture } from "./g04-supervisor-handover.mjs";
 import {
   persistCoordinatedCallEvent,
   reconcileCoordinatedCallCleanup
@@ -69,7 +70,12 @@ export async function proveTransferExecution({
     port: 8021,
     password: "a02-disposable-only"
   });
+  const supervision =
+    process.env.G04_SUPERVISION === "1" && !lossBoundary
+      ? await supervisorHandoverFixture({ f, callId: c.row.uuid, command, limited, pass, direction })
+      : null;
   async function transfer(from, to, sourceDesk, targetDesk, fault = false) {
+    if (supervision) await supervision.before(fault ? "join" : "whisper");
     await f.pool.query(
       "update agent_desk_sessions set verified_at=clock_timestamp() where id=any($1::uuid[])",
       [[sourceDesk, targetDesk]]
@@ -84,7 +90,7 @@ export async function proveTransferExecution({
       (await f.pool.query("select agent_id from calls where id=$1", [c.row.uuid])).rows[0].agent_id,
       from.agentId
     );
-    if (fault) await delayedBridge(response.operationId);
+    if (fault && !supervision) await delayedBridge(response.operationId);
     await runtime.wakeExecutor(response.operationId);
     await until(
       async () => {
@@ -127,6 +133,10 @@ export async function proveTransferExecution({
       ).rows[0].n,
       0
     );
+    if (supervision) {
+      await supervision.isolation(to.agentId === recipient ? targetPhone : phone);
+      await supervision.after(to.agentId === recipient ? targetPhone : phone, to, targetDesk);
+    }
     const oldCount = targetPhone.invites.length + phone.invites.length;
     await runtime.wakeExecutor(response.operationId);
     assert.equal(targetPhone.invites.length + phone.invites.length, oldCount);
@@ -546,11 +556,14 @@ export async function proveTransferExecution({
     await until(() => phone.received.length >= backAt + 2400, "G02 repeated source return audio");
     assertTone(phone.received.slice(-2400), 880);
     await pass(
-      `G02.1/G02.3 ${direction} A-B-A transfer, lost execution lock/delayed bridge and late old-leg cleanup preserve customer`,
+      supervision
+        ? `G04.3 ${direction} A-B-A transfer ends join before handover and preserves customer media`
+        : `G02.1/G02.3 ${direction} A-B-A transfer, lost execution lock/delayed bridge and late old-leg cleanup preserve customer`,
       back
     );
     return runtime;
   } finally {
+    supervision?.close();
     targetPhone.close();
   }
 }

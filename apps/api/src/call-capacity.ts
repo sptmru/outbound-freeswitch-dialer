@@ -299,6 +299,26 @@ export class CallCapacity {
     );
     return result.rowCount === 1;
   }
+
+  /** A finished native supervisor owns separate fixed UUIDs. Pending transfer
+   * work on the same customer cannot recreate them. Check every generation and
+   * sender for this session rather than blocking on unrelated call operations. */
+  async releaseSupervisor(claim: CapacityToken, sessionId: string) {
+    this.assertLocked(claim.callId);
+    const result = await this.client.query(
+      `update call_capacity_reservations v set state='released',released_at=clock_timestamp()
+       where v.id=$1 and v.operation_id=$2 and v.call_id=$3 and v.generation=$4
+         and v.supervisor_session_id=$5 and v.resource_type='supervisor_channel' and v.state<>'released'
+         and exists(select 1 from call_supervisor_sessions s where s.id=$5 and s.call_id=$3
+           and s.coordination_protocol='native' and s.state in ('ended','failed'))
+         and exists(select 1 from supervisor_leg_evidence where session_id=$5)
+         and not exists(select 1 from supervisor_leg_evidence where session_id=$5 and ended_at is null)
+         and not exists(select 1 from call_operations where call_id=$3
+           and request->>'supervisorSessionId'=$5::text and resolved_at is null)`,
+      [claim.id, claim.operationId, claim.callId, claim.generation, sessionId]
+    );
+    return result.rowCount === 1;
+  }
 }
 
 // Capacity failure cannot enter another forward/overflow. Playback reuses a retained

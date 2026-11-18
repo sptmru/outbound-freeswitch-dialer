@@ -1276,6 +1276,8 @@ export async function sendDtmfForCall(
   callId: string,
   digit: string
 ): Promise<{ ok: true } | { ok: false; statusCode: 404 | 409 | 502; message: string }> {
+  if (await isCoordinatedCall(pool, callId))
+    return { ok: false, statusCode: 409, message: "Refresh Agent Desk before sending DTMF" };
   const result = await pool.query<{
     agent_id: string;
     agent_leg_uuid: string | null;

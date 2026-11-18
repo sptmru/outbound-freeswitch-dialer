@@ -8,6 +8,7 @@ import {
   startLeadCall,
   startManualCall,
   startNextCall,
+  type CallActionResponse,
   type CallStartResponse
 } from "../../api";
 import type { SoftphoneRuntime } from "../../softphone";
@@ -366,6 +367,7 @@ export function AgentDesk({
       () =>
         endCall(callId, {
           campaignId: campaign?.id,
+          ...(desk.coordination ? { intent: requireControlIntent(callId) } : {}),
           clientContext: {
             initiator: "agent_desk_hangup_button",
             browserEventTrusted,
@@ -383,7 +385,11 @@ export function AgentDesk({
   async function handleDropVoicemail(callId: string) {
     await runCallControl(
       "voicemail",
-      () => dropVoicemail(callId, { campaignId: campaign?.id }),
+      () =>
+        dropVoicemail(callId, {
+          campaignId: campaign?.id,
+          ...(desk.coordination ? { intent: requireControlIntent(callId) } : {})
+        }),
       "Could not drop voicemail"
     );
   }
@@ -391,14 +397,30 @@ export function AgentDesk({
   async function handleSendDtmf(callId: string, digit: string) {
     await runCallControl(
       "dtmf",
-      () => sendDtmf(callId, { campaignId: campaign?.id, digit }),
+      () =>
+        sendDtmf(callId, {
+          campaignId: campaign?.id,
+          digit,
+          ...(desk.coordination ? { intent: requireControlIntent(callId) } : {})
+        }),
       "Could not send DTMF"
     );
   }
 
+  function requireControlIntent(callId: string) {
+    const intent = controllerMutation(desk, softphone);
+    if (
+      !intent ||
+      desk.coordination?.slot.callId !== callId ||
+      !["reserved", "connecting", "active", "uncertain"].includes(desk.coordination.slot.state)
+    )
+      throw new Error("Call ownership changed. Refresh your desk before trying again.");
+    return intent;
+  }
+
   async function runCallControl(
     kind: NonNullable<typeof callControlPending>,
-    action: () => Promise<AgentDeskResponse>,
+    action: () => Promise<CallActionResponse>,
     fallbackError: string
   ) {
     if (callControlPendingRef.current) {
@@ -411,7 +433,8 @@ export function AgentDesk({
     try {
       const result = await action();
       if (!mounted.current) return;
-      if (latestAuthority.current === capturedAuthority) onDeskChanged(result);
+      if ("operationId" in result) await refreshDesk();
+      else if (latestAuthority.current === capturedAuthority) onDeskChanged(result);
       else await refreshDesk();
     } catch (error) {
       if (!mounted.current) return;

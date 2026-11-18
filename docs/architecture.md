@@ -157,7 +157,9 @@ mode waits for both fixed hangup-job completion and old-leg COMPLETE/DESTROY.
 ACKs and absent probes retain uncertainty and occupancy. Native sends hold no
 session user-media lock. Legacy event/failure projections cannot write native
 sessions. The production bootstrap still lacks the staged native adapter; I05
-owns wiring/drain/enablement, and G04 owns transfer-aware supervision.
+owns wiring/drain/enablement. [G04](inbound-post-transfer-boundaries.md) ends
+supervision with confirmed fixed-job/generation cleanup before transfer switching;
+monitoring the new owner requires a new explicit listen-first session.
 
 The separate leg minimizes blast radius but does not prove what either party heard. Listen/whisper direction, join mixing, recording contents, reconnect behavior, and device permissions require a controlled target-environment call matrix before production acceptance.
 

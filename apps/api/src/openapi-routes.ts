@@ -392,6 +392,18 @@ add(
   }
 );
 add(
+  "PUT",
+  "/agent/calls/:callId/legs/:legUuid/browser-media",
+  "Save participation browser media telemetry",
+  "Accepts delayed cumulative telemetry only for the authenticated agent's exact call leg and participation interval. Equal sample-count replays are inert.",
+  {
+    params: object({ callId: uuid("Product call"), legUuid: uuid("Concrete FreeSWITCH agent leg") }),
+    body: ref("BrowserMediaTelemetryRequest"),
+    successStatus: 204,
+    errors: [...agentErrors, 404]
+  }
+);
+add(
   "GET",
   "/agent/events",
   "Stream live refresh events",
@@ -864,11 +876,11 @@ add(
   "POST",
   "/agent/calls/:callId/dtmf",
   "Send DTMF",
-  "Sends one supported DTMF digit to the active customer leg.",
+  "Sends one supported digit to the current owner's exact customer leg. Native intent requests return a durable accepted operation, use a fixed single-send job, and retain uncertainty after response loss. Legacy requests cannot control native calls. Command completion is not far-end reception proof.",
   {
     params: callParams,
     body: ref("SendDtmfRequest"),
-    success: ref("AgentDeskResponse"),
+    success: { anyOf: [ref("AgentDeskResponse"), ref("CallControlResponse")] },
     errors: [...agentErrors, 404, 409, 502]
   }
 );

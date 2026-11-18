@@ -32,7 +32,12 @@ vi.mock("./api", () => ({
 }));
 
 vi.mock("./browser-media", () => ({
-  BrowserMediaTelemetryCollector: class {},
+  BrowserMediaTelemetryCollector: class {
+    async sample() {}
+    snapshot() {
+      return { schemaVersion: 1, sampleCount: 6 };
+    }
+  },
   microphoneConstraints: { echoCancellation: true }
 }));
 
@@ -332,6 +337,41 @@ describe("softphone registration lifecycle", () => {
     expect(s.invitation.reject).toHaveBeenCalled();
     expect(s.invitation.accept).not.toHaveBeenCalled();
     expect(result.current.callState).toBe("none");
+    unmount();
+  });
+  it("G04.2: final delayed telemetry retains the SIP leg captured before ownership changes", async () => {
+    const { unmount } = await nativePhone();
+    mocks.submitTelemetry.mockResolvedValue(undefined);
+    mocks.authorizeInvite.mockImplementation(async (input) => ({ authorized: true, ...input }));
+    vi.stubGlobal(
+      "MediaStream",
+      class {
+        addTrack() {}
+        getTracks() {
+          return [];
+        }
+      }
+    );
+    vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
+    const s = serviceInvitation();
+    const invitation = {
+      ...s.invitation,
+      sessionDescriptionHandler: { peerConnection: { getReceivers: () => [] } }
+    };
+    await act(async () => {
+      mocks.userAgents[0].options.delegate?.onInvite?.(invitation as never);
+    });
+    await act(async () => s.emit("Established"));
+    const oldLeg = s.headers["X-Outbound-Dialer-Leg-ID"];
+    expect(mocks.submitTelemetry).toHaveBeenCalledWith(
+      s.headers["X-Outbound-Dialer-Call-ID"],
+      expect.anything(),
+      oldLeg
+    );
+    s.headers["X-Outbound-Dialer-Leg-ID"] = "50000000-0000-4000-8000-000000000002";
+    await act(async () => s.emit("Terminated"));
+    await waitFor(() => expect(mocks.submitTelemetry).toHaveBeenCalledTimes(2));
+    expect(mocks.submitTelemetry.mock.calls[1][2]).toBe(oldLeg);
     unmount();
   });
   it("E04.2: INVITE before start HTTP response needs durable authorization, admits once and refuses REFER", async () => {

@@ -46,8 +46,10 @@ route/UUID becomes authority. The server resolves one `sofia_contact` route outs
 admission, validates active admin/auth version and endpoint identity inside it,
 and rechecks the exact route plus both target UUIDs immediately before send.
 The target must have one live current-owner agent leg and one customer leg, in
-`bridged` or `voicemail_signal_detected`. Calls with transfer history are refused
-until G04 supplies transfer-aware target rules.
+`bridged`, `agent_connected` or `voicemail_signal_detected`.
+[G04](inbound-post-transfer-boundaries.md) blocks starts/mode changes while a transfer
+is open, ends existing supervision before switching, and permits a new explicit
+listen-first session against the current owner after completion.
 
 Admission discovers the supervisor actor's Agent Desk slot, including before any
 SIP leg exists. Either occupied Desk or connecting/active supervisor excludes the

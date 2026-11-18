@@ -116,6 +116,7 @@ const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}
 
 type ActiveBrowserMediaTelemetry = {
   callId: string;
+  legUuid?: string;
   collector: BrowserMediaTelemetryCollector;
   intervalId: number;
   sampling: boolean;
@@ -999,6 +1000,7 @@ export function useSoftphoneRegistration(
 
     const active: ActiveBrowserMediaTelemetry = {
       callId,
+      legUuid: invitation.request.getHeader("X-Outbound-Dialer-Leg-ID") || undefined,
       collector: new BrowserMediaTelemetryCollector(peerConnection),
       intervalId: 0,
       sampling: false
@@ -1010,7 +1012,7 @@ export function useSoftphoneRegistration(
         await active.collector.sample();
         const snapshot = active.collector.snapshot();
         if (snapshot && snapshot.sampleCount % mediaTelemetryUploadEverySamples === 0) {
-          void submitBrowserMediaTelemetry(active.callId, snapshot).catch(() => undefined);
+          void submitBrowserMediaTelemetry(active.callId, snapshot, active.legUuid).catch(() => undefined);
         }
       } finally {
         active.sampling = false;
@@ -1032,7 +1034,7 @@ export function useSoftphoneRegistration(
       .then(() => {
         const snapshot = active.collector.snapshot();
         if (snapshot) {
-          return submitBrowserMediaTelemetry(active.callId, snapshot).catch(() => undefined);
+          return submitBrowserMediaTelemetry(active.callId, snapshot, active.legUuid).catch(() => undefined);
         }
         return undefined;
       });

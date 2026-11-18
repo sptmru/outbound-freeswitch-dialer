@@ -195,9 +195,11 @@ export async function fetchSoftphoneProvisioning(): Promise<SoftphoneProvisionin
 
 export async function submitBrowserMediaTelemetry(
   callId: string,
-  input: BrowserMediaTelemetryRequest
+  input: BrowserMediaTelemetryRequest,
+  legUuid?: string
 ): Promise<void> {
-  return apiFetch<void>(`/agent/calls/${encodeURIComponent(callId)}/browser-media`, {
+  const leg = legUuid ? `/legs/${encodeURIComponent(legUuid)}` : "";
+  return apiFetch<void>(`/agent/calls/${encodeURIComponent(callId)}${leg}/browser-media`, {
     method: "PUT",
     body: JSON.stringify(input),
     keepalive: true
@@ -466,7 +468,9 @@ export async function startLeadCall(
   });
 }
 
-export async function endCall(callId: string, input: EndCallRequest = {}): Promise<AgentDeskResponse> {
+export type CallActionResponse = AgentDeskResponse | import("@outbound-dialer/shared").CallControlResponse;
+
+export async function endCall(callId: string, input: EndCallRequest = {}): Promise<CallActionResponse> {
   return apiFetch<AgentDeskResponse>(`/agent/calls/${callId}/end`, {
     method: "POST",
     body: JSON.stringify(input)
@@ -476,14 +480,14 @@ export async function endCall(callId: string, input: EndCallRequest = {}): Promi
 export async function dropVoicemail(
   callId: string,
   input: DropVoicemailRequest = {}
-): Promise<AgentDeskResponse> {
+): Promise<CallActionResponse> {
   return apiFetch<AgentDeskResponse>(`/agent/calls/${callId}/drop-voicemail`, {
     method: "POST",
     body: JSON.stringify(input)
   });
 }
 
-export async function sendDtmf(callId: string, input: SendDtmfRequest): Promise<AgentDeskResponse> {
+export async function sendDtmf(callId: string, input: SendDtmfRequest): Promise<CallActionResponse> {
   return apiFetch<AgentDeskResponse>(`/agent/calls/${callId}/dtmf`, {
     method: "POST",
     body: JSON.stringify(input)

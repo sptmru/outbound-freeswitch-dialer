@@ -664,8 +664,9 @@ media bugs, and late old-agent hangups on the pinned image. Define recovery if t
 source disappears during switching; do not promise return to a nonexistent leg.
 Recover within a bounded state or terminate with an accurate technical outcome.
 Only the current owner controls the call; former agents may submit bounded telemetry
-for their own participation. Proposed supervisor behavior is to end at handover and
-require a new explicit session, never silently carrying whisper to another agent.
+for their own participation. [G04](inbound-post-transfer-boundaries.md) implements
+confirmed supervisor teardown before switching and requires a new explicit listen-first
+session after handover, never silently carrying whisper to another agent.
 
 The [A05 rebridge/executor prototype](inbound-rebridge-executor-prototype.md)
 records the isolated FS/DB harness, selected uncertainty protocol and per-criterion

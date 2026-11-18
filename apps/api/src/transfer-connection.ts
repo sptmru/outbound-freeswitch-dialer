@@ -16,6 +16,12 @@ import { ingressUuid } from "./ingress-journal.js";
 import { serviceInviteCommand } from "./service-invite-command.js";
 import { sendFreeSwitchApiCommand } from "./esl.js";
 import type { AppConfig } from "./config.js";
+import {
+  prepareSupervisorHandover,
+  settleSupervisor,
+  supervisionQuiescent,
+  supervisorHandoverDriver
+} from "./supervisor-coordination.js";
 
 const steps = ["prepare_customer", "prepare_source", "originate", "park", "bridge"] as const;
 const action = (o: DurableCommand) => String(o.request.transferAction ?? "originate");
@@ -211,17 +217,7 @@ export async function validateTransferConnection(op: DurableCommand, a: CallAdmi
     legs.find((l) => l.freeswitch_uuid === r.customerUuid)?.ended_at
   )
     return false;
-  // Supervision is separately implemented in G04. Refuse a switch while a live
-  // supervisor could silently follow the customer or whisper to another owner.
-  if (
-    (
-      await a.client.query(
-        "select 1 from call_supervisor_sessions where call_id=$1 and state in ('connecting','active')",
-        [op.call_id]
-      )
-    ).rowCount
-  )
-    return false;
+  if (!(await supervisionQuiescent(a.client, op.call_id))) return false;
   if (row.agent_id !== r.sourceAgentId) return false;
   const source = (
     await a.client.query(
@@ -572,6 +568,19 @@ export function transferConnectionExecutor(
   esl: { host: string; port: number; password: string }
 ) {
   const driver = transferConnectionDriver(esl);
+  const supervisorDriver = supervisorHandoverDriver(esl, async (command) =>
+    (
+      await sendFreeSwitchApiCommand(
+        {
+          FREESWITCH_ESL_HOST: esl.host,
+          FREESWITCH_ESL_PORT: esl.port,
+          FREESWITCH_ESL_PASSWORD: esl.password
+        } as AppConfig,
+        command,
+        1000
+      )
+    ).body.trim()
+  );
   async function runStep(op: DurableCommand) {
     for (let retry = 0; retry < 3; retry++) {
       try {
@@ -587,6 +596,18 @@ export function transferConnectionExecutor(
       await prepareTransferCommands(pool, id);
       const root = (await pool.query("select * from call_operations where id=$1", [id]))
         .rows[0] as DurableCommand;
+      await settleSupervisor(pool, root.call_id);
+      const supervisorWork = await inAdmission(pool, id, async (a, _root, t) =>
+        t.closed_at ? [] : prepareSupervisorHandover(a, root.call_id, t.id)
+      );
+      for (const operationId of supervisorWork ?? []) {
+        await executor.run(operationId, "critical", supervisorDriver);
+        await settleSupervisor(pool, root.call_id);
+      }
+      await settleSupervisor(pool, root.call_id);
+      // Do not cancel transfer commands merely because teardown is still
+      // uncertain. Keep source media and both reservations for reconciliation.
+      if (!(await supervisionQuiescent(pool, root.call_id))) return;
       // Bounded progression; each step has at most one physical send. Concurrent
       // wakes share C03's per-call lock, immutable step scope and dependencies.
       for (let i = 0; i < 12; i++) {

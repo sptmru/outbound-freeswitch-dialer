@@ -7,8 +7,9 @@ The staged `transferConnectionExecutor` consumes G01's immutable accepted intent
 It is supplied explicitly as the `transferConnection` dependency of
 `registerCallOfferRoutes`. The default server bootstrap does not install it;
 I05 owns activation. No environment variable, production route or deployment
-setting changes here. G03 owns browser transfer controls and G04 owns supervisory
-handover integration. A live supervisor currently refuses switching safely.
+setting changes here. G03 owns browser transfer controls.
+[G04](inbound-post-transfer-boundaries.md) adds confirmed supervisor teardown before
+physical transfer execution and new explicit listen-first monitoring after handover.
 
 ## Durable progression
 

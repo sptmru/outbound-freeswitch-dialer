@@ -63,8 +63,8 @@ async function target(db: pg.PoolClient, callId: string, userId: string) {
     !call ||
     call.user_id === userId ||
     call.ended_at ||
-    !["bridged", "voicemail_signal_detected"].includes(call.state) ||
-    (await db.query("select 1 from call_transfers where call_id=$1", [callId])).rowCount
+    !["bridged", "agent_connected", "voicemail_signal_detected"].includes(call.state) ||
+    (await db.query("select 1 from call_transfers where call_id=$1 and closed_at is null", [callId])).rowCount
   )
     throw new SupervisorCoordinationError("Call is no longer available for live monitoring");
   const legs = (
@@ -80,6 +80,136 @@ async function target(db: pg.PoolClient, callId: string, userId: string) {
   if (agent.length !== 1 || customer.length !== 1)
     throw new SupervisorCoordinationError("Call media changed; refresh before monitoring");
   return { agent: agent[0].freeswitch_uuid as string, customer: customer[0].freeswitch_uuid as string };
+}
+
+/** Called under common admission for an accepted transfer. Cancel only unsent
+ * work; an uncertain mode/originate must finish reconciliation before teardown.
+ * Each exact generation receives one immutable stop, without changing its owner.
+ */
+export async function prepareSupervisorHandover(a: CallAdmission, callId: string, transferId: string) {
+  const db = a.client;
+  const work: string[] = [];
+  const sessions = (
+    await db.query(
+      "select * from call_supervisor_sessions where call_id=$1 and state in ('connecting','active') order by id",
+      [callId]
+    )
+  ).rows;
+  for (const s of sessions) {
+    // A legacy sender cannot provide native fixed-job quiescence. Keep the
+    // transfer blocked until its own operator/legacy teardown completes.
+    if (s.coordination_protocol !== "native") continue;
+    await db.query(
+      `update call_operations set state='canceled',resolved_at=clock_timestamp(),
+        resolution_evidence='transfer handover canceled unstarted supervisor work'
+        where request->>'supervisorSessionId'=$1 and state='pending'
+          and coalesce(request->>'supervisorAction','')<>'handover'`,
+      [s.id]
+    );
+    await db.query(
+      `update supervisor_leg_evidence e set ended_at=clock_timestamp(),terminal_evidence='resolved originate without a live channel'
+       from call_operations o where e.session_id=$1 and e.originate_operation_id=o.id
+         and o.state in ('failed','canceled') and e.ended_at is null`,
+      [s.id]
+    );
+    const unresolved = (
+      await db.query(
+        "select id from call_operations where request->>'supervisorSessionId'=$1 and resolved_at is null order by id",
+        [s.id]
+      )
+    ).rows;
+    if (unresolved.length) {
+      work.push(...unresolved.map((o) => o.id));
+      continue;
+    }
+    if (
+      !(
+        await db.query("select 1 from supervisor_leg_evidence where session_id=$1 and ended_at is null", [
+          s.id
+        ])
+      ).rowCount
+    )
+      continue;
+    const existing = (
+      await db.query(
+        "select id from call_operations where request->>'supervisorSessionId'=$1 and request->>'supervisorAction'='handover' and generation=$2",
+        [s.id, s.generation]
+      )
+    ).rows[0];
+    if (existing) continue;
+    const id = randomUUID();
+    await enqueueCallCommand(a, {
+      id,
+      callId,
+      scope: `supervisor-handover:${s.id}`,
+      key: s.generation,
+      fingerprint: requestFingerprint("POST", "supervisor-handover", s.id, { generation: s.generation }),
+      kind: "hangup",
+      generation: s.generation,
+      commandUuid: randomUUID(),
+      targetUuid: s.supervisor_leg_uuid,
+      request: {
+        supervisorSessionId: s.id,
+        supervisorAction: "handover",
+        rootOperationId: id,
+        transferId,
+        actorUserId: s.actor_user_id
+      },
+      deadline: (await db.query("select clock_timestamp()+interval '30 seconds' as deadline")).rows[0]
+        .deadline
+    });
+    await db.query(
+      "update call_supervisor_sessions set control_root_id=$2,state='connecting',updated_at=clock_timestamp() where id=$1",
+      [s.id, id]
+    );
+    work.push(id);
+  }
+  return work;
+}
+
+export async function supervisionQuiescent(db: pg.Pool | pg.PoolClient, callId: string) {
+  return !(
+    await db.query(
+      `select 1 where exists(select 1 from call_supervisor_sessions where call_id=$1 and state in ('connecting','active'))
+      or exists(select 1 from supervisor_leg_evidence where call_id=$1 and ended_at is null)
+      or exists(select 1 from call_operations where call_id=$1 and request ? 'supervisorSessionId' and resolved_at is null)
+      or exists(select 1 from call_capacity_reservations where call_id=$1 and supervisor_session_id is not null and state<>'released')`,
+      [callId]
+    )
+  ).rowCount;
+}
+
+/** The transfer executor can reconcile old sends and execute fixed stops, but
+ * this driver can never originate or replace monitoring on the recipient. */
+export function supervisorHandoverDriver(
+  esl: { host: string; port: number; password: string },
+  probe: (command: string, signal: AbortSignal) => Promise<string>
+) {
+  return createCommandDriver({
+    ...esl,
+    buildCommand(op) {
+      if (op.command_kind !== "hangup" || !uuid.test(op.target_uuid ?? ""))
+        throw new Error("Handover permits only exact supervisor teardown");
+      return `uuid_kill ${op.target_uuid} NORMAL_CLEARING`;
+    },
+    validate,
+    async verify(op, job, signal, db) {
+      await persistSupervisorJob(db, job);
+      while (!signal.aborted) {
+        const result = await resolution(
+          op,
+          db,
+          async (id, s) => (await probe(`uuid_exists ${id}`, s)).trim() === "false",
+          signal
+        );
+        if (result) return result;
+        await delay(20, undefined, { signal });
+      }
+      return null;
+    },
+    reconcile: (op, signal, db) =>
+      resolution(op, db, async (id, s) => (await probe(`uuid_exists ${id}`, s)).trim() === "false", signal)
+  });
 }
 export interface SupervisorMutation {
   action: "start" | "mode" | "stop";
@@ -344,6 +474,15 @@ export async function persistCoordinatedSupervisorEvent(
   return true;
 }
 export async function settleSupervisor(pool: pg.Pool, callId: string) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await settleSupervisorOnce(pool, callId);
+    } catch (error) {
+      if (!(error instanceof AdmissionDiscoveryChanged) || attempt >= 2) throw error;
+    }
+  }
+}
+async function settleSupervisorOnce(pool: pg.Pool, callId: string) {
   const db = await pool.connect();
   try {
     await withCallAdmission(db, { callIds: [callId] }, async (a) => {
@@ -388,9 +527,9 @@ export async function settleSupervisor(pool: pg.Pool, callId: string) {
             )
           ).rows;
           for (const cap of caps)
-            await a.capacity.release(
+            await a.capacity.releaseSupervisor(
               { id: cap.id, operationId: cap.operation_id, callId, generation: cap.generation },
-              true
+              s.id
             );
         } else if (current?.answered_at && !current.ended_at) {
           await db.query(

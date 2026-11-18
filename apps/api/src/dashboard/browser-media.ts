@@ -68,20 +68,31 @@ export const browserMediaTelemetrySchema = z
 
 export async function upsertBrowserMediaTelemetry(
   pool: pg.Pool,
-  input: { callId: string; userId: string; telemetry: BrowserMediaTelemetryRequest; participantId?: string }
+  input: {
+    callId: string;
+    userId: string;
+    telemetry: BrowserMediaTelemetryRequest;
+    participantId?: string;
+    legUuid?: string;
+  }
 ): Promise<boolean> {
-  const table = input.participantId ? "call_participant_browser_media_stats" : "call_browser_media_stats";
+  const concrete = Boolean(input.participantId || input.legUuid);
+  const table = concrete ? "call_participant_browser_media_stats" : "call_browser_media_stats";
   const result = await pool.query<{ owned: boolean }>(
     `
       with owned_call as (
         ${
-          input.participantId
+          concrete
             ? `select p.call_id as id, p.id as participant_id
         from call_participants p join agents on agents.id=p.agent_id
-        where p.id=$4 and p.call_id=$1 and p.role='agent' and agents.user_id=$2
+        join call_legs l on l.participant_id=p.id and l.call_id=p.call_id and l.type='agent'
+        where ${input.legUuid ? "l.freeswitch_uuid=$4" : "p.id=$4"} and p.call_id=$1 and p.role='agent' and agents.user_id=$2
           and p.joined_at is not null
           and ($3::jsonb->>'startedAt')::timestamptz >= p.joined_at
-          and (p.left_at is null or ($3::jsonb->>'endedAt')::timestamptz <= p.left_at)`
+          and ($3::jsonb->>'endedAt')::timestamptz <= clock_timestamp()
+          and (p.left_at is null or ($3::jsonb->>'endedAt')::timestamptz <= p.left_at)
+          and (l.ended_at is null or ($3::jsonb->>'endedAt')::timestamptz <= l.ended_at)
+        for update of p`
             : `select calls.id
         from calls
         join agents on agents.id = calls.agent_id
@@ -92,7 +103,7 @@ export async function upsertBrowserMediaTelemetry(
         }
       ), upserted as (
       insert into ${table} (
-        ${input.participantId ? "participant_id," : ""}
+        ${concrete ? "participant_id," : ""}
         call_id, schema_version, started_at, ended_at, captured_at, sample_count,
         microphone_sample_rate, microphone_sample_size, microphone_channel_count,
         microphone_echo_cancellation, microphone_noise_suppression,
@@ -108,7 +119,7 @@ export async function upsertBrowserMediaTelemetry(
         remote_candidate_type, transport_protocol, relay_protocol
       )
       select
-        ${input.participantId ? "owned_call.participant_id," : ""}
+        ${concrete ? "owned_call.participant_id," : ""}
         owned_call.id,
         ($3::jsonb->>'schemaVersion')::integer,
         ($3::jsonb->>'startedAt')::timestamptz,
@@ -145,7 +156,7 @@ export async function upsertBrowserMediaTelemetry(
         $3::jsonb#>>'{connection,protocol}',
         $3::jsonb#>>'{connection,relayProtocol}'
       from owned_call
-      on conflict (${input.participantId ? "participant_id" : "call_id"}) do update set
+      on conflict (${concrete ? "participant_id" : "call_id"}) do update set
         schema_version = excluded.schema_version,
         started_at = least(${table}.started_at, excluded.started_at),
         ended_at = greatest(${table}.ended_at, excluded.ended_at),
@@ -181,7 +192,7 @@ export async function upsertBrowserMediaTelemetry(
         transport_protocol = excluded.transport_protocol,
         relay_protocol = excluded.relay_protocol,
         updated_at = now()
-      where excluded.sample_count >= ${table}.sample_count
+      where excluded.sample_count > ${table}.sample_count
       returning call_id
       )
       select exists(select 1 from owned_call) as owned
@@ -190,7 +201,7 @@ export async function upsertBrowserMediaTelemetry(
       input.callId,
       input.userId,
       JSON.stringify(input.telemetry),
-      ...(input.participantId ? [input.participantId] : [])
+      ...(concrete ? [input.legUuid ?? input.participantId] : [])
     ]
   );
   return result.rows[0]?.owned === true;
