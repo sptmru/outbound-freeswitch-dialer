@@ -5,9 +5,16 @@ local operation, external = argv[1], argv[2]
 local deadline, flowDeadline = tonumber(argv[3]), tonumber(argv[4])
 local caller, dial = argv[5], argv[6]
 local key = "outbound_dialer_forward_" .. operation
+local commandJob, commandCore = session:getVariable("outbound_dialer_command_job"), session:getVariable("outbound_dialer_command_core")
+local function receipt(state)
+  if not commandJob then return true end -- Older transport remains conservative.
+  return api:execute("lua", freeswitch.getGlobalVariable("conf_dir") .. "/scripts/outbound-command.lua producer " .. commandCore .. " " .. commandJob .. " " .. operation .. " " .. state):match("^%+OK") ~= nil
+end
 if session:getVariable(key) then return end
+if not receipt("started") then session:hangup("NORMAL_TEMPORARY_FAILURE"); return end
 session:setVariable(key, "started")
 local function finished()
+  if not receipt("finished") then return end
   -- session:execute(event) cannot emit after customer hangup; use a detached event.
   local e = freeswitch.Event("CUSTOM", "outbound_dialer::inbound_forward_finished")
   e:addHeader("Outbound-Dialer-Call-ID", uuid)

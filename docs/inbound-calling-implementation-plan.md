@@ -784,6 +784,12 @@ takeover, and takeover attempts during inbound, outbound, and transfer calls.
 
 ## 10. FreeSWITCH Configuration and Recovery
 
+The staged [H01 lifecycle recovery](inbound-lifecycle-recovery.md) composes saved-root
+workers behind an ESL persistence barrier, adds native command/producer receipts
+and switch-incarnation fencing, and owns fixed orphan cleanup after proven
+customer termination. Its acceptance matrix restarts actual worker/listener
+processes and exercises delayed frames. I05 retains native runtime activation.
+
 D02 implements the [versioned configuration publisher and ingress safeguards](inbound-freeswitch-configuration.md). It remains opt-in and fails closed before answer until D03 supplies durable admission; applied configuration is not provider delivery or product enablement.
 
 - Change repo-owned templates/renderers, not generated files manually.

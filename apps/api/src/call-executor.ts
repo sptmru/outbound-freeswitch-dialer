@@ -110,6 +110,7 @@ export interface CommandResolution {
  * Adapters must obey signal, use a total transport deadline and close on abort.
  */
 export interface CommandDriver {
+  protocol?: "fs-fenced-v1";
   // SQL-only action-specific generation/slot/endpoint validation, under admission.
   // Integrating call paths must supply their full token checks here (C04-C07/D-G).
   validate?(operation: DurableCommand, admission: CallAdmission): Promise<boolean>;
@@ -174,6 +175,88 @@ export class CallExecutor {
   async close() {
     this.closed = true;
     await this.pool.end();
+  }
+
+  /** H01 observation lease: the same bounded critical seat and rank-0 call lock
+   * as command execution. The callback may probe ESL outside a transaction, then
+   * enter admission on this connection. It must recheck signal before mutation.
+   * This lock excludes current senders; it does NOT resolve historical uncertainty.
+   */
+  async inspectCall<T>(
+    callId: string,
+    inspect: (client: pg.PoolClient, signal: AbortSignal) => Promise<T>
+  ): Promise<{ status: "inspected"; value: T } | { status: "deferred"; reason: string }> {
+    if (this.closed) throw new ExecutionError("executor_closed");
+    const seat = 3;
+    if (this.occupied.has(seat)) return { status: "deferred", reason: "executor_saturated" };
+    this.occupied.add(seat);
+    let client: pg.PoolClient | undefined;
+    let lost = false,
+      seatLocked = false,
+      locked = false;
+    let key: number | undefined;
+    const controller = new AbortController();
+    const latch = () => {
+      lost = true;
+      controller.abort();
+    };
+    const timer = setTimeout(() => controller.abort(), 5000);
+    try {
+      try {
+        client = await this.pool.connect();
+      } catch {
+        return { status: "deferred", reason: "execution_acquisition_timeout" };
+      }
+      client.on("error", latch);
+      client.on("end", latch);
+      seatLocked = (
+        await client.query("select pg_try_advisory_lock($1,$2) as ok", [
+          EXECUTOR_SEAT_NAMESPACE,
+          this.replica * 4 + seat
+        ])
+      ).rows[0].ok;
+      if (!seatLocked) return { status: "deferred", reason: "executor_replica_occupied" };
+      // Native received calls may not have any operation yet. Create only the
+      // lock identity, never a command/attempt, before taking execution rank.
+      await client.query(
+        "insert into call_execution_keys(call_id) select id from calls where id=$1 on conflict do nothing",
+        [callId]
+      );
+      key = (await client.query("select lock_key from call_execution_keys where call_id=$1", [callId]))
+        .rows[0]?.lock_key;
+      if (key === undefined) return { status: "deferred", reason: "call_not_found" };
+      locked = (
+        await client.query("select pg_try_advisory_lock($1,$2) as ok", [EXECUTION_LOCK_NAMESPACE, key])
+      ).rows[0].ok;
+      if (!locked) return { status: "deferred", reason: "call_execution_busy" };
+      const value = await inspect(client, controller.signal);
+      return lost || controller.signal.aborted
+        ? { status: "deferred", reason: lost ? "execution_lock_lost" : "recovery_deadline" }
+        : { status: "inspected", value };
+    } catch (error) {
+      if (lost) return { status: "deferred", reason: "execution_lock_lost" };
+      throw error;
+    } finally {
+      clearTimeout(timer);
+      controller.abort();
+      if (client) {
+        try {
+          if (locked && !lost)
+            await client.query("select pg_advisory_unlock($1,$2)", [EXECUTION_LOCK_NAMESPACE, key]);
+          if (seatLocked && !lost)
+            await client.query("select pg_advisory_unlock($1,$2)", [
+              EXECUTOR_SEAT_NAMESPACE,
+              this.replica * 4 + seat
+            ]);
+        } catch {
+          lost = true;
+        }
+        client.removeListener("error", latch);
+        client.removeListener("end", latch);
+        client.release(lost);
+      }
+      this.occupied.delete(seat);
+    }
   }
 
   async run(
@@ -272,8 +355,8 @@ export class CallExecutor {
             return false;
           }
           await admission.client.query(
-            "insert into call_execution_attempts(operation_id,owner_id,backend_pid,replica,seat) values($1,$2,pg_backend_pid(),$3,$4)",
-            [op.id, owner, this.replica, seat]
+            "insert into call_execution_attempts(operation_id,owner_id,backend_pid,replica,seat,transport_protocol) values($1,$2,pg_backend_pid(),$3,$4,$5)",
+            [op.id, owner, this.replica, seat, driver.protocol ?? null]
           );
           await admission.client.query("update call_operations set state='uncertain' where id=$1", [op.id]);
           return true;

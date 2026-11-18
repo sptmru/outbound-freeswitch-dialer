@@ -469,3 +469,55 @@ test(
     }
   }
 );
+
+test(
+  "H01 recovered ingress absence cannot turn an earlier connected external participant into forwarding success",
+  options,
+  async () => {
+    const f = await fixture();
+    try {
+      const row = await f.seed();
+      await admitInboundQueue(f.pool, row.uuid);
+      await f.pool.query(
+        "insert into call_participants(call_id,role,origin,connected_at) values($1,'external','native',clock_timestamp())",
+        [row.uuid]
+      );
+      await persistInboundQueueEvent(
+        f.pool,
+        {
+          variable_outbound_dialer_ingress_uuid: row.uuid,
+          "unique-id": row.uuid,
+          "event-name": "INGRESS_ABSENT"
+        },
+        "",
+        true
+      );
+      const terminal = (await f.pool.query("select * from calls where id=$1", [row.uuid])).rows[0];
+      assert.equal(terminal.state, "failed");
+      assert.equal(terminal.outcome, "failed");
+      assert.equal(terminal.inbound_end_reason, "channel_absent_on_recovery");
+      assert.equal(terminal.terminal_source, "lifecycle_recovery");
+      const count = (
+        await f.pool.query("select count(*)::int n from call_events where call_id=$1", [row.uuid])
+      ).rows[0].n;
+      await persistInboundQueueEvent(
+        f.pool,
+        {
+          variable_outbound_dialer_ingress_uuid: row.uuid,
+          "unique-id": row.uuid,
+          "event-name": "INGRESS_ABSENT"
+        },
+        "",
+        true
+      );
+      assert.equal(
+        (await f.pool.query("select count(*)::int n from call_events where call_id=$1", [row.uuid])).rows[0]
+          .n,
+        count,
+        "acknowledged journal snapshots are idempotent"
+      );
+    } finally {
+      await f.cleanup();
+    }
+  }
+);

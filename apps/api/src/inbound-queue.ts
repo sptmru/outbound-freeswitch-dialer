@@ -240,6 +240,9 @@ export async function persistInboundQueueEvent(
       ).rows[0];
       if (uuid !== callId && !leg) return;
       if (event === "INGRESS_ABSENT" && !recovered) return;
+      // The bounded journal also returns acknowledged terminal snapshots. They
+      // must not append a new synthetic absence fact on every recovery pass.
+      if (event === "INGRESS_ABSENT" && call.ended_at && leg?.ended_at) return;
       const customer = uuid === callId;
       const clean = cleanEvents.includes(event);
       const at = parseFreeSwitchEventTimestamp(headers) ?? new Date();
@@ -374,34 +377,41 @@ export async function persistInboundQueueEvent(
               [callId, uuid]
             )
           ).rowCount;
-          const reason = transferFailure
-            ? "transfer_switch_failed"
-            : external?.connected_at
-              ? "external_forward_completed"
-              : external && !external.left_at
-                ? "caller_hung_up_during_forwarding"
-                : fallbackHangup
-                  ? `no_answer_${fallbackHangup.reason}`
-                  : call.fallback_started_at
-                    ? headers["hangup-cause"] === "ALLOTTED_TIMEOUT"
-                      ? "no_answer_deadline"
-                      : "caller_hung_up_during_fallback"
-                    : headers["hangup-cause"] === "ALLOTTED_TIMEOUT" && !call.agent_connected_at
-                      ? "queue_timeout"
-                      : event === "INGRESS_ABSENT"
-                        ? "channel_absent_on_recovery"
-                        : call.agent_connected_at
-                          ? "customer_hung_up"
-                          : admitted
-                            ? canceled
-                              ? "caller_canceled_in_queue"
-                              : "caller_abandoned_queue"
-                            : canceled
-                              ? "caller_canceled_before_admission"
-                              : "caller_hung_up_before_admission";
+          const reason =
+            event === "INGRESS_ABSENT"
+              ? "channel_absent_on_recovery"
+              : transferFailure
+                ? "transfer_switch_failed"
+                : external?.connected_at
+                  ? "external_forward_completed"
+                  : external && !external.left_at
+                    ? "caller_hung_up_during_forwarding"
+                    : fallbackHangup
+                      ? `no_answer_${fallbackHangup.reason}`
+                      : call.fallback_started_at
+                        ? headers["hangup-cause"] === "ALLOTTED_TIMEOUT"
+                          ? "no_answer_deadline"
+                          : "caller_hung_up_during_fallback"
+                        : headers["hangup-cause"] === "ALLOTTED_TIMEOUT" && !call.agent_connected_at
+                          ? "queue_timeout"
+                          : call.agent_connected_at
+                            ? "customer_hung_up"
+                            : admitted
+                              ? canceled
+                                ? "caller_canceled_in_queue"
+                                : "caller_abandoned_queue"
+                              : canceled
+                                ? "caller_canceled_before_admission"
+                                : "caller_hung_up_before_admission";
           await db.query(
-            "update calls set state=$2,outcome=case when $4='transfer_switch_failed' then 'failed' when $4='external_forward_completed' then 'answered' when $4='queue_timeout' or $4 like 'no_answer_%' then 'not_answered' else 'customer_hung_up' end,ended_at=greatest(arrived_at,$3),queue_exited_at=coalesce(queue_exited_at,greatest(arrived_at,$3)),inbound_end_reason=$4,terminal_event_name=$5,terminal_source='inbound_customer',updated_at=clock_timestamp() where id=$1",
-            [callId, transferFailure ? "failed" : canceled ? "canceled" : "completed", at, reason, event]
+            "update calls set state=$2,outcome=case when $4 in ('transfer_switch_failed','channel_absent_on_recovery') then 'failed' when $4='external_forward_completed' then 'answered' when $4='queue_timeout' or $4 like 'no_answer_%' then 'not_answered' else 'customer_hung_up' end,ended_at=greatest(arrived_at,$3),queue_exited_at=coalesce(queue_exited_at,greatest(arrived_at,$3)),inbound_end_reason=$4,terminal_event_name=$5,terminal_source=case when $4='channel_absent_on_recovery' then 'lifecycle_recovery' else 'inbound_customer' end,updated_at=clock_timestamp() where id=$1",
+            [
+              callId,
+              event === "INGRESS_ABSENT" || transferFailure ? "failed" : canceled ? "canceled" : "completed",
+              at,
+              reason,
+              event
+            ]
           );
         }
       }
@@ -487,7 +497,8 @@ export function createInboundQueueCoordinator(
   socket: string,
   command: IngressCommand,
   executor: CallExecutor,
-  esl: { host: string; port: number; password: string }
+  esl: { host: string; port: number; password: string },
+  checkpoint?: (point: "before-insert" | "after-commit", uuid?: string) => Promise<void>
 ) {
   const driver = createCommandDriver({
     ...esl,
@@ -520,7 +531,7 @@ export function createInboundQueueCoordinator(
   });
   return {
     async reconcile() {
-      const status = await reconcileIngress(pool, socket, command, undefined, {
+      const status = await reconcileIngress(pool, socket, command, checkpoint, {
         async beforeImport(row) {
           if (row.terminalUs !== null)
             await persistInboundQueueEvent(

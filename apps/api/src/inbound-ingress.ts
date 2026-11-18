@@ -25,7 +25,7 @@ export function ingressSnapshot(row: IngressRecord) {
 export async function importIngressRecord(
   pool: pg.Pool,
   row: IngressRecord,
-  checkpoint?: (point: "before-insert" | "after-commit") => Promise<void>
+  checkpoint?: (point: "before-insert" | "after-commit", uuid?: string) => Promise<void>
 ) {
   validateIngress(row);
   assert.match(row.journalId, ingressUuid);
@@ -60,7 +60,7 @@ export async function importIngressRecord(
       );
       assert.ok(sameTime.rows[0].same, "Arrival changed");
     }
-    await checkpoint?.("before-insert");
+    await checkpoint?.("before-insert", row.uuid);
     // Insert live evidence first. B04 requires a terminal call before linking
     // terminal evidence, so both links and terminal transition commit together.
     await client.query(
@@ -113,7 +113,7 @@ export async function importIngressRecord(
       [row.uuid, sequence, row.terminalUs, row.terminalReason]
     );
     await client.query("commit");
-    await checkpoint?.("after-commit");
+    await checkpoint?.("after-commit", row.uuid);
   } catch (error) {
     await client.query("rollback");
     throw error;
@@ -125,7 +125,7 @@ export async function reconcileIngress(
   pool: pg.Pool,
   socket: string,
   command: IngressCommand,
-  checkpoint?: (point: "before-insert" | "after-commit") => Promise<void>,
+  checkpoint?: (point: "before-insert" | "after-commit", uuid?: string) => Promise<void>,
   queue?: { beforeImport(row: IngressRecord): Promise<void>; afterImport(row: IngressRecord): Promise<void> }
 ) {
   setIngressStatus(JSON.parse(await ingressRequest(socket, "/status")));

@@ -2,6 +2,7 @@
 local api = freeswitch.API()
 local uuid = session:get_uuid()
 local operation = argv[1]
+local commandJob, commandCore = session:getVariable("outbound_dialer_command_job"), session:getVariable("outbound_dialer_command_core")
 local deadline = tonumber(argv[2])
 local audio = argv[3]
 local fallback = tonumber(argv[4]) or 0
@@ -24,6 +25,7 @@ session:setVariable("outbound_dialer_wait_operation", operation)
 if not session:ready() then return end
 session:answer()
 if not session:ready() then return end
+if commandJob and not api:execute("lua", freeswitch.getGlobalVariable("conf_dir") .. "/scripts/outbound-command.lua producer " .. commandCore .. " " .. commandJob .. " " .. operation .. " started"):match("^%+OK") then session:hangup("NORMAL_TEMPORARY_FAILURE"); return end
 session:execute("event", "Event-Name=CUSTOM,Event-Subclass=outbound_dialer::inbound_waiting_started,Outbound-Dialer-Call-ID=" .. uuid .. ",Outbound-Dialer-Operation-ID=" .. operation .. ",Outbound-Dialer-Customer-Leg-UUID=" .. uuid)
 if audio == "tone" then audio = "tone_stream://%(1000,0,440)" end
 session:execute("endless_playback", audio)

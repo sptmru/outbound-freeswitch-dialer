@@ -92,6 +92,7 @@ remain separate.
 - ESL frame unwrapping, custom-event subscription, agent registration updates, recording/AVMD startup, and reconnect retry.
 - Bounded ordered ESL persistence queue, exponential retry for transient database failures, explicit overflow disconnect/reconnect, queue metrics/alerts, and subscription-aware readiness.
 - Coalesced reconciliation after ESL subscription/reconnect and every configured interval: check active UUIDs, finalize missing calls, release orphaned agent legs where possible, and recover/finalize voicemail jobs.
+- [H01 staged lifecycle recovery](inbound-lifecycle-recovery.md) adds persistence tickets, saved-root worker composition, opt-in native command/producer receipts, switch-incarnation fencing and fixed orphan cleanup. Composed process-restart and delayed-frame drills are documented there; I05 owns runtime activation.
 
 ### 4. Voicemail Lifecycle And Audio
 

@@ -72,6 +72,7 @@ export async function limitedExecutor(f, config) {
   const executor = await CallExecutor.create({ ...login, options: `-c search_path=${f.schema}` }, 0);
   return {
     executor,
+    database: { ...login, options: `-c search_path=${f.schema}` },
     async close() {
       await executor.close();
       await admin.query(`drop owned by ${role}`);

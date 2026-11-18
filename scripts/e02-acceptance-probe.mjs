@@ -1,4 +1,6 @@
 import { proveTransferExecution, proveOutboundTransferExecution } from "./g02-transfer-execution.mjs";
+import { proveQuiescentRecovery } from "./h01-quiescent-recovery.mjs";
+import { proveLifecycleRecovery } from "./h01-recovery-matrix.mjs";
 import assert from "node:assert/strict";
 import { proveTransferSourceContinuity } from "./g01-transfer-continuity.mjs";
 import { randomUUID } from "node:crypto";
@@ -45,7 +47,12 @@ const config = {
   FREESWITCH_TRUNK_CHANNEL_LIMIT: 4,
   FREESWITCH_INBOUND_WAIT_SECONDS: 3
 };
-const esl = { host: "127.0.0.1", port: 8021, password: config.FREESWITCH_ESL_PASSWORD };
+const esl = {
+  host: "127.0.0.1",
+  port: 8021,
+  password: config.FREESWITCH_ESL_PASSWORD,
+  fenced: process.env.H01_RECOVERY === "1"
+};
 const report = {
   date: new Date().toISOString(),
   node: process.version,
@@ -77,13 +84,19 @@ let f,
   transferRuntime;
 const log = await open(join(directory, "agent.log"), "a");
 let inflight;
+let productRecoveryOwnsEvents = false;
+const omittedRecoveryCalls = new Set();
 async function drain() {
   if (draining) return;
   draining = true;
   try {
     while (cursor < observer.eventFrames.length) {
       try {
-        await adapter.persistFreeSwitchEvent(config, f.pool, observer.eventFrames[cursor]);
+        if (
+          !productRecoveryOwnsEvents &&
+          !omittedRecoveryCalls.has(observer.eventFrames[cursor].headers["variable_outbound_dialer_call_id"])
+        )
+          await adapter.persistFreeSwitchEvent(config, f.pool, observer.eventFrames[cursor]);
         cursor++;
       } catch (error) {
         if (!adapter.isTransientPersistenceError(error)) throw error;
@@ -167,7 +180,11 @@ try {
     user: "postgres",
     connectionTimeoutMillis: 2000
   };
-  f = await cleanupFixture(database);
+  f = await cleanupFixture(database, {
+    onPoolError: () => {
+      report.databaseDisconnectObserved = true;
+    }
+  });
   limited = await limitedExecutor(f, database);
   report.database = (await f.pool.query("select version()")).rows[0].version;
   const queue = (await f.pool.query("select id from inbound_queues limit 1")).rows[0].id;
@@ -261,299 +278,360 @@ try {
     assert.equal((await call(c.row.uuid)).agent_connected_at, null);
     return { offer, payload, url, result };
   }
-  const c = await startCall();
-  const accepted = await accept(c);
-  const before = phone.invites.length;
-  assert.deepEqual(
-    (await app.inject({ method: "POST", url: accepted.url, headers, payload: accepted.payload })).json(),
-    accepted.result
-  );
-  await runtime.wakeExecutor(accepted.result.operationId);
-  await until(async () => (await call(c.row.uuid)).state === "agent_connected", "native accepted bridge");
-  const connected = await call(c.row.uuid);
-  assert.equal(phone.invites.length - before, 1);
-  const root = (
-    await f.pool.query("select * from call_operations where id=$1", [accepted.result.operationId])
-  ).rows[0];
-  assert.equal(await command(`uuid_exists ${root.request.agentUuid}`), "true");
-  assert.equal(
-    (await f.pool.query("select state from agent_call_slots where agent_id=$1", [f.agentId])).rows[0].state,
-    "active"
-  );
-  assert.equal(
-    (
-      await f.pool.query(
-        "select count(*)::int n from call_capacity_reservations where call_id=$1 and resource_type='queue_waiting' and state<>'released'",
-        [c.row.uuid]
-      )
-    ).rows[0].n,
-    0
-  );
-  await runtime.wakeExecutor(accepted.result.operationId);
-  assert.equal(phone.invites.length - before, 1);
-  await pass(
-    "E02.1/E02.3 real HTTP winner, fixed originate/bridge, duplicate request/event replay and distinct bridge clock",
-    { response: accepted.result, connected, agentUuid: root.request.agentUuid }
-  );
-  await until(() => phone.received.length >= 2400, "agent receives customer RTP");
-  const reverseTone = assertTone(phone.received.slice(-2400), 880);
-  if (process.env.G02_TRANSFERS === "1")
-    transferRuntime = await proveTransferExecution({ f, c, phone, command, pass, limited });
-  if (process.env.G01_TRANSFERS === "1") await proveTransferSourceContinuity({ f, c, phone, command, pass });
-  await delay(400);
-  await until(
-    () => Date.now() > connected.queue_deadline_at.getTime() + 150,
-    "original queue deadline passed",
-    20000
-  );
-  assert.equal((await call(c.row.uuid)).ended_at, null);
-  assert.equal(await command(`uuid_exists ${c.row.uuid}`), "true");
-  await pass("E02 confirmed bridge cancels the original queue hangup guard", {
-    originalDeadline: connected.queue_deadline_at
-  });
-  c.control.hangup();
-  const media = await c.result;
-  if (transferRuntime) await transferRuntime.reconcile();
-  const tone = assertTone(
-    media.rtp.slice(-15).flatMap((p) => p.payload.map(decodeUlaw)),
-    660
-  );
-  await runtime.reconcile();
-  await clean(c.row.uuid);
-  await recover();
-  await pass("E02 actual winner stops waiting tone and passes decoded agent-to-customer media", {
-    tone,
-    reverseTone,
-    invites: phone.invites.length - before
-  });
-
-  if (process.env.G02_TRANSFERS === "1")
-    await proveOutboundTransferExecution({ f, phone, command, limited, pass });
-  if (process.env.G02_TRANSFERS === "1") {
-    for (const direction of ["inbound", "outbound"])
-      for (const lossBoundary of [
-        "customer_terminal_before_originate",
-        "before_originate",
-        "before_park",
-        "after_park",
-        "after_bridge"
-      ]) {
-        await proveOutboundTransferExecution({ f, phone, command, limited, pass, direction, lossBoundary });
-      }
-  }
-  const early = await startCall(),
-    earlyOffer = await offerFor(early),
-    earlyInput = intent();
-  let releaseHttp;
-  const httpGate = new Promise((resolve) => (releaseHttp = resolve)),
-    earlyApp = Fastify();
-  earlyApp.addHook("onSend", async (_request, _reply, payload) => {
-    await httpGate;
-    return payload;
-  });
-  registerCallOfferRoutes(earlyApp, httpConfig, f.pool, runtime);
-  try {
-    const count = phone.invites.length;
-    const pending = earlyApp
-      .inject({
-        method: "POST",
-        url: `/agent/call-offers/${earlyOffer.id}/accept`,
-        headers,
-        payload: earlyInput
-      })
-      .then((r) => r);
-    const duplicate = earlyApp
-      .inject({
-        method: "POST",
-        url: `/agent/call-offers/${earlyOffer.id}/accept`,
-        headers,
-        payload: earlyInput
-      })
-      .then((r) => r);
-    await until(
-      async () => (await call(early.row.uuid)).state === "agent_connected",
-      "service INVITE/bridge before held HTTP response"
-    );
-    const replay = await acceptInboundOffer(
-      f.pool,
-      { userId: f.userId, agentId: f.agentId, authVersion: 1 },
-      earlyOffer.id,
-      earlyInput
-    );
-    releaseHttp();
-    const response = await pending;
-    assert.deepEqual((await duplicate).json(), response.json());
-    assert.equal(response.statusCode, 200, response.body);
-    assert.deepEqual(response.json(), replay);
-    assert.equal(response.json().status, "connecting");
-    assert.equal(phone.invites.length - count, 1);
-    await until(
-      async () =>
-        (
-          await f.pool.query("select settled_at from inbound_connection_attempts where offer_id=$1", [
-            earlyOffer.id
-          ])
-        ).rows[0]?.settled_at,
-      "early response chain settlement"
-    );
-    early.control.hangup();
-    await early.result;
-    await clean(early.row.uuid);
-    await recover();
-    await pass(
-      "E02.3 actual INVITE and bridge before delayed HTTP response; replay keeps one fixed operation",
-      { response: response.json(), invites: phone.invites.length - count }
-    );
-  } finally {
-    releaseHttp();
-    await earlyApp.close();
-  }
-  // Real delayed transport and lost ACK, including absence before the send.
-  const lost = await startCall(),
-    lostAccept = await accept(lost);
-  const lostRoot = (
-    await f.pool.query("select * from call_operations where id=$1", [lostAccept.result.operationId])
-  ).rows[0];
-  const transport = await relay();
-  try {
-    const faultDriver = createCommandDriver({
-      ...esl,
-      port: transport.port,
-      buildCommand: inboundConnectionCommand,
-      validate: validateInboundConnection,
-      verify: async () => null,
-      reconcile: async () => null
-    });
-    const sendsBefore = phone.invites.length;
-    const running = limited.executor.run(lostRoot.id, "normal", faultDriver);
-    await until(() => transport.queued, "actual originate bytes held");
-    assert.equal(await command(`uuid_exists ${lostRoot.request.agentUuid}`), "false");
-    assert.equal(await settleInboundConnection(f.pool, lostRoot.id), null);
-    assert.equal(
-      (await f.pool.query("select state from agent_call_slots where agent_id=$1", [f.agentId])).rows[0].state,
-      "connecting"
-    );
+  if (process.env.H01_MATRIX_ONLY !== "1") {
+    const c = await startCall();
+    const accepted = await accept(c);
+    const before = phone.invites.length;
     assert.deepEqual(
-      (
-        await app.inject({ method: "POST", url: lostAccept.url, headers, payload: lostAccept.payload })
-      ).json(),
-      lostAccept.result
+      (await app.inject({ method: "POST", url: accepted.url, headers, payload: accepted.payload })).json(),
+      accepted.result
     );
-    transport.forward();
-    await until(
-      () =>
-        observer.events.some(
-          (e) => e["event-name"] === "BACKGROUND_JOB" && e["job-uuid"] === lostRoot.command_uuid
-        ),
-      "fixed originate job despite lost ACK"
-    );
-    await transport.close();
-    assert.equal((await running).status, "uncertain");
-    await runtime.wakeExecutor(lostRoot.id);
-    await until(async () => {
-      await runtime.reconcile();
-      return (await call(lost.row.uuid)).state === "agent_connected";
-    }, "lost-ACK event backlog resolves same connection");
-    assert.equal((await call(lost.row.uuid)).state, "agent_connected");
-    assert.equal(phone.invites.length - sendsBefore, 1);
-    lost.control.hangup();
-    await lost.result;
-    await clean(lost.row.uuid);
-    await recover();
-    await pass(
-      "E02.3 real held bytes, false initial absence, lost ACK and HTTP replay recover the same operation once",
-      { sends: transport.sends, operationId: lostRoot.id }
-    );
-  } finally {
-    await transport.close().catch(() => {});
-  }
-
-  let releaseAnswer;
-  const answerGate = new Promise((resolve) => (releaseAnswer = resolve));
-  phone.setBehavior({ answerGate });
-  const interrupted = await startCall(),
-    interruptedAccept = await accept(interrupted),
-    invitesBefore = phone.invites.length;
-  const connecting = runtime.wakeExecutor(interruptedAccept.result.operationId);
-  await until(() => phone.invites.length > invitesBefore, "real agent INVITE awaiting controlled answer");
-  interrupted.control.hangup();
-  await interrupted.result;
-  await until(
-    async () => !!(await call(interrupted.row.uuid)).ended_at,
-    "customer terminal during originate"
-  );
-  assert.notEqual(
-    (await f.pool.query("select state from agent_call_slots where agent_id=$1", [f.agentId])).rows[0].state,
-    "free"
-  );
-  releaseAnswer();
-  await connecting;
-  await until(async () => {
-    await runtime.reconcile();
-    return (
-      (await f.pool.query("select state from agent_call_slots where agent_id=$1", [f.agentId])).rows[0]
-        .state === "free"
-    );
-  }, "exact cleanup before slot reuse");
-  assert.equal((await call(interrupted.row.uuid)).agent_connected_at, null);
-  await clean(interrupted.row.uuid);
-  await recover();
-  await pass(
-    "E02.2/E02.4 customer hangup during connection and late answer retain slot until fixed-job/leg cleanup"
-  );
-
-  phone.setBehavior({ rejectCode: 486 });
-  const rejected = await startCall();
-  const rejectedBefore = phone.invites.length;
-  let original;
-  const attempts = [];
-  for (let n = 1; n <= 3; n++) {
-    const accepted = await accept(rejected);
-    original ??= await call(rejected.row.uuid);
     await runtime.wakeExecutor(accepted.result.operationId);
-    await until(async () => {
-      await runtime.reconcile();
-      return (await call(rejected.row.uuid)).state !== "connecting";
-    }, "rejected job and terminal events settle before reuse");
-    const current = await call(rejected.row.uuid);
-    assert.equal(current.queue_deadline_at.getTime(), original.queue_deadline_at.getTime());
-    assert.equal(current.arrived_at.getTime(), original.arrived_at.getTime());
-    assert.equal(current.agent_connected_at, null);
+    await until(async () => (await call(c.row.uuid)).state === "agent_connected", "native accepted bridge");
+    const connected = await call(c.row.uuid);
+    assert.equal(phone.invites.length - before, 1);
+    const root = (
+      await f.pool.query("select * from call_operations where id=$1", [accepted.result.operationId])
+    ).rows[0];
+    assert.equal(await command(`uuid_exists ${root.request.agentUuid}`), "true");
     assert.equal(
       (await f.pool.query("select state from agent_call_slots where agent_id=$1", [f.agentId])).rows[0].state,
-      "free"
+      "active"
     );
-    const x = (
-      await f.pool.query("select * from inbound_connection_attempts where operation_id=$1", [
-        accepted.result.operationId
-      ])
-    ).rows[0];
-    attempts.push(x);
-    if (n < 3) {
-      assert.equal(current.state, "queued");
-      assert.equal(await dispatchInboundOffers(f.pool, f.agentId), null);
+    assert.equal(
+      (
+        await f.pool.query(
+          "select count(*)::int n from call_capacity_reservations where call_id=$1 and resource_type='queue_waiting' and state<>'released'",
+          [c.row.uuid]
+        )
+      ).rows[0].n,
+      0
+    );
+    await runtime.wakeExecutor(accepted.result.operationId);
+    assert.equal(phone.invites.length - before, 1);
+    await pass(
+      "E02.1/E02.3 real HTTP winner, fixed originate/bridge, duplicate request/event replay and distinct bridge clock",
+      { response: accepted.result, connected, agentUuid: root.request.agentUuid }
+    );
+    await until(() => phone.received.length >= 2400, "agent receives customer RTP");
+    const reverseTone = assertTone(phone.received.slice(-2400), 880);
+    if (process.env.G02_TRANSFERS === "1")
+      transferRuntime = await proveTransferExecution({ f, c, phone, command, pass, limited });
+    if (process.env.G01_TRANSFERS === "1")
+      await proveTransferSourceContinuity({ f, c, phone, command, pass });
+    await delay(400);
+    await until(
+      () => Date.now() > connected.queue_deadline_at.getTime() + 150,
+      "original queue deadline passed",
+      20000
+    );
+    assert.equal((await call(c.row.uuid)).ended_at, null);
+    assert.equal(await command(`uuid_exists ${c.row.uuid}`), "true");
+    await pass("E02 confirmed bridge cancels the original queue hangup guard", {
+      originalDeadline: connected.queue_deadline_at
+    });
+    c.control.hangup();
+    const media = await c.result;
+    if (transferRuntime) await transferRuntime.reconcile();
+    const tone = assertTone(
+      media.rtp.slice(-15).flatMap((p) => p.payload.map(decodeUlaw)),
+      660
+    );
+    await runtime.reconcile();
+    await clean(c.row.uuid);
+    await recover();
+    await pass("E02 actual winner stops waiting tone and passes decoded agent-to-customer media", {
+      tone,
+      reverseTone,
+      invites: phone.invites.length - before
+    });
+
+    if (process.env.G02_TRANSFERS === "1")
+      await proveOutboundTransferExecution({ f, phone, command, limited, pass });
+    if (process.env.H01_RECOVERY === "1")
+      await proveQuiescentRecovery({
+        f,
+        phone,
+        command,
+        limited,
+        pass,
+        omit: omittedRecoveryCalls,
+        async persisted() {
+          await until(async () => {
+            await drain();
+            return !draining && cursor === observer.eventFrames.length;
+          }, "H01 fixture persistence drained");
+          if (eventError) throw eventError;
+        }
+      });
+    if (process.env.G02_TRANSFERS === "1") {
+      for (const direction of ["inbound", "outbound"])
+        for (const lossBoundary of [
+          "customer_terminal_before_originate",
+          "before_originate",
+          "before_park",
+          "after_park",
+          "after_bridge"
+        ]) {
+          await proveOutboundTransferExecution({ f, phone, command, limited, pass, direction, lossBoundary });
+        }
+    }
+    const early = await startCall(),
+      earlyOffer = await offerFor(early),
+      earlyInput = intent();
+    let releaseHttp;
+    const httpGate = new Promise((resolve) => (releaseHttp = resolve)),
+      earlyApp = Fastify();
+    earlyApp.addHook("onSend", async (_request, _reply, payload) => {
+      await httpGate;
+      return payload;
+    });
+    registerCallOfferRoutes(earlyApp, httpConfig, f.pool, runtime);
+    try {
+      const count = phone.invites.length;
+      const pending = earlyApp
+        .inject({
+          method: "POST",
+          url: `/agent/call-offers/${earlyOffer.id}/accept`,
+          headers,
+          payload: earlyInput
+        })
+        .then((r) => r);
+      const duplicate = earlyApp
+        .inject({
+          method: "POST",
+          url: `/agent/call-offers/${earlyOffer.id}/accept`,
+          headers,
+          payload: earlyInput
+        })
+        .then((r) => r);
+      await until(
+        async () => (await call(early.row.uuid)).state === "agent_connected",
+        "service INVITE/bridge before held HTTP response"
+      );
+      const replay = await acceptInboundOffer(
+        f.pool,
+        { userId: f.userId, agentId: f.agentId, authVersion: 1 },
+        earlyOffer.id,
+        earlyInput
+      );
+      releaseHttp();
+      const response = await pending;
+      assert.deepEqual((await duplicate).json(), response.json());
+      assert.equal(response.statusCode, 200, response.body);
+      assert.deepEqual(response.json(), replay);
+      assert.equal(response.json().status, "connecting");
+      assert.equal(phone.invites.length - count, 1);
       await until(
         async () =>
           (
-            await f.pool.query(
-              "select retry_at<=clock_timestamp() due from inbound_connection_attempts where operation_id=$1",
-              [accepted.result.operationId]
-            )
-          ).rows[0].due,
-        "fixed backoff"
+            await f.pool.query("select settled_at from inbound_connection_attempts where offer_id=$1", [
+              earlyOffer.id
+            ])
+          ).rows[0]?.settled_at,
+        "early response chain settlement"
       );
-    } else assert.equal(current.state, "fallback");
+      early.control.hangup();
+      await early.result;
+      await clean(early.row.uuid);
+      await recover();
+      await pass(
+        "E02.3 actual INVITE and bridge before delayed HTTP response; replay keeps one fixed operation",
+        { response: response.json(), invites: phone.invites.length - count }
+      );
+    } finally {
+      releaseHttp();
+      await earlyApp.close();
+    }
+    // Real delayed transport and lost ACK, including absence before the send.
+    const lost = await startCall(),
+      lostAccept = await accept(lost);
+    const lostRoot = (
+      await f.pool.query("select * from call_operations where id=$1", [lostAccept.result.operationId])
+    ).rows[0];
+    const transport = await relay();
+    try {
+      const faultDriver = createCommandDriver({
+        ...esl,
+        port: transport.port,
+        buildCommand: inboundConnectionCommand,
+        validate: validateInboundConnection,
+        verify: async () => null,
+        reconcile: async () => null
+      });
+      const sendsBefore = phone.invites.length;
+      const running = limited.executor.run(lostRoot.id, "normal", faultDriver);
+      await until(() => transport.queued, "actual originate bytes held");
+      assert.equal(await command(`uuid_exists ${lostRoot.request.agentUuid}`), "false");
+      assert.equal(await settleInboundConnection(f.pool, lostRoot.id), null);
+      assert.equal(
+        (await f.pool.query("select state from agent_call_slots where agent_id=$1", [f.agentId])).rows[0]
+          .state,
+        "connecting"
+      );
+      assert.deepEqual(
+        (
+          await app.inject({ method: "POST", url: lostAccept.url, headers, payload: lostAccept.payload })
+        ).json(),
+        lostAccept.result
+      );
+      transport.forward();
+      await until(
+        () =>
+          observer.events.some(
+            (e) => e["event-name"] === "BACKGROUND_JOB" && e["job-uuid"] === lostRoot.command_uuid
+          ),
+        "fixed originate job despite lost ACK"
+      );
+      await transport.close();
+      assert.equal((await running).status, "uncertain");
+      await runtime.wakeExecutor(lostRoot.id);
+      await until(async () => {
+        await runtime.reconcile();
+        return (await call(lost.row.uuid)).state === "agent_connected";
+      }, "lost-ACK event backlog resolves same connection");
+      assert.equal((await call(lost.row.uuid)).state, "agent_connected");
+      assert.equal(phone.invites.length - sendsBefore, 1);
+      lost.control.hangup();
+      await lost.result;
+      await clean(lost.row.uuid);
+      await recover();
+      await pass(
+        "E02.3 real held bytes, false initial absence, lost ACK and HTTP replay recover the same operation once",
+        { sends: transport.sends, operationId: lostRoot.id }
+      );
+    } finally {
+      await transport.close().catch(() => {});
+    }
+
+    let releaseAnswer;
+    const answerGate = new Promise((resolve) => (releaseAnswer = resolve));
+    phone.setBehavior({ answerGate });
+    const interrupted = await startCall(),
+      interruptedAccept = await accept(interrupted),
+      invitesBefore = phone.invites.length;
+    const connecting = runtime.wakeExecutor(interruptedAccept.result.operationId);
+    await until(() => phone.invites.length > invitesBefore, "real agent INVITE awaiting controlled answer");
+    interrupted.control.hangup();
+    await interrupted.result;
+    await until(
+      async () => !!(await call(interrupted.row.uuid)).ended_at,
+      "customer terminal during originate"
+    );
+    assert.notEqual(
+      (await f.pool.query("select state from agent_call_slots where agent_id=$1", [f.agentId])).rows[0].state,
+      "free"
+    );
+    releaseAnswer();
+    await connecting;
+    await until(async () => {
+      await runtime.reconcile();
+      return (
+        (await f.pool.query("select state from agent_call_slots where agent_id=$1", [f.agentId])).rows[0]
+          .state === "free"
+      );
+    }, "exact cleanup before slot reuse");
+    assert.equal((await call(interrupted.row.uuid)).agent_connected_at, null);
+    await clean(interrupted.row.uuid);
+    await recover();
+    await pass(
+      "E02.2/E02.4 customer hangup during connection and late answer retain slot until fixed-job/leg cleanup"
+    );
+
+    phone.setBehavior({ rejectCode: 486 });
+    const rejected = await startCall();
+    const rejectedBefore = phone.invites.length;
+    let original;
+    const attempts = [];
+    for (let n = 1; n <= 3; n++) {
+      const accepted = await accept(rejected);
+      original ??= await call(rejected.row.uuid);
+      await runtime.wakeExecutor(accepted.result.operationId);
+      await until(async () => {
+        await runtime.reconcile();
+        return (await call(rejected.row.uuid)).state !== "connecting";
+      }, "rejected job and terminal events settle before reuse");
+      const current = await call(rejected.row.uuid);
+      assert.equal(current.queue_deadline_at.getTime(), original.queue_deadline_at.getTime());
+      assert.equal(current.arrived_at.getTime(), original.arrived_at.getTime());
+      assert.equal(current.agent_connected_at, null);
+      assert.equal(
+        (await f.pool.query("select state from agent_call_slots where agent_id=$1", [f.agentId])).rows[0]
+          .state,
+        "free"
+      );
+      const x = (
+        await f.pool.query("select * from inbound_connection_attempts where operation_id=$1", [
+          accepted.result.operationId
+        ])
+      ).rows[0];
+      attempts.push(x);
+      if (n < 3) {
+        assert.equal(current.state, "queued");
+        assert.equal(await dispatchInboundOffers(f.pool, f.agentId), null);
+        await until(
+          async () =>
+            (
+              await f.pool.query(
+                "select retry_at<=clock_timestamp() due from inbound_connection_attempts where operation_id=$1",
+                [accepted.result.operationId]
+              )
+            ).rows[0].due,
+          "fixed backoff"
+        );
+      } else assert.equal(current.state, "fallback");
+    }
+    assert.equal(phone.invites.length - rejectedBefore, 3);
+    rejected.control.hangup();
+    await rejected.result;
+    await clean(rejected.row.uuid);
+    await recover();
+    await pass(
+      "E02.4 three actual rejected SIP connects, fixed backoff, retained queue permit, unchanged deadline and bounded fallback",
+      { attempts, invites: phone.invites.length - rejectedBefore }
+    );
+    phone.setBehavior();
   }
-  assert.equal(phone.invites.length - rejectedBefore, 3);
-  rejected.control.hangup();
-  await rejected.result;
-  await clean(rejected.row.uuid);
-  await recover();
-  await pass(
-    "E02.4 three actual rejected SIP connects, fixed backoff, retained queue permit, unchanged deadline and bounded fallback",
-    { attempts, invites: phone.invites.length - rejectedBefore }
-  );
-  phone.setBehavior();
+  if (process.env.H01_RECOVERY === "1") {
+    productRecoveryOwnsEvents = true;
+    while (draining) await delay(10);
+    await proveLifecycleRecovery({
+      f,
+      limited,
+      directory,
+      socket,
+      esl,
+      config,
+      phone,
+      command,
+      pass,
+      startCall,
+      accept,
+      async restartJournal(duringStop) {
+        const exit = once(agent, "exit");
+        agent.kill("SIGKILL");
+        await exit;
+        await duringStop?.();
+        agent = fork(new URL("../apps/api/dist-test/ingress-agent.js", import.meta.url), [], {
+          env: {
+            FREESWITCH_INGRESS_ENABLED: "true",
+            FREESWITCH_INGRESS_SOCKET: socket,
+            FREESWITCH_INGRESS_JOURNAL_SLOTS: "8",
+            FREESWITCH_ESL_PASSWORD: esl.password
+          },
+          stdio: ["ignore", log.fd, log.fd, "ipc"]
+        });
+        await writeFile(join(directory, "journal-agent.pid"), String(agent.pid));
+        await until(async () => {
+          try {
+            return !!JSON.parse(await ingressRequest(socket, "/status"));
+          } catch {
+            return false;
+          }
+        }, "H01 journal restart");
+      }
+    });
+  }
   await app.close();
   report.snapshot = await f.snapshot();
   assert.equal(report.snapshot.call_capacity_reservations.filter((r) => r.state !== "released").length, 0);

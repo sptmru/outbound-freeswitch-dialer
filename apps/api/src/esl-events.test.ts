@@ -11,6 +11,20 @@ const config = {
 } as AppConfig;
 
 describe("FreeSWITCH event helpers", () => {
+  it("H01 unwraps native percent-encoded subclasses before dispatching lifecycle consumers", () => {
+    for (const kind of [
+      "inbound_waiting_started",
+      "inbound_fallback_completed",
+      "inbound_forward_finished"
+    ]) {
+      const body = `Event-Name: CUSTOM\nEvent-Subclass: outbound_dialer%3A%3A${kind}\n\n`;
+      const wire = `Content-Type: text/event-plain\nContent-Length: ${Buffer.byteLength(body)}\n\n${body}`;
+      assert.equal(
+        __testing.extractFrames(wire).frames[0].headers["event-subclass"],
+        `outbound_dialer::${kind}`
+      );
+    }
+  });
   it("recognizes retryable PostgreSQL and connection failures", () => {
     assert.equal(__testing.isTransientPersistenceError(new AdmissionDiscoveryChanged()), true);
     assert.equal(

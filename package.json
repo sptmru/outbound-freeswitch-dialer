@@ -50,7 +50,8 @@
     "test:inbound:admin:browser": "playwright test --config playwright.f05.config.ts",
     "test:transfers:freeswitch": "G02_TRANSFERS=1 bash scripts/test-e02-acceptance.sh",
     "test:transfers:boundaries:freeswitch": "G04_SUPERVISION=1 G02_TRANSFERS=1 bash scripts/test-e02-acceptance.sh",
-    "test:desk:transfers:browser": "playwright test --config playwright.g03.config.ts"
+    "test:desk:transfers:browser": "playwright test --config playwright.g03.config.ts",
+    "test:recovery:freeswitch": "H01_RECOVERY=1 bash scripts/test-e02-acceptance.sh"
   },
   "engines": {
     "node": ">=22.13.0"

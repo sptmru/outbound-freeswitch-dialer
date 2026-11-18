@@ -122,3 +122,90 @@ test("C03 transport clean close, wrong Job-UUID and abort with active partial tr
     }
   }
 });
+
+test("H01 fenced transport arms the immutable operation on its leased connection before its one native frame", async () => {
+  const op = operation(),
+    boot = randomUUID();
+  const frames: string[] = [];
+  let armed = false;
+  const mock = await server((socket, frame) => {
+    frames.push(frame);
+    if (frame.startsWith("api ")) {
+      const body = frame.endsWith("core_uuid") ? boot : "/fixture/conf";
+      socket.write(`Content-Type: api/response\nContent-Length: ${Buffer.byteLength(body)}\n\n${body}`);
+    } else {
+      assert.ok(armed);
+      assert.equal(
+        frame,
+        `bgapi lua /fixture/conf/scripts/outbound-command.lua execute ${boot} ${op.command_uuid} ${op.id} uuid_exists ${op.target_uuid}\nJob-UUID: ${op.command_uuid}`
+      );
+      const event = `Event-Name: BACKGROUND_JOB\nJob-UUID: ${op.command_uuid}\n\ntrue`;
+      socket.write(`Content-Type: text/event-plain\nContent-Length: ${Buffer.byteLength(event)}\n\n${event}`);
+    }
+  });
+  try {
+    const client = {
+      async query(sql: string, params: string[]) {
+        assert.match(sql, /insert into call_command_fences/);
+        assert.deepEqual(params, [op.id, boot]);
+        armed = true;
+      }
+    } as unknown as pg.PoolClient;
+    const driver = createCommandDriver({
+      host: "127.0.0.1",
+      port: mock.port,
+      password: "fixture",
+      fenced: true,
+      buildCommand: (o) => `uuid_exists ${o.target_uuid}`,
+      verify: async () => ({ state: "succeeded", result: {}, evidence: "fixture" }),
+      reconcile: async () => null
+    });
+    assert.equal(driver.protocol, "fs-fenced-v1");
+    assert.equal((await driver.send(op, AbortSignal.timeout(1000), client))?.state, "succeeded");
+    assert.equal(frames.length, 3);
+  } finally {
+    await mock.close();
+  }
+});
+
+test("H01 abort while arming prevents a late SQL callback from sending any BGAPI frame", async () => {
+  const boot = randomUUID();
+  let release!: () => void, entered!: () => void;
+  const arming = new Promise<void>((r) => (entered = r)),
+    pending = new Promise<void>((r) => (release = r));
+  const frames: string[] = [];
+  const mock = await server((socket, frame) => {
+    frames.push(frame);
+    const body = frame.endsWith("core_uuid") ? boot : "/fixture/conf";
+    socket.write(`Content-Type: api/response\nContent-Length: ${Buffer.byteLength(body)}\n\n${body}`);
+  });
+  try {
+    const driver = createCommandDriver({
+      host: "127.0.0.1",
+      port: mock.port,
+      password: "fixture",
+      fenced: true,
+      buildCommand: () => "uuid_exists fixture",
+      verify: async () => null,
+      reconcile: async () => null
+    });
+    const controller = new AbortController();
+    const outcome = driver.send(operation(), controller.signal, {
+      query() {
+        entered();
+        return pending;
+      }
+    } as unknown as pg.PoolClient);
+    const rejected = assert.rejects(outcome, /aborted/);
+    await arming;
+    controller.abort();
+    await rejected;
+    release();
+    await pending;
+    await new Promise<void>((r) => setImmediate(r));
+    assert.equal(frames.filter((f) => f.startsWith("bgapi ")).length, 0);
+  } finally {
+    release?.();
+    await mock.close();
+  }
+});

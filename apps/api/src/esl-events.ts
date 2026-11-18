@@ -1,4 +1,7 @@
 import { persistTransferEvent, persistTransferJob } from "./transfer-connection.js";
+import { RecoveryPersistenceFence } from "./recovery-persistence-fence.js";
+import { persistRecoveryCleanupJob } from "./recovery-cleanup.js";
+import type { RecoveryBarrier } from "./inbound-recovery.js";
 import { persistInboundForwardingEvent } from "./inbound-forwarding.js";
 import { persistInboundFallbackJob, persistInboundFallbackEvent } from "./inbound-fallback.js";
 import { persistInboundQueueEvent, persistInboundQueueJob } from "./inbound-queue.js";
@@ -73,6 +76,7 @@ const EVENT_NAMES = [
   "sofia::register",
   "sofia::unregister",
   "sofia::expire",
+  "outbound_dialer::inbound_captured",
   "outbound_dialer::inbound_waiting_started",
   "outbound_dialer::inbound_forward_finished",
   "outbound_dialer::inbound_fallback_started",
@@ -97,7 +101,14 @@ type AgentRegistrationEvent = {
   sipUsername: string;
 };
 
-export function startFreeSwitchEventListener(config: AppConfig, pool: pg.Pool, logger: Logger): () => void {
+export function startFreeSwitchEventListener(
+  config: AppConfig,
+  pool: pg.Pool,
+  logger: Logger,
+  nativeRecovery?: {
+    reconcile(barrier: RecoveryBarrier): Promise<{ calls: Array<{ callId: string; error?: string }> }>;
+  }
+): () => void {
   configureFreeSwitchEventQueueMetrics(config.FREESWITCH_ESL_EVENT_QUEUE_MAX_SIZE);
   if (!config.FREESWITCH_ESL_ENABLED) {
     setFreeSwitchEventListenerConnected(false);
@@ -120,6 +131,7 @@ export function startFreeSwitchEventListener(config: AppConfig, pool: pg.Pool, l
     maxSize: config.FREESWITCH_ESL_EVENT_QUEUE_MAX_SIZE,
     onDepthChanged: setFreeSwitchEventQueueDepth,
     onPermanentFailure: (error, frame) => {
+      recoveryFence.persistenceFailed();
       recordFreeSwitchEventError();
       logger.error(
         {
@@ -150,11 +162,22 @@ export function startFreeSwitchEventListener(config: AppConfig, pool: pg.Pool, l
       recordFreeSwitchEventProcessed(frame.headers["event-name"]);
     }
   });
+  const recoveryFence = new RecoveryPersistenceFence(persistenceQueue, () => stopped);
 
   const reconciliationTask = new CoalescedTask(
     async () => {
       await persistenceQueue.waitForIdle();
-      if (!stopped) {
+      if (recoveryFence.ticket()) {
+        const result = await nativeRecovery?.reconcile(recoveryFence);
+        for (const call of result?.calls ?? [])
+          if (call.error)
+            logger.warn(
+              { callId: call.callId, message: call.error },
+              "native lifecycle recovery deferred after failure"
+            );
+        await persistenceQueue.waitForIdle();
+      }
+      if (recoveryFence.ticket()) {
         await reconcileActiveCalls(config, pool, logger);
       }
     },
@@ -228,6 +251,7 @@ export function startFreeSwitchEventListener(config: AppConfig, pool: pg.Pool, l
           ) {
             nextSocket.setTimeout(0);
             stage = "events";
+            recoveryFence.subscribed();
             setFreeSwitchEventListenerConnected(true);
             logger.info({ events: EVENT_NAMES }, "FreeSWITCH event listener subscribed");
             reconciliationTask.request();
@@ -240,6 +264,7 @@ export function startFreeSwitchEventListener(config: AppConfig, pool: pg.Pool, l
         }
 
         if (stage === "events") {
+          recoveryFence.arrived();
           earlyMediaFallback.handle(frame);
           const callId = frame.headers["variable_outbound_dialer_call_id"];
           if (callId) {
@@ -254,10 +279,18 @@ export function startFreeSwitchEventListener(config: AppConfig, pool: pg.Pool, l
               "FreeSWITCH tagged event received"
             );
           }
-          if (!persistenceQueue.enqueue(frame)) {
+          const enqueued = persistenceQueue.enqueue(frame);
+          if (
+            enqueued &&
+            nativeRecovery &&
+            frame.headers["event-subclass"] === "outbound_dialer::inbound_captured"
+          )
+            reconciliationTask.request();
+          if (!enqueued) {
             const unqueuedFrames = extraction.frames.length - frameIndex;
             recordFreeSwitchPersistenceOverflow();
             setFreeSwitchEventListenerConnected(false);
+            recoveryFence.disconnected();
             logger.error(
               {
                 capacity: persistenceQueue.maxSize,
@@ -293,6 +326,7 @@ export function startFreeSwitchEventListener(config: AppConfig, pool: pg.Pool, l
     });
 
     nextSocket.on("close", () => {
+      recoveryFence.disconnected();
       setFreeSwitchEventListenerConnected(false);
       if (socket === nextSocket) {
         socket = null;
@@ -308,6 +342,7 @@ export function startFreeSwitchEventListener(config: AppConfig, pool: pg.Pool, l
 
   return () => {
     stopped = true;
+    recoveryFence.disconnected();
     setFreeSwitchEventListenerConnected(false);
     clearInterval(reconciliationTimer);
     reconciliationTask.stop();
@@ -354,11 +389,16 @@ async function persistFreeSwitchEvent(
 ): Promise<void> {
   if (
     frame.headers["event-name"] === "BACKGROUND_JOB" &&
-    ((await persistTransferJob(pool, {
+    ((await persistRecoveryCleanupJob(pool, {
       jobUuid: frame.headers["job-uuid"] ?? "",
       body: frame.body,
       headers: frame.headers
     })) ||
+      (await persistTransferJob(pool, {
+        jobUuid: frame.headers["job-uuid"] ?? "",
+        body: frame.body,
+        headers: frame.headers
+      })) ||
       (await persistInboundFallbackJob(pool, {
         jobUuid: frame.headers["job-uuid"] ?? "",
         body: frame.body,
@@ -2097,6 +2137,10 @@ function unwrapPlainEvent(frame: EslFrame): EslFrame {
     return frame;
   }
 
+  // Native CUSTOM subclasses are percent-encoded by event-plain. Normalize
+  // once at the wire boundary so every lifecycle consumer sees the same token.
+  if (eventHeaders["event-subclass"])
+    eventHeaders["event-subclass"] = normalizedEventSubclass({ headers: eventHeaders, body: "" });
   return {
     headers: {
       ...frame.headers,

@@ -14,6 +14,8 @@ if receipt ~= "stored:" .. uuid then
   return
 end
 session:setVariable("outbound_dialer_ingress_durable", "true")
+-- Wake the optional recovery consumer promptly; the journal remains authority.
+session:execute("event", "Event-Name=CUSTOM,Event-Subclass=outbound_dialer::inbound_captured,Outbound-Dialer-Call-ID=" .. uuid)
 function outbound_ingress_ended(s)
   local result = post("terminal")
   if result ~= "stored:" .. uuid then

@@ -15,6 +15,7 @@ export function createCommandDriver(config: {
   host: string;
   port: number;
   password: string;
+  fenced?: boolean;
   buildCommand: (operation: DurableCommand) => string;
   verify: (
     operation: DurableCommand,
@@ -27,6 +28,7 @@ export function createCommandDriver(config: {
 }): CommandDriver {
   if (/[\r\n]/.test(config.password)) throw new Error("Invalid ESL password framing");
   return {
+    protocol: config.fenced ? "fs-fenced-v1" : undefined,
     validate: config.validate,
     reconcile: config.reconcile,
     async send(operation, signal, client) {
@@ -36,6 +38,7 @@ export function createCommandDriver(config: {
         const socket = net.createConnection({ host: config.host, port: config.port });
         let buffer = Buffer.alloc(0);
         let stage = "greeting";
+        let boot = "";
         let settled = false;
         const finish = (error?: Error, evidence?: BackgroundJobEvidence) => {
           if (settled) return;
@@ -84,9 +87,44 @@ export function createCommandDriver(config: {
                 socket.write("event plain BACKGROUND_JOB\n\n");
                 stage = "subscribe";
               } else {
-                socket.write(`bgapi ${command}\nJob-UUID: ${operation.command_uuid}\n\n`);
-                stage = "job";
+                if (config.fenced) {
+                  stage = "incarnation";
+                  socket.write("api global_getvar core_uuid\n\n");
+                } else {
+                  socket.write(`bgapi ${command}\nJob-UUID: ${operation.command_uuid}\n\n`);
+                  stage = "job";
+                }
               }
+            } else if (stage === "incarnation" && headers["content-type"] === "api/response") {
+              boot = body.trim();
+              if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(boot)) {
+                finish(new Error("Invalid FreeSWITCH incarnation"));
+                return;
+              }
+              stage = "script_path";
+              socket.write("api global_getvar conf_dir\n\n");
+            } else if (stage === "script_path" && headers["content-type"] === "api/response") {
+              const directory = body.trim();
+              if (!/^\/[A-Za-z0-9_/.-]+$/.test(directory) || directory.split("/").includes("..")) {
+                finish(new Error("Invalid FreeSWITCH configuration directory"));
+                return;
+              }
+              stage = "arming";
+              void client
+                .query("insert into call_command_fences(operation_id,core_uuid) values($1,$2)", [
+                  operation.id,
+                  boot
+                ])
+                .then(
+                  () => {
+                    if (settled || signal.aborted) return;
+                    socket.write(
+                      `bgapi lua ${directory}/scripts/outbound-command.lua execute ${boot} ${operation.command_uuid} ${operation.id} ${command}\nJob-UUID: ${operation.command_uuid}\n\n`
+                    );
+                    stage = "job";
+                  },
+                  (e) => finish(e)
+                );
             } else if (headers["content-type"] === "command/reply") {
               if (
                 !headers["reply-text"]?.startsWith("+OK") ||
