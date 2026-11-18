@@ -13,6 +13,7 @@ import {
 import type { SoftphoneRuntime } from "../../softphone";
 import type { AgentDeskResponse, LeadSummary } from "../../types";
 import { CallOfferCard } from "./call-offer";
+import { TransferControls } from "./transfer-controls";
 import { actionUnavailable, conflictMessage, controllerMutation } from "./coordination";
 import type { ManualStartIntent } from "../../types";
 import { ActiveCall } from "./active-call";
@@ -61,7 +62,7 @@ export function AgentDesk({
   const manualRetry = useRef<{ signature: string; intent: ManualStartIntent } | null>(null);
   const canceledAuto = useRef(new Set<string>());
   const autoSource = desk.coordination?.autoNextIntent;
-  const authority = `${context}/${desk.coordination?.slot.state}/${desk.coordination?.slot.callId}/${autoSource?.id}/${autoSource?.state}`;
+  const authority = `${context}/${desk.activeCall?.id}/${desk.coordination?.slot.state}/${desk.coordination?.slot.callId}/${autoSource?.id}/${autoSource?.state}`;
   const latestAuthority = useRef(authority);
   latestAuthority.current = authority;
   const mutation = controllerMutation(desk, softphone);
@@ -261,9 +262,11 @@ export function AgentDesk({
     callStartPendingRef.current = true;
     setCallNextPending(true);
     if (autoSource && kind === "accept") canceledAuto.current.add(autoSource.id);
+    const captured = context;
     try {
       await action();
     } catch (error) {
+      if (!mounted.current || latestContext.current !== captured) return;
       const expected = await actionFailure(error);
       if (!expected)
         setNotice(error instanceof Error ? error.message : "Could not update offer. Please try again.");
@@ -404,13 +407,18 @@ export function AgentDesk({
     callControlPendingRef.current = kind;
     setCallControlPending(kind);
     setEndCallError(null);
+    const capturedAuthority = authority;
     try {
-      onDeskChanged(await action());
+      const result = await action();
+      if (!mounted.current) return;
+      if (latestAuthority.current === capturedAuthority) onDeskChanged(result);
+      else await refreshDesk();
     } catch (error) {
-      setEndCallError(error instanceof Error ? error.message : fallbackError);
-      if (kind === "voicemail") {
+      if (!mounted.current) return;
+      setEndCallError(conflictMessage(error) ?? (error instanceof Error ? error.message : fallbackError));
+      if (kind === "voicemail" || desk.coordination) {
         try {
-          onDeskChanged(await fetchAgentDesk(campaign?.id));
+          await refreshDesk();
         } catch {
           /* Keep the action error; the normal live refresh will retry. */
         }
@@ -439,6 +447,14 @@ export function AgentDesk({
             {desk.coordination.slot.state === "uncertain" ? "Checking call connection…" : "Connecting…"}
           </p>
         )}
+      {desk.coordination && (
+        <TransferControls
+          desk={desk}
+          mutation={mutation}
+          busy={callNextPending || callControlPending !== null}
+          refresh={refreshDesk}
+        />
+      )}
       {desk.coordination && (
         <CallOfferCard
           desk={desk}

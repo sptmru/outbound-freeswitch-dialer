@@ -34,9 +34,7 @@ browser dialog or displaying a generic telephony failure. A shared synchronous
 request guard bounds duplicate clicks and concurrent local start/accept actions;
 only API/PostgreSQL arbitration decides the winner across agents/tabs.
 
-Transfer offers keep valid manual controls available. Their direct Accept/Decline
-buttons remain disabled in E03: G01/G03 own those handlers and UI. E03 never sends
-a transfer offer to the inbound-only Ignore handler.
+Transfer offers keep valid manual controls available. [G03 transfer controls](inbound-agent-desk-transfers.md) now enable explicit Accept/Decline through the G01 transfer-capable offer routes and add source selection/cancel/progress. The manual start request still performs atomic server-side decline without a separate dismissal.
 
 ## Manual and automatic starts
 

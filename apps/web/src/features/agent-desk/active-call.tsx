@@ -49,6 +49,10 @@ export function ActiveCall({
 
   const durationLabel = formatCallLifecycleStatus(activeCall.state, activeCall.outcome ?? null);
   const voicemailSignal = formatVoicemailSignal(activeCall.voicemailSignal);
+  const canControl =
+    !desk.coordination ||
+    (desk.coordination.slot.callId === activeCall.id &&
+      ["reserved", "connecting", "active", "uncertain"].includes(desk.coordination.slot.state));
 
   const unavailableAction = {
     allowed: false,
@@ -181,7 +185,9 @@ export function ActiveCall({
       <div className="call-actions call-actions-stacked">
         <button
           className="primary-action voicemail-primary-action"
-          disabled={controlPending !== null || !activeCall.recordingId || !dropEligibility.allowed}
+          disabled={
+            !canControl || controlPending !== null || !activeCall.recordingId || !dropEligibility.allowed
+          }
           onClick={() => onDropVoicemail(activeCall.id)}
           title={
             !dropEligibility.allowed
@@ -195,7 +201,7 @@ export function ActiveCall({
         </button>
         <button
           className="danger-action"
-          disabled={controlPending !== null}
+          disabled={!canControl || controlPending !== null}
           onClick={(event) => onHangUp(activeCall.id, event.nativeEvent.isTrusted)}
           type="button"
         >
@@ -216,7 +222,7 @@ export function ActiveCall({
         <div className="dtmf-pad" aria-label="DTMF keypad">
           {["1", "2", "3", "4", "5", "6", "7", "8", "9", "*", "0", "#"].map((digit) => (
             <button
-              disabled={controlPending !== null || !dtmfEligibility.allowed}
+              disabled={!canControl || controlPending !== null || !dtmfEligibility.allowed}
               key={digit}
               onClick={() => void onSendDtmf(activeCall.id, digit)}
               title={

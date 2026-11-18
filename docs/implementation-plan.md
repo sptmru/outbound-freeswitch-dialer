@@ -208,3 +208,9 @@ D04 queue/admission ACK and I01–I05 acceptance/activation remain separate.
 [G02 transfer connection](inbound-transfer-connection.md) adds staged durable recipient
 originate, customer-preserving park/rebridge, confirmed ownership and fenced cleanup.
 Its verification record distinguishes DB simulation, local FS/RTP and unrun target gates.
+
+[G03 Agent Desk transfer controls](inbound-agent-desk-transfers.md) adds the staged
+source recipient selector/request/cancel and recipient acceptance/decline, with
+server-owned progress, current-slot control fencing and atomic manual-start UX.
+U/B consumer and real PostgreSQL endpoint checks remain separate from integrated
+media/provider and I05 activation gates.

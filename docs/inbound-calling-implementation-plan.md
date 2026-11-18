@@ -638,6 +638,8 @@ from deletion and define replacement/disable behavior.
 [G01 transfer offers and admission](inbound-transfer-offers.md) implements staged
 proposal/closure APIs and recipient reservations. [G02 connection and cleanup](inbound-transfer-connection.md)
 adds the staged durable customer-preserving executor; I05 owns activation.
+[G03 Agent Desk transfer controls](inbound-agent-desk-transfers.md) adds source
+selection/cancel and recipient Accept/Decline with authoritative progress and ownership.
 
 Preserve one product call through all directions and transfers.
 

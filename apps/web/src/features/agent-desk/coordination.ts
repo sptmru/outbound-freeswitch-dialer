@@ -48,6 +48,10 @@ export function conflictMessage(error: unknown): string | null {
       return "Your desk changed. Review the current state before trying again.";
     case "slot_occupied":
       return "A call is already in progress. The desk has been refreshed.";
+    case "not_owner":
+      return "Call ownership changed. The desk has been refreshed.";
+    case "transfer_in_progress":
+      return "A transfer is already in progress. The desk has been refreshed.";
     case "capacity_exhausted":
       return "Calling capacity is busy. Please try again shortly.";
     case "coordination_unavailable":

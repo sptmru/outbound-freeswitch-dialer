@@ -77,6 +77,9 @@ export function CallOfferCard({
   const [pending, setPending] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
   const retry = useRef<{ signature: string; input: DeskMutationRequest } | null>(null);
+  const scope = `${offer?.id}/${offer?.state}/${mutation?.deskSessionId}/${mutation?.expectedRevision}/${mutation?.bindingGeneration}/${desk.coordination?.transfer?.state}/${desk.coordination?.slot.state}`;
+  const latestScope = useRef(scope);
+  latestScope.current = scope;
   if (previous.current && previous.current !== offer?.id) closed.current.add(previous.current);
   previous.current = offer?.id;
   if (offer && (offer.state !== "pending" || Date.parse(offer.deadlineAt) <= now))
@@ -90,7 +93,7 @@ export function CallOfferCard({
     // A known closed card cannot be revived by a delayed equal-revision snapshot.
     setNow(Date.now());
     setFeedback(null);
-  }, [offer?.id]);
+  }, [scope]);
   useEffect(() => {
     if (!visible) return;
     const timer = window.setTimeout(
@@ -109,16 +112,23 @@ export function CallOfferCard({
   }, [visible, offer?.id, deadline]);
 
   async function act(kind: "accept" | "ignore") {
-    if (!visible || !mutation || busy || pending || offer.kind !== "inbound") return;
+    if (!visible || !mutation || busy || pending) return;
     const signature = `${offer.id}/${kind}/${mutation.deskSessionId}/${mutation.expectedRevision}/${mutation.bindingGeneration}`;
     if (retry.current?.signature !== signature) retry.current = { signature, input: mutation };
     setPending(true);
     try {
       await run(async () => {
         await (kind === "accept" ? acceptCallOffer : ignoreCallOffer)(offer.id, retry.current!.input);
+        if (latestScope.current !== scope) return;
         closed.current.add(offer.id);
         setNow(Date.now());
-        setFeedback(kind === "accept" ? "Connecting…" : "Offer ignored.");
+        setFeedback(
+          kind === "accept"
+            ? "Connecting…"
+            : offer.kind === "transfer"
+              ? "Transfer declined."
+              : "Offer ignored."
+        );
         await refresh();
         retry.current = null;
       }, kind);
@@ -134,7 +144,11 @@ export function CallOfferCard({
         <>
           <h2>{offer.kind === "transfer" ? "Transfer offer" : "Incoming call"}</h2>
           <strong>{offer.callingNumber}</strong>
-          <p>{desk.availableCampaigns.find((c) => c.id === offer.campaignId)?.name ?? "Incoming campaign"}</p>
+          <p>
+            Call campaign:{" "}
+            {desk.availableCampaigns.find((c) => c.id === offer.campaignId)?.name ?? "Another campaign"}
+          </p>
+          {offer.kind === "transfer" && <p>Your selected campaign will not change.</p>}
           <p>Waiting · respond within {Math.max(0, Math.ceil((deadline - now) / 1000))}s</p>
           {ringtone.blocked && (
             <p>
@@ -147,26 +161,14 @@ export function CallOfferCard({
           <div className="call-offer-actions">
             <button
               type="button"
-              disabled={
-                busy ||
-                pending ||
-                !mutation ||
-                offer.kind !== "inbound" ||
-                !desk.coordination?.actions.accept.allowed
-              }
+              disabled={busy || pending || !mutation || !desk.coordination?.actions.accept.allowed}
               onClick={() => void act("accept")}
             >
               Accept
             </button>
             <button
               type="button"
-              disabled={
-                busy ||
-                pending ||
-                !mutation ||
-                offer.kind !== "inbound" ||
-                !desk.coordination?.actions.ignore.allowed
-              }
+              disabled={busy || pending || !mutation || !desk.coordination?.actions.ignore.allowed}
               onClick={() => void act("ignore")}
             >
               {offer.kind === "transfer" ? "Decline" : "Ignore"}

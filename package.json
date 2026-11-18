@@ -48,7 +48,8 @@
     "test:forwarding:freeswitch": "F04_FORWARDING=1 bash scripts/test-d04-queue.sh",
     "test:fallback:freeswitch": "F03_FALLBACK=1 bash scripts/test-d04-queue.sh",
     "test:inbound:admin:browser": "playwright test --config playwright.f05.config.ts",
-    "test:transfers:freeswitch": "G02_TRANSFERS=1 bash scripts/test-e02-acceptance.sh"
+    "test:transfers:freeswitch": "G02_TRANSFERS=1 bash scripts/test-e02-acceptance.sh",
+    "test:desk:transfers:browser": "playwright test --config playwright.g03.config.ts"
   },
   "engines": {
     "node": ">=22.13.0"

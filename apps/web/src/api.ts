@@ -726,3 +726,21 @@ export async function ignoreCallOffer(offerId: string, input: DeskMutationReques
     }
   );
 }
+
+export function fetchTransferTargets(callId: string, deskSessionId: string) {
+  return apiFetch<import("./types").TransferTargetsResponse>(
+    `/agent/calls/${encodeURIComponent(callId)}/transfer-targets?deskSessionId=${encodeURIComponent(deskSessionId)}`
+  );
+}
+export function createTransfer(callId: string, input: import("./types").CreateTransferRequest) {
+  return apiFetch<import("@outbound-dialer/shared").CreateTransferResponse>(
+    `/agent/calls/${encodeURIComponent(callId)}/transfers`,
+    { method: "POST", body: JSON.stringify(input) }
+  );
+}
+export function cancelTransfer(callId: string, transferId: string, input: DeskMutationRequest) {
+  return apiFetch<{ status: "applied"; revision: string; transfer?: import("./types").TransferSnapshot }>(
+    `/agent/calls/${encodeURIComponent(callId)}/transfers/${encodeURIComponent(transferId)}`,
+    { method: "DELETE", body: JSON.stringify(input) }
+  );
+}
