@@ -1,3 +1,4 @@
+import { recordingProbe } from "./h02-recording-probe.mjs";
 import { relay } from "./a05-executor.mjs";
 import assert from "node:assert/strict";
 import { writeFile } from "node:fs/promises";
@@ -106,6 +107,8 @@ export async function runForwarding({
         () => checked(async () => Boolean((await call(c.row.uuid)).pstn_answered_at)),
         "F04 customer waiting"
       );
+      const recording = await recordingProbe({ pool, callId: c.row.uuid, customerUuid: c.row.uuid, command });
+      await recording?.mark("answered waiting before forwarding", [440]);
       await until(
         async () =>
           (
@@ -160,6 +163,7 @@ export async function runForwarding({
         );
         await until(() => phone.received.length > 3200, "customer audio at external endpoint");
         assertTone(phone.received.slice(-1600), 440);
+        await recording?.mark("connected external conversation", [440, 880]);
         if (scenario === "answered") {
           await until(
             () => Date.now() > Number(op.request.flowDeadlineEpoch) * 1000 + 1000,
@@ -205,6 +209,8 @@ export async function runForwarding({
       );
       await recover();
       await clean(c.row.uuid);
+      if (recording)
+        await pass(`H02.1 forwarding ${scenario} retained customer recording`, await recording.finish());
       assert.equal(
         new Set(phone.invites.map((i) => i.id)).size,
         scenario === "originate_failure" ? 0 : 1,

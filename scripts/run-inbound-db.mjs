@@ -19,6 +19,7 @@ const commands = [
       "--test-reporter=tap",
       ...(process.env.INBOUND_TEST_PATTERN ? ["--test-name-pattern", process.env.INBOUND_TEST_PATTERN] : []),
       "apps/api/dist-test/inbound-harness.integration.test.js",
+      "apps/api/dist-test/call-recording.integration.test.js",
       "apps/api/dist-test/inbound-recovery.integration.test.js",
       "apps/api/dist-test/command-recovery.integration.test.js",
       "apps/api/dist-test/inbound-config.integration.test.js",

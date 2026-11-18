@@ -220,3 +220,10 @@ media/provider and I05 activation gates.
 native controls, exact-leg former-agent telemetry and confirmed supervisor teardown
 before handover. Replacement monitoring requires a new explicit listen-first session.
 Its API/DB/component and local FS evidence remains separate from I01–I05 acceptance.
+
+[H02 customer recording continuity](inbound-recording-continuity.md) now routes
+recording startup through all persisted customer lifecycles, freezes inbound policy,
+retains one path across handovers/forwarding, and separates no-media calls from
+missing expected output. The criterion record in H02 #39 distinguishes automated
+DB/API/FreeSWITCH checks from the mandatory representative human listening check;
+H02 remains open while that check is unverified.

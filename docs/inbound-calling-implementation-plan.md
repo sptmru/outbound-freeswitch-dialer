@@ -827,6 +827,9 @@ Keep `.env`, Compose, and `scripts/deploy.sh`. Document/validate any new variabl
 - Record on retained customer leg under campaign policy. Verify continuity/content
   across rebridge/external forwarding; no new recorder per agent.
 - Calls never eligible for recording must not become false recording failures.
+  [H02 recording policy](inbound-recording-continuity.md) defines inbound answered
+  waiting/fallback/forwarding, outbound early media, single-start ambiguity and
+  the outstanding representative human listening gate.
 - Attribute duration/statistics per participation, not entirely to the final owner.
 - Authorize former-agent telemetry only for their own segment.
 - Update analytics, exports, media authorization, retention, backup/restore, and cleanup;

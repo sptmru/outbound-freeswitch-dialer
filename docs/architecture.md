@@ -257,3 +257,10 @@ through an independent FS-local SQLite journal and a Unix control socket. It
 creates pre-queue `received`/terminal history with original route/deadline and
 post-commit sequence ACKs. Capture defaults off and still refuses before answer;
 D04 queue/admission ACK and I01–I05 acceptance/activation remain separate.
+
+Customer recording dispatch follows committed legacy/native lifecycle handling,
+validates the live customer UUID and atomically claims one canonical path.
+Transfers and external legs reuse that recorder; ambiguous startup retains its
+claim to prevent truncation on replay. Terminal finalization waits for customer
+cleanup and distinguishes absent eligible media from missing expected output.
+See [H02 recording policy and evidence](inbound-recording-continuity.md).

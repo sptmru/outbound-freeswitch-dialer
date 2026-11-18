@@ -1,3 +1,4 @@
+import { recordingProbe } from "./h02-recording-probe.mjs";
 import { supervisorHandoverFixture } from "./g04-supervisor-handover.mjs";
 import {
   persistCoordinatedCallEvent,
@@ -65,6 +66,13 @@ export async function proveTransferExecution({
     bindingGeneration: "1",
     idempotencyKey: randomUUID()
   });
+  const customerUuid = (
+    await f.pool.query("select freeswitch_uuid from call_legs where call_id=$1 and type='customer'", [
+      c.row.uuid
+    ])
+  ).rows[0].freeswitch_uuid;
+  const recording = await recordingProbe({ pool: f.pool, callId: c.row.uuid, customerUuid, command });
+  await recording?.mark("source before transfer", [660, 880]);
   const runtime = transferConnectionExecutor(f.pool, limited.executor, {
     host: "127.0.0.1",
     port: 8021,
@@ -550,6 +558,7 @@ export async function proveTransferExecution({
       `G02.1/G02.4 ${direction} transfer confirms owner only on bridge, exact source cleanup and overlap release`,
       first
     );
+    await recording?.mark("recipient after confirmed transfer", [440, 880]);
     await sourceReuse(first.root);
     const back = await transfer(target, source, desk, f.input.deskSessionId, true);
     const backAt = phone.received.length;
@@ -561,7 +570,8 @@ export async function proveTransferExecution({
         : `G02.1/G02.3 ${direction} A-B-A transfer, lost execution lock/delayed bridge and late old-leg cleanup preserve customer`,
       back
     );
-    return runtime;
+    await recording?.mark("source after repeated transfer", [660, 880]);
+    return { ...runtime, recording };
   } finally {
     supervision?.close();
     targetPhone.close();
@@ -587,6 +597,11 @@ export async function proveOutboundTransferExecution({
     frequency: 880
   });
   const seeded = await f.seed({ inbound: direction === "inbound" });
+  if (process.env.H02_RECORDINGS === "1")
+    await f.pool.query(
+      "update calls set call_recording_enabled=true,call_recording_status='pending' where id=$1",
+      [seeded.callId]
+    );
   const contact = (
     await f.pool.query("select verified_endpoint from agent_desk_sessions where id=$1", [
       f.input.deskSessionId
@@ -667,6 +682,11 @@ export async function proveOutboundTransferExecution({
         .rows[0].n,
       0
     );
+    if (runtime.recording)
+      await pass(
+        `H02.1 ${direction} retained customer recording across A-B-A transfer`,
+        await runtime.recording.finish()
+      );
     await pass(
       `G02 ${direction} customer terminal cleans current and former agent legs${lossBoundary ? " after " + lossBoundary : ""}`
     );

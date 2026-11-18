@@ -505,7 +505,7 @@ describe("FreeSWITCH event helpers", () => {
     assert.deepEqual(commands, ["module_exists mod_amd"]);
   });
 
-  it("clears the recording path and records an event when FreeSWITCH rejects recording", async () => {
+  it("retains the recording claim and records an event when FreeSWITCH rejects recording", async () => {
     const queries: Array<{ params: readonly unknown[]; sql: string }> = [];
     const pool = createQueryPool((sql, params) => {
       queries.push({ sql, params });
@@ -530,9 +530,9 @@ describe("FreeSWITCH event helpers", () => {
       }
     );
 
-    assert.ok(queries.some((query) => query.sql.includes("call_recording_path = null")));
-    const failureEvent = queries.find((query) => query.sql.includes("'call_recording_failed'"));
-    assert.match(String(failureEvent?.params[4]), /media bug failed/);
+    assert.ok(!queries.some((query) => query.sql.includes("call_recording_path = null")));
+    const failureEvent = queries.find((query) => query.params.includes("call_recording_failed"));
+    assert.match(String(failureEvent?.params[5]), /media bug failed/);
   });
 
   it("extracts complete ESL frames and leaves partial frames buffered", () => {

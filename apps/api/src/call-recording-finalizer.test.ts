@@ -102,12 +102,12 @@ describe("call recording finalization", () => {
     assert.deepEqual(finalized, { claimed: 0, available: 0, failed: 0, skipped: 0 });
   });
 
-  it("fails terminal enabled calls that never started a recording file", async () => {
+  it("fails terminal eligible calls that never started a recording file", async () => {
     const queries: Array<{ sql: string; params: readonly unknown[] }> = [];
     const pool = queryPool((sql, params) => {
       queries.push({ sql, params });
       if (sql.includes("unavailable as")) {
-        return result([{ call_id: callId }], 1);
+        return result([{ call_id: callId, event_type: "call_recording_integrity_failed" }], 1);
       }
       return rows([]);
     });

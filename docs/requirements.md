@@ -93,7 +93,7 @@ This document is the current product and operational contract. Items described a
 - Upload-and-assign commits only after successful audio processing. Assignment, deletion and drop claims serialize per campaign. Assigned recordings must be replaced/disabled before deletion, and recordings referenced by unfinished calls/jobs cannot be deleted.
 - Uploads are decoded and transcoded before activation to mono, 8 kHz, signed 16-bit PCM WAV with loudness normalization.
 - Audio with no valid stream, unavailable processing, malformed content, or duration over five minutes is rejected.
-- Call recording remains campaign-controlled and is started on the customer leg through FreeSWITCH.
+- Call recording remains campaign-controlled and is started on the customer leg through FreeSWITCH. Inbound freezes policy at first durable import and records answered waiting/fallback/forwarding; outbound preserves early-media recording. One customer recording remains across transfers. Calls without eligible media do not generate recording failures; missing/corrupt expected output does. See [recording policy](inbound-recording-continuity.md).
 - Media playback supports single byte ranges for browser seeking.
 - Browser media access uses short-lived opaque tickets scoped to one user, resource type, resource ID, and route. Only ticket hashes are stored in PostgreSQL.
 - Admins can download a campaign-scoped streaming ZIP of playable call recordings. UUID-named WAV entries are accompanied by a spreadsheet-safe manifest with call context and explicit reasons for rows skipped because a file is missing, empty, non-regular, or outside its canonical path. Empty exports return an explicit not-found response, and export starts are audited without phone numbers or storage paths.

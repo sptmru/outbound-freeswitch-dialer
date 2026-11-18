@@ -387,6 +387,30 @@ async function persistFreeSwitchEvent(
   frame: EslFrame,
   logger?: Pick<Logger, "info">
 ): Promise<void> {
+  await persistFreeSwitchLifecycleEvent(config, pool, frame, logger);
+  // Native inbound/transfer/coordinated handlers return early. Recording is a
+  // customer-leg concern shared by every lifecycle, after its evidence commits.
+  const event = frame.headers["event-name"];
+  const waiting =
+    event === "CUSTOM" && frame.headers["event-subclass"] === "outbound_dialer::inbound_waiting_started";
+  if (!waiting && !["CHANNEL_PROGRESS_MEDIA", "CHANNEL_ANSWER", "CHANNEL_BRIDGE"].includes(event)) return;
+  const callId =
+    frame.headers["variable_outbound_dialer_call_id"] ?? frame.headers["outbound-dialer-call-id"];
+  const uuid = frame.headers["unique-id"] ?? frame.headers["outbound-dialer-customer-leg-uuid"];
+  if (!callId || !isUuid(callId) || !uuid || !isUuid(uuid)) return;
+  await startCallRecording(config, pool, {
+    callId,
+    customerLegUuid: uuid,
+    phase: event === "CHANNEL_PROGRESS_MEDIA" ? "early_media" : "answered"
+  });
+}
+
+async function persistFreeSwitchLifecycleEvent(
+  config: AppConfig,
+  pool: pg.Pool,
+  frame: EslFrame,
+  logger?: Pick<Logger, "info">
+): Promise<void> {
   if (
     frame.headers["event-name"] === "BACKGROUND_JOB" &&
     ((await persistRecoveryCleanupJob(pool, {
@@ -552,11 +576,6 @@ async function persistFreeSwitchEvent(
   }
 
   if (eventName === "CHANNEL_PROGRESS_MEDIA" && legType === "customer" && legUuid) {
-    await startCallRecording(config, pool, {
-      callId,
-      customerLegUuid: legUuid,
-      phase: "early_media"
-    });
     await startVoicemailDetection(config, pool, {
       callId,
       customerLegUuid: legUuid,
@@ -566,11 +585,6 @@ async function persistFreeSwitchEvent(
 
   if ((eventName === "CHANNEL_ANSWER" && legType === "customer") || eventName === "CHANNEL_BRIDGE") {
     if (legType === "customer" && legUuid) {
-      await startCallRecording(config, pool, {
-        callId,
-        customerLegUuid: legUuid,
-        phase: "answered"
-      });
       await startVoicemailDetection(config, pool, {
         callId,
         customerLegUuid: legUuid,
@@ -862,7 +876,8 @@ async function startCallRecording(
 ): Promise<void> {
   const phase = input.phase ?? "answered";
   const eventState = phase === "early_media" ? "customer_dialing" : "bridged";
-  const recordingPath = buildCallRecordingPath(config.CALL_RECORDINGS_STORAGE_DIR, input.callId);
+  const storageDir = config.CALL_RECORDINGS_STORAGE_DIR ?? "/var/lib/freeswitch/storage/recordings/calls";
+  const recordingPath = buildCallRecordingPath(storageDir, input.callId);
   const claimed = await pool.query<{ agent_id: string | null }>(
     `
       update calls
@@ -872,12 +887,15 @@ async function startCallRecording(
           updated_at = now()
       where id = $1
         and call_recording_enabled = true
+        and call_recording_status = 'pending'
         and call_recording_path is null
         and ended_at is null
         and state not in ('completed', 'failed', 'canceled')
+        and exists (select 1 from call_legs l where l.call_id=calls.id
+          and l.type='customer' and l.freeswitch_uuid=$3 and l.ended_at is null)
       returning agent_id
     `,
-    [input.callId, recordingPath]
+    [input.callId, recordingPath, input.customerLegUuid]
   );
   const call = claimed.rows[0];
   if (!call) {
@@ -885,11 +903,37 @@ async function startCallRecording(
   }
 
   const command = `uuid_record ${input.customerLegUuid} start ${recordingPath}`;
+  let response;
   try {
-    await mkdir(config.CALL_RECORDINGS_STORAGE_DIR, { recursive: true });
-    const response = await sendApiCommand(config, command);
+    await mkdir(storageDir, { recursive: true });
+    response = await sendApiCommand(config, command);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    // Retain the single path/claim on timeout or lost response: retrying start
+    // could truncate a recorder that FreeSWITCH already attached successfully.
+    const rejected = message.startsWith("-ERR");
     await pool.query(
-      `
+      `update calls set call_recording_status=$3,call_recording_failure_reason=$4,updated_at=now()
+       where id=$1 and call_recording_path=$2 and call_recording_status='recording'`,
+      [input.callId, recordingPath, rejected ? "failed" : "recording", message]
+    );
+    await pool.query(
+      `insert into call_events(call_id,agent_id,event_type,state,api_command_name,customer_leg_uuid,raw_json)
+       values($1,$2,$3,$4,'uuid_record',$5,$6::jsonb)`,
+      [
+        input.callId,
+        call.agent_id,
+        rejected ? "call_recording_failed" : "call_recording_start_uncertain",
+        eventState,
+        input.customerLegUuid,
+        JSON.stringify({ command, message, phase, recordingPath })
+      ]
+    );
+    return;
+  }
+  // A persistence failure after a successful send must not clear the claim.
+  await pool.query(
+    `
         insert into call_events (
           call_id,
           agent_id,
@@ -901,54 +945,14 @@ async function startCallRecording(
         )
         values ($1, $2, 'call_recording_started', $3, 'uuid_record', $4, $5::jsonb)
       `,
-      [
-        input.callId,
-        call.agent_id,
-        eventState,
-        input.customerLegUuid,
-        JSON.stringify({ command, phase, recordingPath, response: response.body.trim() })
-      ]
-    );
-  } catch (error) {
-    await pool.query(
-      `
-        update calls
-        set call_recording_path = null,
-            call_recording_status = 'failed',
-            call_recording_failure_reason = $3,
-            updated_at = now()
-        where id = $1
-          and call_recording_path = $2
-      `,
-      [input.callId, recordingPath, error instanceof Error ? error.message : String(error)]
-    );
-    await pool.query(
-      `
-        insert into call_events (
-          call_id,
-          agent_id,
-          event_type,
-          state,
-          api_command_name,
-          customer_leg_uuid,
-          raw_json
-        )
-        values ($1, $2, 'call_recording_failed', $3, 'uuid_record', $4, $5::jsonb)
-      `,
-      [
-        input.callId,
-        call.agent_id,
-        eventState,
-        input.customerLegUuid,
-        JSON.stringify({
-          command,
-          message: error instanceof Error ? error.message : String(error),
-          phase,
-          recordingPath
-        })
-      ]
-    );
-  }
+    [
+      input.callId,
+      call.agent_id,
+      eventState,
+      input.customerLegUuid,
+      JSON.stringify({ command, phase, recordingPath, response: response.body.trim() })
+    ]
+  );
 }
 
 function buildCallRecordingPath(storageDir: string, callId: string): string {

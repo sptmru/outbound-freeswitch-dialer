@@ -36,6 +36,7 @@ const directory = process.argv[2];
 assert.match(directory ?? "", /^\/tmp\/outbound-e02\.[A-Za-z0-9]+$/);
 const socket = join(directory, "agent.sock");
 const config = {
+  CALL_RECORDINGS_STORAGE_DIR: join(directory, "recordings"),
   FREESWITCH_ESL_ENABLED: true,
   FREESWITCH_INBOUND_CONFIG_ENABLED: true,
   FREESWITCH_ESL_HOST: "127.0.0.1",
@@ -186,6 +187,8 @@ try {
     }
   });
   limited = await limitedExecutor(f, database);
+  if (process.env.H02_RECORDINGS === "1")
+    await f.pool.query("update campaigns set call_recording_enabled=true where id=$1", [f.campaignId]);
   report.database = (await f.pool.query("select version()")).rows[0].version;
   const queue = (await f.pool.query("select id from inbound_queues limit 1")).rows[0].id;
   await f.pool.query("update inbound_queues set queue_timeout_ms=18000 where id=$1", [queue]);
@@ -340,6 +343,11 @@ try {
     await runtime.reconcile();
     await clean(c.row.uuid);
     await recover();
+    if (transferRuntime?.recording)
+      await pass(
+        "H02.1 inbound retained customer recording across A-B-A transfer",
+        await transferRuntime.recording.finish()
+      );
     await pass("E02 actual winner stops waiting tone and passes decoded agent-to-customer media", {
       tone,
       reverseTone,
@@ -364,7 +372,7 @@ try {
           if (eventError) throw eventError;
         }
       });
-    if (process.env.G02_TRANSFERS === "1") {
+    if (process.env.G02_TRANSFERS === "1" && process.env.H02_RECORDINGS !== "1") {
       for (const direction of ["inbound", "outbound"])
         for (const lossBoundary of [
           "customer_terminal_before_originate",

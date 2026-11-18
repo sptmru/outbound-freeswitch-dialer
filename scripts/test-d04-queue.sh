@@ -34,7 +34,7 @@ node node_modules/typescript/bin/tsc -p apps/api/tsconfig.test.json
 mkdir "$RUN_DIR/socket"
 chmod 777 "$RUN_DIR/socket"
 git rev-parse HEAD > "$RUN_DIR/base-revision.txt"
-sha256sum apps/api/src/freeswitch/*.ts infra/freeswitch/entrypoint.sh infra/freeswitch/templates/inbound/* apps/api/src/ingress-*.ts apps/api/src/inbound-ingress*.ts apps/api/src/inbound-queue*.ts apps/api/src/esl-events.ts apps/api/src/call-cleanup.ts infra/freeswitch/templates/dialplan/inbound-wait.xml.tpl \
+sha256sum apps/api/src/call-recording*.ts apps/api/src/dashboard/campaign-recording-export.ts scripts/h02-recording-probe.mjs apps/api/src/freeswitch/*.ts infra/freeswitch/entrypoint.sh infra/freeswitch/templates/inbound/* apps/api/src/ingress-*.ts apps/api/src/inbound-ingress*.ts apps/api/src/inbound-queue*.ts apps/api/src/esl-events.ts apps/api/src/call-cleanup.ts infra/freeswitch/templates/dialplan/inbound-wait.xml.tpl \
   apps/api/db/migrations/*.sql apps/api/src/call-executor.ts apps/api/src/call-admission.ts apps/api/src/call-capacity.ts apps/api/src/dashboard/recordings.ts scripts/d04-queue-probe.mjs scripts/f02-audio-probe.mjs scripts/f03-fallback-probe.mjs scripts/f04-forwarding-probe.mjs apps/api/src/inbound-forwarding.ts infra/freeswitch/templates/dialplan/inbound-forward.xml.tpl apps/api/src/inbound-fallback*.ts infra/freeswitch/templates/dialplan/inbound-fallback.xml.tpl scripts/a02-ingress-probe.mjs scripts/a05-media.mjs tests/fixtures/inbound/cleanup.mjs tests/fixtures/inbound/supervisor.mjs "$0" > "$RUN_DIR/source-sha256.txt"
 docker image inspect "$IMAGE" "$PG_IMAGE" --format '{{.Id}} {{json .RepoDigests}}' > "$RUN_DIR/images.txt"
 docker run -d --name "$NET_CONTAINER" --network none --memory 32m --pids-limit 8 \
@@ -50,7 +50,7 @@ for ((i=0;i<100;i++)); do
 done
 docker run -d --name "$FS_CONTAINER" --network "container:$NET_CONTAINER" --memory 768m --pids-limit 256 \
   --security-opt no-new-privileges --cap-drop ALL \
-  --mount "type=bind,src=$RUN_DIR,dst=/a02" --mount "type=bind,src=$ROOT_DIR/infra/freeswitch,dst=/repo,readonly" \
+  --mount "type=bind,src=$RUN_DIR,dst=/a02" --mount "type=bind,src=$RUN_DIR,dst=$RUN_DIR" --mount "type=bind,src=$ROOT_DIR/infra/freeswitch,dst=/repo,readonly" \
   -e TEMPLATE_DIR=/repo/templates -e FREESWITCH_CONFIG_DIR=/a02/conf \
   -e FREESWITCH_GENERATED_CONFIG_DIR=/a02/generated -e FREESWITCH_LOG_DIR=/a02/log -e FREESWITCH_DB_DIR=/a02/db \
   -e FREESWITCH_ESL_PASSWORD=a02-disposable-only -e FREESWITCH_ESL_ACL=loopback.auto \

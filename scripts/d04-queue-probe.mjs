@@ -26,6 +26,7 @@ const directory = process.argv[2];
 assert.match(directory ?? "", /^\/tmp\/outbound-d04\.[A-Za-z0-9]+$/);
 const socket = join(directory, "agent.sock");
 const config = {
+  CALL_RECORDINGS_STORAGE_DIR: join(directory, "recordings"),
   FREESWITCH_ESL_ENABLED: true,
   FREESWITCH_INBOUND_CONFIG_ENABLED: true,
   FREESWITCH_ESL_HOST: "127.0.0.1",
@@ -159,6 +160,8 @@ try {
   };
   f = await cleanupFixture(database);
   limited = await limitedExecutor(f, database);
+  if (process.env.H02_RECORDINGS === "1")
+    await f.pool.query("update campaigns set call_recording_enabled=true where id=$1", [f.campaignId]);
   report.database = (await f.pool.query("select version()")).rows[0].version;
   const queue = (await f.pool.query("select id from inbound_queues limit 1")).rows[0].id;
   await f.pool.query("update inbound_queues set queue_timeout_ms=15000 where id=$1", [queue]);

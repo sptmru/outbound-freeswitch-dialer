@@ -213,15 +213,16 @@ describe("PostgreSQL migration integration", { skip: !databaseUrl }, () => {
         terminalGraceSeconds: 0,
         inspect: async () => ({ durationSeconds: 1, fileSizeBytes: 1 })
       });
-      assert.equal(noMediaFinalized.failed, 1);
+      assert.equal(noMediaFinalized.failed, 0);
+      assert.equal(noMediaFinalized.skipped, 1);
       const noMedia = await pool.query<{
         call_recording_failure_reason: string;
         call_recording_status: string;
       }>("select call_recording_status, call_recording_failure_reason from calls where id = $1", [
         noMediaCall.rows[0]?.id
       ]);
-      assert.equal(noMedia.rows[0]?.call_recording_status, "failed");
-      assert.match(noMedia.rows[0]?.call_recording_failure_reason ?? "", /no media file was started/i);
+      assert.equal(noMedia.rows[0]?.call_recording_status, "disabled");
+      assert.equal(noMedia.rows[0]?.call_recording_failure_reason, null);
 
       await pool.query("delete from calls where id = any($1::uuid[])", [
         [recordingCall.rows[0]?.id, noMediaCall.rows[0]?.id]

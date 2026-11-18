@@ -311,3 +311,20 @@ D04 adds `npm run test:queue:freeswitch` for real isolated queue admission, wait
 SIP/RTP, CANCEL/overflow and later bridge evidence. See [scope, fixtures and proof
 boundaries](../inbound-queue-admission.md). The E02 winner is explicitly seeded;
 this does not prove a browser acceptance workflow or provider enablement.
+
+## H02 customer recording checks
+
+With Node >=22 and `ffprobe` available (or `FFPROBE_PATH` set), run
+`npm run test:recording:transfers:freeswitch` and
+`npm run test:recording:forwarding:freeswitch`. These reuse the network-isolated
+E02/G02 and D04/F04 labs, freeze enabled recording in the fixture campaign, retain
+WAVs, check one customer recorder and decode marker windows. They also run real
+ffprobe finalization and its idempotent replay. They do not enable a product route
+or contact a provider. `F04_SCENARIO=answered` selects one forwarding case; omit it
+for the full failure/continuation matrix.
+
+Run `INBOUND_PG_STORAGE=tmpfs INBOUND_TEST_PATTERN=H02 npm run test:inbound:db:isolated`
+for eligibility, finalizer and authorization/reference tests. The real filesystem/
+ffprobe matrix distinguishes missing, empty, corrupt and playable output.
+Retain representative WAVs for a human listener and record the listener/result in
+H02 #39 before closure. See [policy and proof boundaries](../inbound-recording-continuity.md).

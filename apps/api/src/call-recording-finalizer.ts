@@ -58,17 +58,17 @@ export async function runCallRecordingFinalization(
 ): Promise<CallRecordingFinalizationResult> {
   const graceSeconds = options.terminalGraceSeconds ?? terminalGraceSeconds;
   const batchSize = options.batchSize ?? defaultBatchSize;
-  const failedWithoutPath = await markTerminalRecordingsWithoutPath(pool, graceSeconds, batchSize);
+  const withoutPath = await markTerminalRecordingsWithoutPath(pool, graceSeconds, batchSize);
   const claimed = await claimTerminalRecordings(pool, {
     batchSize,
     terminalGraceSeconds: graceSeconds,
     staleClaimSeconds: options.staleClaimSeconds ?? staleClaimSeconds
   });
   const result: CallRecordingFinalizationResult = {
-    claimed: failedWithoutPath + claimed.length,
+    claimed: withoutPath.processed + claimed.length,
     available: 0,
-    failed: failedWithoutPath,
-    skipped: 0
+    failed: withoutPath.failed,
+    skipped: withoutPath.processed - withoutPath.failed
   };
   const inspect = options.inspect ?? inspectCallRecording;
 
@@ -150,6 +150,8 @@ async function claimTerminalRecordings(
         where ended_at is not null
           and state in ('completed', 'failed', 'canceled')
           and call_recording_path is not null
+          and not exists (select 1 from call_legs l where l.call_id=calls.id
+            and l.type='customer' and l.ended_at is null)
           and (
             (
               call_recording_status in ('pending', 'recording')
@@ -287,12 +289,19 @@ async function markTerminalRecordingsWithoutPath(
   pool: pg.Pool,
   graceSeconds: number,
   batchSize: number
-): Promise<number> {
+): Promise<{ processed: number; failed: number }> {
   const reason = "Recording was enabled, but no media file was started";
   const result = await pool.query(
     `
       with candidates as (
-        select id
+        select id, (
+          pstn_answered_at is not null or answered_at is not null
+          or exists (select 1 from call_legs l where l.call_id=calls.id
+            and l.type='customer' and l.answered_at is not null)
+          or exists (select 1 from call_events e where e.call_id=calls.id
+            and e.customer_leg_uuid is not null
+            and e.freeswitch_event_name in ('CHANNEL_PROGRESS_MEDIA','CHANNEL_ANSWER','CHANNEL_BRIDGE'))
+        ) as expected
         from calls
         where call_recording_enabled = true
           and call_recording_status = 'pending'
@@ -300,18 +309,20 @@ async function markTerminalRecordingsWithoutPath(
           and ended_at is not null
           and ended_at <= now() - make_interval(secs => $1)
           and state in ('completed', 'failed', 'canceled')
+          and not exists (select 1 from call_legs l where l.call_id=calls.id
+            and l.type='customer' and l.ended_at is null)
         order by ended_at asc
         limit $4
         for update skip locked
       ), unavailable as (
         update calls
-        set call_recording_status = 'failed',
+        set call_recording_status = case when candidates.expected then 'failed' else 'disabled' end,
             call_recording_integrity_checked_at = clock_timestamp(),
-            call_recording_failure_reason = $2,
+            call_recording_failure_reason = case when candidates.expected then $2 else null end,
             updated_at = now()
         from candidates
         where calls.id = candidates.id
-        returning calls.id, calls.agent_id, calls.state
+        returning calls.id, calls.agent_id, calls.state, candidates.expected
       )
       insert into call_events (
         call_id,
@@ -324,16 +335,19 @@ async function markTerminalRecordingsWithoutPath(
       select
         id,
         agent_id,
-        'call_recording_integrity_failed',
+        case when expected then 'call_recording_integrity_failed' else 'call_recording_not_applicable' end,
         state,
         'ffprobe',
-        $3::jsonb
+        case when expected then $3::jsonb else '{"reason":"No eligible customer media"}'::jsonb end
       from unavailable
-      returning call_id
+      returning call_id, event_type
     `,
     [graceSeconds, reason, JSON.stringify({ reason }), batchSize]
   );
-  return result.rowCount ?? 0;
+  return {
+    processed: result.rowCount ?? 0,
+    failed: result.rows.filter((row) => row.event_type === "call_recording_integrity_failed").length
+  };
 }
 
 function describeFailure(error: unknown): string {

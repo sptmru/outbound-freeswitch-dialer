@@ -83,8 +83,11 @@ export async function importIngressRecord(
     const terminal = existing?.terminal_at != null || row.terminalUs !== null;
     await client.query(
       `insert into calls(id,direction,campaign_id,inbound_queue_id,original_did,
-      calling_number,called_number,destination_number,normalized_destination_number,arrived_at,queue_deadline_at,state,created_at)
-      values($1,'inbound',$2,$3,$4,$5,$4,$4,$4,${timestamp(6)},${timestamp(6)}+$7::int*interval '1 millisecond','received',${timestamp(6)})
+      calling_number,called_number,destination_number,normalized_destination_number,arrived_at,queue_deadline_at,state,created_at,
+      call_recording_enabled,call_recording_status)
+      select $1,'inbound',$2,$3,$4,$5,$4,$4,$4,${timestamp(6)},${timestamp(6)}+$7::int*interval '1 millisecond','received',${timestamp(6)},
+        call_recording_enabled,case when call_recording_enabled then 'pending' else 'disabled' end
+      from campaigns where id=$2
       on conflict(id) do nothing`,
       [row.uuid, row.campaignId, row.queueId, row.did, row.callingNumber, row.arrivedUs, row.timeoutMs]
     );
