@@ -95,6 +95,8 @@ Control admission measurements start at the scheduled ingress time and end at
 the claim result. This includes scheduling, import and SQL time. Offer snapshot
 measurements cover fixture dispatch and the authenticated GET response. This
 measures the Fastify/DB path and omits browser rendering and event fan-out.
+The report also records import, queue claim, dispatch, and snapshot timings for
+diagnosis. The combined admission and offer measurements enforce the budgets.
 Accept timings are reported independently. The single UDP connection timing
 covers the winner through decoded media at both isolated peers. The report
 includes raw samples, nearest-rank p95/p99, maxima, and expected rejections and

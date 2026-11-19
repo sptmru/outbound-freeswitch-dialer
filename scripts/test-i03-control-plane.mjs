@@ -152,8 +152,8 @@ async function arrive(campaign, offeredAt = performance.now(), offerTimeoutMs = 
   const op = await measure(
     "admission",
     async () => {
-      await importIngressRecord(pool, record);
-      return admitInboundQueue(pool, id);
+      await measure("ingressImport", () => importIngressRecord(pool, record));
+      return measure("queueClaim", () => admitInboundQueue(pool, id));
     },
     offeredAt,
     (result) => (result ? "admitted" : "rejected")
@@ -179,8 +179,8 @@ async function readOffers(desks) {
       const result = await measure(
         "offerSnapshot",
         async () => {
-          await dispatchInboundOffers(pool, desk.id);
-          return snapshot(desk);
+          await measure("offerDispatch", () => dispatchInboundOffers(pool, desk.id));
+          return measure("offerRead", () => snapshot(desk));
         },
         offeredAt,
         (response) => (response.statusCode === 200 ? "ok" : "error")
