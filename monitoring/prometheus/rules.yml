@@ -282,29 +282,95 @@ groups:
 
   - name: inbound-ingress
     rules:
+      - record: outbound_dialer:ingress_journal_fresh
+        expr: (outbound_dialer_ingress_journal_up == bool 1) * ((time() - outbound_dialer_ingress_journal_last_success_timestamp_seconds) < bool 20)
+      - alert: IngressJournalUnavailable
+        expr: outbound_dialer_ingress_configured == 1 and outbound_dialer:ingress_journal_fresh == 0
+        for: 15s
+        labels:
+          severity: critical
+        annotations:
+          summary: Independent ingress journal status is unavailable
+          description: Check the agent, its private socket and shared volume. Preserve SQLite evidence before recovery.
       - alert: IngressJournalFull
-        expr: outbound_dialer_ingress_journal_capacity > 0 and outbound_dialer_ingress_journal_used >= outbound_dialer_ingress_journal_capacity
-        for: 1m
+        expr: outbound_dialer_ingress_configured == 1 and outbound_dialer:ingress_journal_fresh == 1 and outbound_dialer_ingress_journal_capacity > 0 and outbound_dialer_ingress_journal_used >= outbound_dialer_ingress_journal_capacity
+        for: 15s
         labels:
           severity: critical
         annotations:
           summary: Ingress journal is full; new uncaptured attempts are refused
+          description: Inspect pending receipts and import health. Preserve all live and unacknowledged evidence.
       - alert: IngressCaptureFailures
-        expr: increase(outbound_dialer_ingress_capture_failures[5m]) > 0
+        expr: outbound_dialer_ingress_configured == 1 and outbound_dialer:ingress_journal_fresh == 1 and ((outbound_dialer_ingress_capture_last_failure_timestamp_seconds > 0 and time() - outbound_dialer_ingress_capture_last_failure_timestamp_seconds < 300) or increase(outbound_dialer_ingress_capture_failures[5m]) > 0)
         labels:
           severity: warning
         annotations:
-          summary: Ingress capture or terminal capture failed; inspect retained journal
+          summary: Ingress journal refused a request
+          description: Check journal capacity, filesystem access and switch reachability. Captures rejected before commit may be absent from call history.
       - alert: IngressImportFailures
-        expr: increase(outbound_dialer_ingress_import_failures_total[5m]) > 0
+        expr: outbound_dialer_ingress_configured == 1 and increase(outbound_dialer_ingress_import_failures_total[5m]) > 0
         labels:
           severity: critical
         annotations:
           summary: Ingress recovery cannot import or acknowledge retained evidence
+          description: Check the API persistence and switch reconciliation paths. Keep the journal available for replay.
+      - alert: IngressImportStale
+        expr: outbound_dialer_ingress_configured == 1 and time() - outbound_dialer_ingress_import_last_success_timestamp_seconds > 30
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: Ingress import has stopped completing
+          description: Check the importer, PostgreSQL and ESL even when the independent journal status responds.
       - alert: IngressImportLag
-        expr: outbound_dialer_ingress_journal_pending > 0 and time() - outbound_dialer_ingress_oldest_arrival_timestamp_seconds > 10
+        expr: outbound_dialer_ingress_configured == 1 and outbound_dialer:ingress_journal_fresh == 1 and outbound_dialer_ingress_journal_pending > 0 and time() - outbound_dialer_ingress_oldest_pending_timestamp_seconds > 10
         for: 10s
         labels:
           severity: warning
         annotations:
           summary: Unacknowledged ingress evidence is waiting for import
+          description: Check the age of pending updates and compare exact SQL and SQLite sequence acknowledgments.
+
+  - name: outbound-dialer-inbound-operations
+    rules:
+      - record: outbound_dialer:inbound_database_fresh
+        expr: (outbound_dialer_inbound_database_last_success_timestamp_seconds > bool 0) * ((time() - outbound_dialer_inbound_database_last_success_timestamp_seconds) <= bool outbound_dialer_inbound_database_freshness_budget_seconds)
+      - alert: InboundMetricsDatabaseStale
+        expr: outbound_dialer:inbound_database_fresh == 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: Inbound SQL monitoring data is stale
+          description: Check application pool waiters and PostgreSQL availability. Treat cached queue, work and configuration readings as stale.
+      - alert: InboundCallUncertaintyStuck
+        expr: outbound_dialer:inbound_database_fresh == 1 and ((outbound_dialer_call_uncertainty_oldest_deadline_timestamp_seconds > 0 and time() - outbound_dialer_call_uncertainty_oldest_deadline_timestamp_seconds > 60) or (outbound_dialer_call_uncertain_slot_oldest_timestamp_seconds > 0 and time() - outbound_dialer_call_uncertain_slot_oldest_timestamp_seconds > 60))
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: Call work remains unresolved past its expected recovery interval
+          description: Match the call, operation, fixed job, channel and reservation evidence before cleanup. Keep uncertain capacity occupied.
+      - alert: InboundConfigurationApplyFailed
+        expr: outbound_dialer_inbound_configuration_state{state="failed"} == 1 and on(job, instance) (outbound_dialer_inbound_configuration_enabled == 1 and outbound_dialer:inbound_database_fresh == 1)
+        labels:
+          severity: critical
+        annotations:
+          summary: FreeSWITCH inbound configuration apply failed
+          description: Compare desired and applied revisions and inspect the restricted apply diagnostic and loaded XML.
+      - alert: InboundConfigurationVerificationStale
+        expr: outbound_dialer_inbound_configuration_enabled == 1 and outbound_dialer:inbound_database_fresh == 1 and time() - outbound_dialer_inbound_configuration_last_verified_timestamp_seconds > 120
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: No recent verification of the FreeSWITCH inbound configuration
+          description: Verify the publisher, ESL and loaded XML. Saved configuration does not prove an applied route.
+      - alert: CallExecutorPressure
+        expr: sum without (reason) (increase(outbound_dialer_executor_pressure_total[5m])) > 0 or outbound_dialer_executor_local{state="waiters"} > 0 or ((outbound_dialer_executor_pending_operations{priority="normal"} >= 48 or outbound_dialer_executor_pending_operations{priority="critical"} >= 16) and on(job, instance) outbound_dialer:inbound_database_fresh == 1)
+        for: 30s
+        labels:
+          severity: warning
+        annotations:
+          summary: Call executor seats, pool or durable backlog are under pressure
+          description: Check seat deferrals, acquisition failures and oldest unresolved work. Preserve the critical seats and investigate slow senders.

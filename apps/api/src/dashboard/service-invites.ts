@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import type pg from "pg";
 import type { AppConfig } from "../config.js";
 import { requireUser } from "../auth/routes.js";
+import { recordServiceInviteAuthorization } from "../inbound-metrics.js";
 import { AdmissionError } from "../call-admission.js";
 import { authorizeServiceInvite, serviceInviteSchema } from "../service-invites.js";
 
@@ -22,11 +23,21 @@ export function registerServiceInviteRoutes(app: FastifyInstance, config: AppCon
         );
     } catch (error) {
       if (!(error instanceof AdmissionError)) throw error;
+      recordServiceInviteAuthorization("admission_unavailable");
     }
-    if (!authorized)
+    if (!authorized) {
+      request.log.info(
+        {
+          event: "service_invite_authorization_refused",
+          callId: input.callId,
+          operationId: input.operationId
+        },
+        "Service invitation authorization refused"
+      );
       return reply
         .code(409)
         .send({ message: "Service invitation is unavailable", code: "service_invite_unavailable" });
+    }
     return { authorized: true, ...input };
   });
 }

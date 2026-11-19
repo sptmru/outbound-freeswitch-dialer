@@ -123,6 +123,10 @@ Metrics expose used/capacity/pending slots, oldest unacknowledged arrival,
 agent-lifetime request failures and API import failures. `IngressJournalFull`,
 `IngressCaptureFailures`, `IngressImportFailures` and `IngressImportLag` rules
 report exhaustion, storage/terminal-capture failures and failed/lagging imports.
+An independent status poll detects socket failures and stale samples even when
+the importer is blocked. Compare `IngressJournalUnavailable` with
+`IngressImportStale`. Pending age uses the capture or terminal update timestamp.
+See [Inbound Observability and Recovery](runbooks/inbound-observability.md).
 Acknowledged terminal records retained for recycling do not count as occupied.
 Fixed error messages exclude caller data, secrets and request bodies. Never send
 secrets via `mod_curl`: pinned upstream logs POST data and appended headers at

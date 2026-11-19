@@ -138,6 +138,7 @@ remain separate.
 - Recording-aware deletion: call rows are retained while recording data is younger; metadata is cleared only after successful unlink or confirmed absence; failures preserve the row for retry.
 - Admin dry-run/immediate retention endpoint plus success/failure/deletion metrics.
 - Prometheus, Grafana, Alertmanager, Loki, Alloy, host/container/PostgreSQL/exporter checks, public HTTPS blackbox probe, and provisioned alerts/dashboard.
+- H05 adds inbound queue, offer, transfer and fallback signals, bounded admission and executor diagnostics, independent journal freshness and recovery alerts. See [Inbound Observability and Recovery](runbooks/inbound-observability.md) for local evidence and remaining I02–I05 gates.
 - Call-control/operations panels for API latency/error rate, bounded outcome mix, ESL queue health, voicemail jobs, recording finalization, retention, backup, TLS, and restart signals without per-call or per-user Prometheus labels.
 - Runtime-native validation of all monitoring configs before deploy/restore, plus a dedicated read-only `outbound_dialer_exporter` PostgreSQL role instead of reusing the application-owner connection.
 - Production preflight for secret strength, env permissions, pinned FreeSWITCH image, alert destination, off-host backup or explicit exception, and Compose validation.

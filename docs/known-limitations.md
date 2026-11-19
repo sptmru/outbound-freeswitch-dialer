@@ -30,3 +30,5 @@
 - Firewall policy and changes to host-published ports were explicitly excluded from this implementation pass. Existing network exposure must be assessed independently before production acceptance.
 - Automatic/progressive dialing, automatic voicemail drop, scheduled callbacks, multi-tenancy, object storage, legal hold, and high availability are outside the current MVP.
 - Repository tests and source inspection do not constitute provider, live-call, mailbox, load, restore, legal, training, or production sign-off.
+
+- H05 observes captured work and current configuration. Pre-capture refusals may have no product history. Local apply, metrics and staged call-path checks do not establish provider delivery, alert receipt or deployed activation. I02–I05 own the remaining acceptance gates.

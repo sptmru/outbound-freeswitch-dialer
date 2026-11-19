@@ -5,7 +5,7 @@ import type { AppConfig } from "./config.js";
 import { sendFreeSwitchApiCommand } from "./esl.js";
 import { ingressRequest, readIngressRecords, type IngressCommand } from "./ingress-agent.js";
 import { captureFromDump, validateIngress, ingressUuid, type IngressRecord } from "./ingress-journal.js";
-import { setIngressStatus, recordIngressImportFailure } from "./metrics.js";
+import { recordIngressImportResult } from "./metrics.js";
 
 const timestamp = (parameter: number) =>
   `('epoch'::timestamptz + ($${parameter}::bigint/1000000)*interval '1 second' + ($${parameter}::bigint%1000000)*interval '1 microsecond')`;
@@ -133,14 +133,13 @@ export async function importIngressRecord(
     client.release();
   }
 }
-export async function reconcileIngress(
+async function runIngressReconciliation(
   pool: pg.Pool,
   socket: string,
   command: IngressCommand,
   checkpoint?: (point: "before-insert" | "after-commit", uuid?: string) => Promise<void>,
   queue?: { beforeImport(row: IngressRecord): Promise<void>; afterImport(row: IngressRecord): Promise<void> }
 ) {
-  setIngressStatus(JSON.parse(await ingressRequest(socket, "/status")));
   // Begin with the independent journal, including entries with no calls row.
   for (let row of (await readIngressRecords(socket)).sort(
     (a, b) => Number(b.terminalUs !== null) - Number(a.terminalUs !== null)
@@ -209,10 +208,19 @@ export async function reconcileIngress(
     // old channel cannot manufacture a new durability receipt during recovery.
     await ingressRequest(socket, "/discover", { uuid: channel.uuid });
   }
-  const status = JSON.parse(await ingressRequest(socket, "/status"));
-  setIngressStatus(status);
-  return status;
+  return JSON.parse(await ingressRequest(socket, "/status"));
 }
+export async function reconcileIngress(...args: Parameters<typeof runIngressReconciliation>) {
+  try {
+    const status = await runIngressReconciliation(...args);
+    recordIngressImportResult(true);
+    return status;
+  } catch (error) {
+    recordIngressImportResult(false);
+    throw error;
+  }
+}
+
 export function startIngressReconciler(
   pool: pg.Pool,
   config: AppConfig,
@@ -226,7 +234,6 @@ export function startIngressReconciler(
       );
     },
     () => {
-      recordIngressImportFailure();
       logger.error({}, "D03 ingress import failed; journal evidence retained");
     }
   );

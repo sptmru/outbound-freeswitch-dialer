@@ -149,6 +149,7 @@ Watch at least:
 - registered agents, product active calls, FreeSWITCH active channels and
   registrations, trunk readiness, packet-capture storage, and host disk/inode
   usage;
+- in staged inbound trials, use [Inbound Observability and Recovery](inbound-observability.md) to confirm journal and SQL freshness, queue wait samples, ordinary and critical executor backlog, admission lock timing, pool waiters and unexplained uncertain holds;
 - generator CPU, open files, network errors, and latency, so a weak generator is
   not mistaken for a server limit.
 

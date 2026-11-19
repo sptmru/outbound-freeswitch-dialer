@@ -199,3 +199,12 @@ Use the existing deployment path and active-call drain (including background voi
 Schema rollback is not required, but an old application release restores global/default selection semantics and may expose legacy or other-campaign recordings. It is not a behavior-preserving rollback; coordinate the rollback and keep voicemail unused until campaign-aware code is restored.
 
 Local verification: `npm run test:voicemail:db` creates and removes a dedicated PostgreSQL 16 fixture with no network or published ports and only a temporary Unix socket under `/tmp`. It does not read `.env` or use `DATABASE_URL`. It needs Docker and the `postgres:16-alpine` image. Tests cover current-call changes, cross-campaign rejection, legacy hiding, duplicate requests, deletion races and explicit versus ambiguous command failures. ESL commands are stubbed: these checks do not prove real audio delivery. After approved deployment, verify a controlled call and the complete message in the far-end mailbox.
+
+## Inbound monitoring and staged rollout
+
+Keep inbound capture and publishing feature-off until I05 prerequisites and
+deployment scope are satisfied. Validate generated monitoring configuration
+from repository sources and check the private scrape, freshness signals and
+named alert receiver. Compare desired and applied revisions against loaded
+XML. See [Inbound Observability and Recovery](inbound-observability.md) for
+drain, replay and evidence needed before rollback.

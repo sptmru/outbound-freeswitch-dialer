@@ -1867,6 +1867,176 @@
       ],
       "title": "Active-call reconciliation detail",
       "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 122
+      },
+      "id": 49,
+      "targets": [
+        {
+          "expr": "outbound_dialer_inbound_queue_calls",
+          "legendFormat": "Queue {{state}}",
+          "refId": "A"
+        },
+        {
+          "expr": "outbound_dialer_call_offers{kind=\"inbound\",outcome=~\"pending|expired|manual_outbound_started\"}",
+          "legendFormat": "Offer {{outcome}}",
+          "refId": "B"
+        },
+        {
+          "expr": "outbound_dialer_auto_next_deferred_incoming",
+          "legendFormat": "Auto-next deferred",
+          "refId": "C"
+        }
+      ],
+      "title": "Inbound queue and offers",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 122
+      },
+      "id": 50,
+      "targets": [
+        {
+          "expr": "outbound_dialer_ingress_configured",
+          "legendFormat": "Configured",
+          "refId": "A"
+        },
+        {
+          "expr": "outbound_dialer:ingress_journal_fresh",
+          "legendFormat": "Journal fresh",
+          "refId": "B"
+        },
+        {
+          "expr": "outbound_dialer_ingress_journal_used",
+          "legendFormat": "Slots used",
+          "refId": "C"
+        },
+        {
+          "expr": "outbound_dialer_ingress_journal_capacity",
+          "legendFormat": "Slots available",
+          "refId": "D"
+        },
+        {
+          "expr": "outbound_dialer_ingress_journal_pending",
+          "legendFormat": "Awaiting ACK",
+          "refId": "E"
+        }
+      ],
+      "title": "Ingress journal and import",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 130
+      },
+      "id": 51,
+      "targets": [
+        {
+          "expr": "outbound_dialer_executor_pending_operations",
+          "legendFormat": "Backlog {{priority}}",
+          "refId": "A"
+        },
+        {
+          "expr": "outbound_dialer_executor_local{state=~\"running|waiters\"}",
+          "legendFormat": "Executor {{state}}",
+          "refId": "B"
+        },
+        {
+          "expr": "outbound_dialer_call_uncertain",
+          "legendFormat": "Uncertain {{record}}",
+          "refId": "C"
+        },
+        {
+          "expr": "outbound_dialer_database_pool_waiting_requests",
+          "legendFormat": "API pool waiters",
+          "refId": "D"
+        }
+      ],
+      "title": "Executor and unresolved work",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 130
+      },
+      "id": 52,
+      "targets": [
+        {
+          "expr": "outbound_dialer_inbound_configuration_revision",
+          "legendFormat": "Revision {{state}}",
+          "refId": "A"
+        },
+        {
+          "expr": "outbound_dialer_inbound_configuration_state == 1",
+          "legendFormat": "State {{state}}",
+          "refId": "B"
+        }
+      ],
+      "title": "Inbound configuration",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 138
+      },
+      "id": 53,
+      "targets": [
+        {
+          "expr": "outbound_dialer_inbound_connection_outcomes_window",
+          "legendFormat": "Connection {{outcome}}",
+          "refId": "A"
+        },
+        {
+          "expr": "outbound_dialer_call_transfer_outcomes_window",
+          "legendFormat": "Transfer {{outcome}}",
+          "refId": "B"
+        },
+        {
+          "expr": "outbound_dialer_inbound_flow_outcomes_window > 0",
+          "legendFormat": "Flow {{action}} {{outcome}}",
+          "refId": "C"
+        }
+      ],
+      "title": "Connection, transfer and fallback outcomes",
+      "type": "timeseries"
     }
   ],
   "refresh": "3s",

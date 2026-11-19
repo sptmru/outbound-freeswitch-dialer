@@ -1,0 +1,218 @@
+rule_files:
+  - ../../monitoring/prometheus/rules.yml
+evaluation_interval: 5s
+
+tests:
+  - name: disabled capture ignores absent observations
+    interval: 5s
+    input_series:
+      - series: "outbound_dialer_ingress_configured"
+        values: "0+0x50"
+      - series: "outbound_dialer_ingress_journal_up"
+        values: "0+0x50"
+      - series: "outbound_dialer_ingress_journal_last_success_timestamp_seconds"
+        values: "0+0x50"
+      - series: "outbound_dialer_ingress_import_last_success_timestamp_seconds"
+        values: "0+0x50"
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: IngressJournalUnavailable
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: IngressImportStale
+        exp_alerts: []
+  - name: the journal observation freezes while the API keeps exporting
+    interval: 5s
+    input_series:
+      - series: "outbound_dialer_ingress_configured"
+        values: "1+0x50"
+      - series: "outbound_dialer_ingress_journal_up"
+        values: "1+0x50"
+      - series: "outbound_dialer_ingress_journal_last_success_timestamp_seconds"
+        values: "1+0x50"
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: IngressJournalUnavailable
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: Independent ingress journal status is unavailable
+              description: Check the agent, its private socket and shared volume. Preserve SQLite evidence before recovery.
+  - name: journal polling continues while the import pass stops
+    interval: 5s
+    input_series:
+      - series: "outbound_dialer_ingress_configured"
+        values: "1+0x50"
+      - series: "outbound_dialer_ingress_journal_up"
+        values: "1+0x50"
+      - series: "outbound_dialer_ingress_journal_last_success_timestamp_seconds"
+        values: "1+5x50"
+      - series: "outbound_dialer_ingress_import_last_success_timestamp_seconds"
+        values: "1+0x50"
+    alert_rule_test:
+      - eval_time: 1m15s
+        alertname: IngressImportStale
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: Ingress import has stopped completing
+              description: Check the importer, PostgreSQL and ESL even when the independent journal status responds.
+      - eval_time: 1m15s
+        alertname: IngressJournalUnavailable
+        exp_alerts: []
+  - name: the live journal is full during an import lag
+    interval: 5s
+    input_series:
+      - series: "outbound_dialer_ingress_configured"
+        values: "1+0x50"
+      - series: "outbound_dialer_ingress_journal_up"
+        values: "1+0x50"
+      - series: "outbound_dialer_ingress_journal_last_success_timestamp_seconds"
+        values: "1+5x50"
+      - series: "outbound_dialer_ingress_journal_capacity"
+        values: "1+0x50"
+      - series: "outbound_dialer_ingress_journal_used"
+        values: "1+0x50"
+      - series: "outbound_dialer_ingress_journal_pending"
+        values: "1+0x50"
+      - series: "outbound_dialer_ingress_oldest_pending_timestamp_seconds"
+        values: "1+0x50"
+      - series: "outbound_dialer_ingress_capture_last_failure_timestamp_seconds"
+        values: "1+0x50"
+    alert_rule_test:
+      - eval_time: 45s
+        alertname: IngressJournalFull
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: Ingress journal is full; new uncaptured attempts are refused
+              description: Inspect pending receipts and import health. Preserve all live and unacknowledged evidence.
+      - eval_time: 45s
+        alertname: IngressImportLag
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: Unacknowledged ingress evidence is waiting for import
+              description: Check the age of pending updates and compare exact SQL and SQLite sequence acknowledgments.
+      - eval_time: 45s
+        alertname: IngressCaptureFailures
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: Ingress journal refused a request
+              description: Check journal capacity, filesystem access and switch reachability. Captures rejected before commit may be absent from call history.
+  - name: fresh SQL detects switch apply failure and old uncertain command
+    interval: 5s
+    input_series:
+      - series: "outbound_dialer_inbound_database_last_success_timestamp_seconds"
+        values: "1+5x50"
+      - series: "outbound_dialer_inbound_database_freshness_budget_seconds"
+        values: "45+0x50"
+      - series: "outbound_dialer_inbound_configuration_enabled"
+        values: "1+0x50"
+      - series: 'outbound_dialer_inbound_configuration_state{state="failed"}'
+        values: "1+0x50"
+      - series: "outbound_dialer_call_uncertainty_oldest_deadline_timestamp_seconds"
+        values: "1+0x50"
+    alert_rule_test:
+      - eval_time: 2m15s
+        alertname: InboundConfigurationApplyFailed
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              state: failed
+            exp_annotations:
+              summary: FreeSWITCH inbound configuration apply failed
+              description: Compare desired and applied revisions and inspect the restricted apply diagnostic and loaded XML.
+      - eval_time: 2m15s
+        alertname: InboundCallUncertaintyStuck
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: Call work remains unresolved past its expected recovery interval
+              description: Match the call, operation, fixed job, channel and reservation evidence before cleanup. Keep uncertain capacity occupied.
+  - name: stale SQL suspends old apply and uncertainty alerts
+    interval: 5s
+    input_series:
+      - series: "outbound_dialer_inbound_database_last_success_timestamp_seconds"
+        values: "1+0x50"
+      - series: "outbound_dialer_inbound_database_freshness_budget_seconds"
+        values: "45+0x50"
+      - series: "outbound_dialer_inbound_configuration_enabled"
+        values: "1+0x50"
+      - series: 'outbound_dialer_inbound_configuration_state{state="failed"}'
+        values: "1+0x50"
+      - series: "outbound_dialer_call_uncertainty_oldest_deadline_timestamp_seconds"
+        values: "1+0x50"
+    alert_rule_test:
+      - eval_time: 2m15s
+        alertname: InboundMetricsDatabaseStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: Inbound SQL monitoring data is stale
+              description: Check application pool waiters and PostgreSQL availability. Treat cached queue, work and configuration readings as stale.
+      - eval_time: 2m15s
+        alertname: InboundConfigurationApplyFailed
+        exp_alerts: []
+      - eval_time: 2m15s
+        alertname: InboundCallUncertaintyStuck
+        exp_alerts: []
+  - name: live seat refusals remain visible during stale SQL
+    interval: 5s
+    input_series:
+      - series: "outbound_dialer_inbound_database_last_success_timestamp_seconds"
+        values: "1+0x50"
+      - series: "outbound_dialer_inbound_database_freshness_budget_seconds"
+        values: "45+0x50"
+      - series: 'outbound_dialer_executor_pressure_total{reason="executor_saturated"}'
+        values: "0 0 1+0x50"
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: CallExecutorPressure
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: Call executor seats, pool or durable backlog are under pressure
+              description: Check seat deferrals, acquisition failures and oldest unresolved work. Preserve the critical seats and investigate slow senders.
+  - name: fresh backlog reaches the ordinary seat reservation threshold
+    interval: 5s
+    input_series:
+      - series: "outbound_dialer_inbound_database_last_success_timestamp_seconds"
+        values: "1+5x50"
+      - series: "outbound_dialer_inbound_database_freshness_budget_seconds"
+        values: "45+0x50"
+      - series: 'outbound_dialer_executor_pending_operations{priority="normal"}'
+        values: "48+0x50"
+    alert_rule_test:
+      - eval_time: 45s
+        alertname: CallExecutorPressure
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              priority: normal
+            exp_annotations:
+              summary: Call executor seats, pool or durable backlog are under pressure
+              description: Check seat deferrals, acquisition failures and oldest unresolved work. Preserve the critical seats and investigate slow senders.
+  - name: application pool waiters remain independent of cached database observations
+    interval: 5s
+    input_series:
+      - series: "outbound_dialer_database_pool_waiting_requests"
+        values: "1+0x50"
+    alert_rule_test:
+      - eval_time: 2m15s
+        alertname: ApplicationDatabasePoolWaiters
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: Application database pool is saturated
+              description: API work has been waiting for a PostgreSQL connection for more than 2 minutes.

@@ -160,3 +160,6 @@ quality DB uses tmpfs and is not target-storage durability proof. Both final
 source manifests match the implementation. Test containers/volumes were removed;
 final evidence is retained. Only identified failed H01 debug artifacts were
 removed to recover temporary space.
+
+See [Inbound Observability and Recovery](runbooks/inbound-observability.md)
+for alert response, evidence capture and a recovery scenario walk-through.

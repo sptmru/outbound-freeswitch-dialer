@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { __testing as metrics } from "./metrics.js";
 import { randomUUID } from "node:crypto";
 import { fork } from "node:child_process";
 import { once } from "node:events";
@@ -546,7 +547,7 @@ test(
 );
 
 test(
-  "C03.3/C03.4 bounded replicas, critical reserve, SQL progress, same-session persistence, deadline and backlog drain",
+  "C03.3/C03.4/H05.2 bounded replicas, critical reserve, SQL progress, same-session persistence, deadline and backlog drain",
   options,
   async () => {
     const f = await fixture();
@@ -591,6 +592,18 @@ test(
         });
         assert.equal(e.stats.waiters, 0);
       }
+      assert.equal(await metrics.refreshDatabaseMetrics(f.pool, 900), true);
+      const scrape = await metrics.metrics();
+      assert.match(scrape, /executor_local\{state="running"\} 8/);
+      assert.match(scrape, /executor_local\{state="waiters"\} 0/);
+      assert.ok(
+        Number(scrape.match(/executor_pool_acquisition_seconds_count\{outcome="acquired"\} (\d+)/)?.[1]) >= 8
+      );
+      assert.ok(
+        Number(scrape.match(/executor_pressure_total\{reason="executor_saturated"\} (\d+)/)?.[1]) >= 2
+      );
+      assert.match(scrape, /executor_pending_operations\{priority="normal"\} 1/);
+      assert.match(scrape, /call_uncertain\{record="operation"\} 8/);
       // Dedicated login hard limit, not merely a local max:4 setting.
       const extra = new pg.Client(f.database);
       extra.on("error", () => {});

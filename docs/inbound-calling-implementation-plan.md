@@ -4,10 +4,11 @@ Date: 2026-11-14. Repository: `outbound-dialer`.
 
 Source review baseline: commit `91c7a8c257e7a73d83478ffd085152cc777993cf`.
 
-**Status: implementation and handoff plan. The functionality is not implemented.**
-The user authorized this document and its revisions, but has not authorized application
-code changes, migrations, environment changes, or deployment. A subsequent agent
-needs an explicit implementation task before starting a phase.
+**Status: design and staged implementation plan.** The
+[GitHub tracker](https://github.com/sptmru/outbound-freeswitch-dialer/issues/1)
+lists completed tasks and their evidence. Target routing and transfers require
+I05 activation. See the [H05 operator runbook](runbooks/inbound-observability.md)
+for current monitoring and acceptance status.
 
 This revision incorporates the user's corrections: English language; no mandatory
 Accept/Ignore step before manual outbound solely because an inbound offer exists;
@@ -15,7 +16,7 @@ explicit unit, integration, end-to-end, and load testing for new functionality.
 The user also accepted the review on 2026-11-14: no automatic reoffer after inbound
 offer expiry; atomic transfer-offer decline on successful manual outbound; and explicit
 contracts for ingress recovery, Desk-to-SIP binding, overload, and executor DB capacity.
-Approval applies to this plan; implementation and runtime acceptance remain pending.
+That approval covered the plan. The individual issues record subsequent implementation and acceptance.
 
 Owner-approved amendment, 2026-11-14: A02's isolated local FS/R prototype is complete
 and merged into `dev` by [PR #49](https://github.com/sptmru/outbound-freeswitch-dialer/pull/49).
@@ -843,11 +844,13 @@ Keep `.env`, Compose, and `scripts/deploy.sh`. Document/validate any new variabl
 - Measure pre-insert recovery/import lag, ingress journal capacity/failures, binding
   mismatches, expired offers, capacity rejections, resource reservations, executor backlog,
   and DB pool acquisition/waiters. Alert on loss of the configured admission guarantee.
+  [H05 operator runbook](runbooks/inbound-observability.md) maps these signals to
+  current settings, recovery evidence and the remaining acceptance gates.
 
 ## 12. Implementation Phases and Continuation Points
 
-All phases remain open. Each phase includes new tests, actual validation results,
-limitations, and handoff. Tests ship with implementation, not as a final follow-up.
+The table describes the phase gates. Follow the issue tracker for task status,
+actual validation results and limitations. Tests ship with each implementation.
 
 | Phase                  | Work                                                                                                | Completion criterion                                                                         |
 | ---------------------- | --------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |

@@ -196,7 +196,9 @@ export class IngressJournal {
   }
   status() {
     const all = this.db.prepare("SELECT record,ack,sequence FROM evidence").all();
-    const pending = all.filter((r) => Number(r.ack) < Number(r.sequence));
+    const pending: IngressRecord[] = all
+      .filter((r) => Number(r.ack) < Number(r.sequence))
+      .map((r) => JSON.parse(String(r.record)));
     return {
       capacity: this.slots,
       used: all.filter(
@@ -204,9 +206,8 @@ export class IngressJournal {
       ).length,
       retained: all.length,
       unacknowledged: pending.length,
-      oldestArrivedUs: pending.length
-        ? Math.min(...pending.map((r) => JSON.parse(String(r.record)).arrivedUs))
-        : null
+      oldestArrivedUs: pending.length ? Math.min(...pending.map((r) => r.arrivedUs)) : null,
+      oldestPendingUs: pending.length ? Math.min(...pending.map((r) => r.terminalUs ?? r.arrivedUs)) : null
     };
   }
 

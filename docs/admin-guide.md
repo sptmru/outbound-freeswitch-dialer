@@ -81,3 +81,8 @@
 - Firewall/host-port changes are outside this implementation scope; escalate exposure questions to the named deployment owner.
 
 Call History supports **Direction**, exact **DID** and (for inbound) **Queue** filters. Agent filtering includes previous participants. Expand a call for **Call journey**: offers and transfers have their own outcomes; **Queue exit** and **Flow outcome** describe separate stages. Participant talk time uses its connected interval. CSV adds context and bounded journey JSON; omitted journey rows are explicitly flagged. Analytics keeps outbound attempts separate from inbound counts and agent participation. See [reporting definitions](inbound-history-reporting.md).
+
+For inbound routing, compare the saved revision and FreeSWITCH apply status
+in the [inbound administration guide](inbound-admin-ui.md). For failures,
+share the call reference, time and the displayed revision with operations.
+See [Inbound Observability and Recovery](runbooks/inbound-observability.md).

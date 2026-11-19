@@ -694,6 +694,7 @@ test(
   async () => {
     const f = await fixture();
     let stop: (() => void) | undefined;
+    let stopCollecting: (() => void) | undefined;
     let listener: pg.PoolClient | undefined;
     try {
       const a = await f.agent(),
@@ -712,6 +713,8 @@ test(
       await subscribed;
       listener = await f.pool.connect();
       await listener.query("listen outbound_dialer_changes");
+      // A committed NOTIFY can reach the hub before the mutation promise resumes.
+      stopCollecting = hub.subscribe((e) => events.push(e.source));
       async function fence() {
         // An ordered NOTIFY commit fence proves delivery without timing sleeps.
         await new Promise<void>((resolve, reject) => {
@@ -720,7 +723,6 @@ test(
             reject(new Error(`E01 notification fence timed out: ${JSON.stringify(events)}`));
           }, 2000);
           const unsub = hub.subscribe((e) => {
-            events.push(e.source);
             if (e.source === "e01-fence") {
               clearTimeout(timer);
               unsub();
@@ -762,6 +764,7 @@ test(
         await listener.query("unlisten outbound_dialer_changes");
         listener.release();
       }
+      stopCollecting?.();
       stop?.();
       await f.cleanup();
     }

@@ -1,4 +1,5 @@
 import type pg from "pg";
+import { recordCapacityRejection } from "./inbound-metrics.js";
 
 // A06 DB policy. FS/pre-admission hard guards are applied and verified by D02.
 export const defaultCapacityLimits = Object.freeze({
@@ -227,9 +228,16 @@ export class CallCapacity {
       usage
         .filter((r) => resources.includes(r.resource_type) && (!scope || r.scope_id === scope))
         .reduce((n, r) => n + BigInt(r.used), 0n);
-    const check = (name: string, current: bigint, delta: number, limit: number) => {
-      if (delta > 0 && current + BigInt(delta) > BigInt(limit))
+    const check = (
+      name: Parameters<typeof recordCapacityRejection>[0],
+      current: bigint,
+      delta: number,
+      limit: number
+    ) => {
+      if (delta > 0 && current + BigInt(delta) > BigInt(limit)) {
+        recordCapacityRejection(name);
         throw new CapacityError("capacity_exceeded", name);
+      }
     };
     const delta = (...resources: Resource[]) => plan.filter((p) => resources.includes(p.resource)).length;
     const channels: Resource[] = ["customer_channel", "browser_channel", "supervisor_channel"];

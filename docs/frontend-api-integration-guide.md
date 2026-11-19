@@ -919,3 +919,10 @@ The authenticated Desk-session POST/PATCH/DELETE routes are implemented; see
 stay in memory. An agent-level registration indicator cannot authorize a native
 start. The browser opts into this lifecycle only when the API supplies
 `AgentDeskResponse.coordination`; the normal bootstrap remains I05 work.
+
+For inbound incident correlation, record `callId` and `operationId` from
+authorized responses and read the active Call/Desk snapshot. An acceptance
+response represents connecting. Service INVITE authorization binds a dialog
+to the operation. Confirm the correlated leg and bridge before reporting an
+established call. Keep authentication and SIP dialog data out of shared
+diagnostics. See [Inbound Observability and Recovery](runbooks/inbound-observability.md).

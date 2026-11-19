@@ -76,6 +76,7 @@ Record evidence URL/path, UTC date, environment, operator, and deployed SHA for 
 - [ ] Zero-active-call deployment succeeds and records the expected SHA/state.
 - [ ] Failed/new-code release follows the documented previous-image rollback path without a schema rollback.
 - [ ] Stage 1 SIP-secret deployment keeps `v1` writes; stage 2 enables `v2` only after the retained rollback image is proven dual-read compatible.
+- [ ] Capture and import failure, configuration apply failure, stuck uncertainty and executor pressure trigger the expected alarms in the test environment. Record local evidence and target delivery in [Inbound Observability and Recovery](runbooks/inbound-observability.md).
 - [ ] Alertmanager test alerts reach named recipients, and an independent off-host probe detects total host/application outage.
 - [ ] A daily authenticated backup is delivered off-host and its freshness alert is green.
 - [ ] `verify-backup.sh` authenticates the selected archive.

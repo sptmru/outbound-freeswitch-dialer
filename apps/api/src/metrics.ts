@@ -1,12 +1,20 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
-import { Counter, Gauge, Histogram, Registry, collectDefaultMetrics } from "prom-client";
+import { Counter, Gauge, Histogram, collectDefaultMetrics } from "prom-client";
 import type pg from "pg";
 import { callOutcomes } from "@outbound-dialer/shared";
 import type { AppConfig } from "./config.js";
 import { canOriginateCustomerLeg, sendFreeSwitchApiCommand } from "./esl.js";
-import { setFreeSwitchEventListenerSubscribed } from "./esl-listener-state.js";
+import { normalizeEventName, setFreeSwitchEventListenerSubscribed } from "./esl-listener-state.js";
 
-const registry = new Registry();
+import { z } from "zod";
+import { ingressRequest } from "./ingress-agent.js";
+import {
+  configureInboundMetrics,
+  metricsRegistry as registry,
+  publishInboundMetrics,
+  readInboundMetrics
+} from "./inbound-metrics.js";
+
 const ingressUsage = new Gauge({
   name: "outbound_dialer_ingress_journal_used",
   help: "Retained ingress slots",
@@ -37,22 +45,72 @@ const ingressImportFailures = new Counter({
   help: "Ingress import failures",
   registers: [registry]
 });
-export function setIngressStatus(status: {
-  used: number;
-  capacity: number;
-  unacknowledged: number;
-  oldestArrivedUs: number | null;
-  failures: number;
-}) {
-  ingressUsage.set(status.used);
-  ingressCapacity.set(status.capacity);
-  ingressPending.set(Number(status.unacknowledged));
-  ingressOldest.set((status.oldestArrivedUs ?? 0) / 1000000);
-  ingressCaptureFailures.set(status.failures);
+const ingressConfigured = gauge(
+  "outbound_dialer_ingress_configured",
+  "Whether durable capture and import are configured."
+);
+const ingressJournalUp = gauge(
+  "outbound_dialer_ingress_journal_up",
+  "Whether the latest independent private status poll succeeded."
+);
+const ingressJournalLastSuccess = gauge(
+  "outbound_dialer_ingress_journal_last_success_timestamp_seconds",
+  "Last successful private journal status poll."
+);
+const ingressOldestPending = gauge(
+  "outbound_dialer_ingress_oldest_pending_timestamp_seconds",
+  "Oldest unacknowledged journal update, or zero."
+);
+const ingressCaptureLastFailure = gauge(
+  "outbound_dialer_ingress_capture_last_failure_timestamp_seconds",
+  "Last capture or terminal write refusal observed by the journal agent."
+);
+const ingressImportLastSuccess = gauge(
+  "outbound_dialer_ingress_import_last_success_timestamp_seconds",
+  "Last completed ingress import and discovery pass."
+);
+
+const ingressStatus = z
+  .object({
+    used: z.number().int().nonnegative(),
+    capacity: z.number().int().positive().max(128),
+    unacknowledged: z.number().int().nonnegative(),
+    oldestArrivedUs: z.number().int().positive().nullable(),
+    oldestPendingUs: z.number().int().positive().nullable().optional(),
+    failures: z.number().int().nonnegative(),
+    lastCaptureFailureUs: z.number().int().nonnegative().optional()
+  })
+  .refine(
+    (status) =>
+      status.unacknowledged <= status.used &&
+      status.used <= status.capacity &&
+      (status.unacknowledged === 0
+        ? status.oldestArrivedUs === null && status.oldestPendingUs == null
+        : status.oldestArrivedUs !== null && status.oldestPendingUs !== null)
+  );
+
+async function refreshIngressJournalMetrics(socket: string) {
+  try {
+    const status = ingressStatus.parse(JSON.parse(await ingressRequest(socket, "/status")));
+    ingressUsage.set(status.used);
+    ingressCapacity.set(status.capacity);
+    ingressPending.set(status.unacknowledged);
+    ingressOldest.set((status.oldestArrivedUs ?? 0) / 1e6);
+    ingressOldestPending.set((status.oldestPendingUs ?? status.oldestArrivedUs ?? 0) / 1e6);
+    ingressCaptureFailures.set(status.failures);
+    ingressCaptureLastFailure.set((status.lastCaptureFailureUs ?? 0) / 1e6);
+    ingressJournalLastSuccess.set(Date.now() / 1000);
+    ingressJournalUp.set(1);
+  } catch {
+    ingressJournalUp.set(0);
+  }
 }
-export function recordIngressImportFailure() {
-  ingressImportFailures.inc();
+
+export function recordIngressImportResult(completed: boolean) {
+  if (completed) ingressImportLastSuccess.set(Date.now() / 1000);
+  else ingressImportFailures.inc();
 }
+
 const requestStartedAt = new WeakMap<FastifyRequest, bigint>();
 
 collectDefaultMetrics({
@@ -388,31 +446,47 @@ eslListenerConnected.set(0);
 export function registerMetrics(app: FastifyInstance, config: AppConfig, pool: pg.Pool): void {
   const refreshIntervalMilliseconds = (config.METRICS_REFRESH_INTERVAL_SECONDS ?? 15) * 1_000;
   let refreshTimer: NodeJS.Timeout | null = null;
-  let refreshPromise: Promise<void> | null = null;
-
-  const refreshSnapshot = (): Promise<void> => {
-    if (refreshPromise) return refreshPromise;
-    refreshPromise = Promise.all([
-      refreshDatabaseMetrics(pool, config.MONITORING_STUCK_CALL_SECONDS),
-      refreshSipTrunkMetrics(config),
-      refreshFreeSwitchRuntimeMetrics(config)
-    ])
-      .then((results) => {
-        if (results.every(Boolean)) {
-          metricsSnapshotLastRefresh.set(Date.now() / 1_000);
-        } else {
-          metricsSnapshotRefreshFailures.inc();
-        }
-      })
-      .catch(() => {
-        metricsSnapshotRefreshFailures.inc();
-      })
-      .finally(() => {
-        refreshPromise = null;
-      });
-    return refreshPromise;
+  let journalTimer: NodeJS.Timeout | undefined;
+  let journalPoll: Promise<void> | undefined;
+  const pollJournal = () => {
+    journalPoll ??= refreshIngressJournalMetrics(config.FREESWITCH_INGRESS_SOCKET).finally(() => {
+      journalPoll = undefined;
+    });
   };
 
+  const sources = [
+    () => refreshDatabaseMetrics(pool, config.MONITORING_STUCK_CALL_SECONDS),
+    () => refreshSipTrunkMetrics(config),
+    () => refreshFreeSwitchRuntimeMetrics(config)
+  ].map((refresh) => ({ refresh, running: false, succeededAt: 0 }));
+
+  const refreshSnapshot = () => {
+    for (const source of sources) {
+      if (source.running) continue;
+      source.running = true;
+      void source
+        .refresh()
+        .then((ok) => {
+          source.succeededAt = ok ? Date.now() / 1000 : 0;
+          const oldestSuccess = Math.min(...sources.map((entry) => entry.succeededAt));
+          if (oldestSuccess > 0) metricsSnapshotLastRefresh.set(oldestSuccess);
+          if (!ok) metricsSnapshotRefreshFailures.inc();
+        })
+        .catch(() => {
+          source.succeededAt = 0;
+          metricsSnapshotRefreshFailures.inc();
+        })
+        .finally(() => {
+          source.running = false;
+        });
+    }
+  };
+
+  ingressConfigured.set(Number(config.FREESWITCH_INGRESS_ENABLED === true));
+  configureInboundMetrics(
+    config.FREESWITCH_INBOUND_CONFIG_ENABLED === true,
+    refreshIntervalMilliseconds / 1000
+  );
   eslListenerEnabled.set(config.FREESWITCH_ESL_ENABLED ? 1 : 0);
   retentionEnabled.set(config.RETENTION_ENABLED ? 1 : 0);
   pcapCaptureEnabled.set(config.PCAP_CAPTURE_ENABLED ? 1 : 0);
@@ -433,14 +507,21 @@ export function registerMetrics(app: FastifyInstance, config: AppConfig, pool: p
   });
 
   app.addHook("onReady", async () => {
-    void refreshSnapshot();
-    refreshTimer = setInterval(() => void refreshSnapshot(), refreshIntervalMilliseconds);
+    refreshSnapshot();
+    refreshTimer = setInterval(refreshSnapshot, refreshIntervalMilliseconds);
     refreshTimer.unref();
+    if (config.FREESWITCH_INGRESS_ENABLED) {
+      pollJournal();
+      journalTimer = setInterval(pollJournal, 5000);
+      journalTimer.unref();
+    }
   });
 
   app.addHook("onClose", async () => {
     if (refreshTimer) clearInterval(refreshTimer);
     refreshTimer = null;
+    if (journalTimer) clearInterval(journalTimer);
+    await journalPoll;
   });
 
   app.get("/metrics", async (_request, reply) => {
@@ -759,6 +840,8 @@ async function refreshDatabaseMetrics(pool: pg.Pool, stuckCallSeconds: number): 
 
     const current = snapshot.rows[0];
     const recent = window.rows[0];
+    const inbound = await readInboundMetrics(client);
+    await client.query("commit");
     activeCalls.set(toNumber(current?.active_calls));
     activeSupervisorSessions.set(toNumber(current?.active_supervisor_sessions));
     stuckCalls.set(toNumber(current?.stuck_calls));
@@ -787,7 +870,7 @@ async function refreshDatabaseMetrics(pool: pg.Pool, stuckCallSeconds: number): 
     setTelephonyStateMetrics(telephonyState.rows[0]);
     setTerminalMetrics(terminalLatency.rows[0], terminalSources.rows);
     setMediaMetrics(mediaCoverage.rows[0], mediaLegs.rows, mediaCodecs.rows);
-    await client.query("commit");
+    publishInboundMetrics(inbound);
     databaseSnapshotUp.set(1);
     return true;
   } catch {
@@ -1124,14 +1207,6 @@ function labeledGauge(name: string, help: string, labelNames: readonly string[])
   return new Gauge({ name, help, labelNames, registers: [registry] });
 }
 
-function normalizeEventName(value: string | undefined): string {
-  const normalized = value
-    ?.trim()
-    .toUpperCase()
-    .replace(/[^A-Z0-9_]/g, "_");
-  return normalized || "UNKNOWN";
-}
-
 function toOptionalNumber(value: unknown): number | null {
   if (value === null || value === undefined || value === "") return null;
   const parsed = Number(value);
@@ -1150,6 +1225,7 @@ export const __testing = {
   parseFreeSwitchCount,
   refreshDatabaseMetrics,
   refreshFreeSwitchRuntimeMetrics,
+  refreshIngressJournalMetrics,
   setDatabasePoolMetrics,
   toNumber
 };

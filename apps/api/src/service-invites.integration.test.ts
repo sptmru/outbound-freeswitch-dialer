@@ -177,58 +177,75 @@ test(
       }
   }
 );
-test("E04.1 API: strict contract, authentication, CSRF and no-store", options, async () => {
-  const f = await fixture();
-  const config = {
-    JWT_SECRET: "e04-test-only",
-    JWT_EXPIRES_SECONDS: 3600,
-    PUBLIC_APP_URL: "https://desk.test",
-    corsOrigins: ["https://desk.test"]
-  } as unknown as AppConfig;
-  const app = Fastify();
-  await app.register(cookie);
-  registerCookieCsrfProtection(app, config);
-  registerServiceInviteRoutes(app, config, f.pool);
-  app.setErrorHandler((e, _req, reply) =>
-    reply.code(e instanceof ZodError ? 400 : 500).send({ message: String(e) })
-  );
-  const user = (await f.pool.query("select * from users where id=$1", [f.userId])).rows[0];
-  const token = signAuthToken(config, {
-    sub: user.id,
-    email: user.email,
-    role: user.role,
-    ver: user.auth_version
-  });
-  const request = (payload: object, headers: Record<string, string> = { authorization: `Bearer ${token}` }) =>
-    app.inject({ method: "POST", url: "/agent/service-invites/authorize", payload, headers });
-  try {
-    assert.equal((await request(f.input, {} as never)).statusCode, 401);
-    for (const payload of [
-      { ...f.input, extra: true },
-      { ...f.input, bindingGeneration: "bad" },
-      { ...f.input, bindingGeneration: "01" },
-      { ...f.input, bindingGeneration: "9223372036854775808" },
-      { ...f.input, dialogId: "bad\r\nheader" }
-    ])
-      assert.equal((await request(payload)).statusCode, 400);
-    assert.equal(
-      (await request(f.input, { cookie: `outbound_dialer_session=${token}` } as never)).statusCode,
-      403
+test(
+  "E04.1/H05.1 API: strict contract, authentication, CSRF, no-store and safe diagnostics",
+  options,
+  async () => {
+    const f = await fixture();
+    const config = {
+      JWT_SECRET: "e04-test-only",
+      JWT_EXPIRES_SECONDS: 3600,
+      PUBLIC_APP_URL: "https://desk.test",
+      corsOrigins: ["https://desk.test"]
+    } as unknown as AppConfig;
+    const log: string[] = [];
+    const app = Fastify({ logger: { stream: { write: (line: string) => log.push(line) } } });
+    await app.register(cookie);
+    registerCookieCsrfProtection(app, config);
+    registerServiceInviteRoutes(app, config, f.pool);
+    app.setErrorHandler((e, _req, reply) =>
+      reply.code(e instanceof ZodError ? 400 : 500).send({ message: String(e) })
     );
-    assert.equal(
-      (await request(f.input, { cookie: `outbound_dialer_session=${token}`, origin: "https://desk.test" }))
-        .statusCode,
-      200
-    );
-    const result = await request(f.input);
-    assert.equal(result.statusCode, 200);
-    assert.equal(result.headers["cache-control"], "no-store");
-    assert.deepEqual(result.json(), { authorized: true, ...f.input });
-  } finally {
-    await app.close();
-    await f.cleanup();
+    const user = (await f.pool.query("select * from users where id=$1", [f.userId])).rows[0];
+    const token = signAuthToken(config, {
+      sub: user.id,
+      email: user.email,
+      role: user.role,
+      ver: user.auth_version
+    });
+    const request = (
+      payload: object,
+      headers: Record<string, string> = { authorization: `Bearer ${token}` }
+    ) => app.inject({ method: "POST", url: "/agent/service-invites/authorize", payload, headers });
+    try {
+      assert.equal((await request(f.input, {} as never)).statusCode, 401);
+      for (const payload of [
+        { ...f.input, extra: true },
+        { ...f.input, bindingGeneration: "bad" },
+        { ...f.input, bindingGeneration: "01" },
+        { ...f.input, bindingGeneration: "9223372036854775808" },
+        { ...f.input, dialogId: "bad\r\nheader" }
+      ])
+        assert.equal((await request(payload)).statusCode, 400);
+      assert.equal(
+        (await request(f.input, { cookie: `outbound_dialer_session=${token}` } as never)).statusCode,
+        403
+      );
+      assert.equal(
+        (await request(f.input, { cookie: `outbound_dialer_session=${token}`, origin: "https://desk.test" }))
+          .statusCode,
+        200
+      );
+      const result = await request(f.input);
+      assert.equal(result.statusCode, 200);
+      assert.equal(result.headers["cache-control"], "no-store");
+      assert.deepEqual(result.json(), { authorized: true, ...f.input });
+      const dialogId = "private-dialog-+12025550100-fixture";
+      const refusal = await request({ ...f.input, bindingGeneration: "2", dialogId });
+      assert.equal(refusal.statusCode, 409);
+      const event = log
+        .map((line) => JSON.parse(line))
+        .find((line) => line.event === "service_invite_authorization_refused");
+      assert.equal(event?.callId, f.input.callId);
+      assert.equal(event?.operationId, f.input.operationId);
+      assert.ok(!log.join("").includes(dialogId));
+      assert.ok(!log.join("").includes(token));
+    } finally {
+      await app.close();
+      await f.cleanup();
+    }
   }
-});
+);
 
 test(
   "E04.1 DB: revoked/expired controller and terminal-first arbitration fail closed after lock",

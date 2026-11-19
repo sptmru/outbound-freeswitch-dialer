@@ -1,5 +1,6 @@
 import type pg from "pg";
 import { z } from "zod";
+import { recordServiceInviteAuthorization } from "./inbound-metrics.js";
 import { withCallAdmission } from "./call-admission.js";
 import type { DeskActor } from "./desk-sessions.js";
 
@@ -31,9 +32,12 @@ export async function authorizeServiceInvite(
 ): Promise<boolean> {
   const db = await pool.connect();
   try {
-    return await withCallAdmission(db, { callIds: [input.callId], agentIds: [actor.agentId] }, async () => {
-      const allowed = await db.query(
-        `select 1 from call_operations o
+    const outcome = await withCallAdmission(
+      db,
+      { callIds: [input.callId], agentIds: [actor.agentId] },
+      async () => {
+        const allowed = await db.query(
+          `select 1 from call_operations o
         join calls c on c.id=o.call_id
         join agents a on a.id=$6 join users u on u.id=a.user_id
         join agent_desk_sessions d on d.id=$3 and d.agent_id=a.id
@@ -74,31 +78,34 @@ export async function authorizeServiceInvite(
                 and exists(select 1 from call_offers f where f.transfer_id=t.id and f.agent_id=a.id
                   and f.state='accepted' and f.desk_session_id=d.id and f.binding_generation=d.binding_generation)))
           )`,
-        [
-          input.callId,
-          input.operationId,
-          input.deskSessionId,
-          input.bindingGeneration,
-          input.legUuid,
-          actor.agentId,
-          actor.userId,
-          actor.authVersion
-        ]
-      );
-      if (!allowed.rowCount) return false;
-      await db.query(
-        "insert into service_invite_dialogs(operation_id,dialog_id) values($1,$2) on conflict do nothing",
-        [input.operationId, input.dialogId]
-      );
-      return (
-        (
+          [
+            input.callId,
+            input.operationId,
+            input.deskSessionId,
+            input.bindingGeneration,
+            input.legUuid,
+            actor.agentId,
+            actor.userId,
+            actor.authVersion
+          ]
+        );
+        if (!allowed.rowCount) return "binding_or_correlation_mismatch";
+        await db.query(
+          "insert into service_invite_dialogs(operation_id,dialog_id) values($1,$2) on conflict do nothing",
+          [input.operationId, input.dialogId]
+        );
+        return (
           await db.query("select 1 from service_invite_dialogs where operation_id=$1 and dialog_id=$2", [
             input.operationId,
             input.dialogId
           ])
         ).rowCount === 1
-      );
-    });
+          ? "authorized"
+          : "dialog_conflict";
+      }
+    );
+    recordServiceInviteAuthorization(outcome);
+    return outcome === "authorized";
   } finally {
     db.release();
   }

@@ -38,3 +38,9 @@ After release, the customer leg remains in the background job list until playbac
 - Report registration failures, missing/one-way audio, missing ringback, DTMF failure, stale calls, incorrect outcomes, or stuck background jobs to the administrator.
 - If voicemail is pending/failed/interrupted, do not tell the customer/team that delivery succeeded.
 - Never share passwords, SIP details, media URLs, browser logs containing tokens, or unmasked customer numbers through an unapproved channel.
+
+When an inbound or transfer offer is accepted after staged activation, keep
+the controlling Desk open until it shows the connected call. If the connection
+fails, share the call reference and time with an administrator. See the
+[inbound Desk guide](inbound-agent-desk-offers.md) and
+[transfer guide](inbound-agent-desk-transfers.md).

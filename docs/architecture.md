@@ -105,6 +105,12 @@ The API publishes an admin-only Swagger UI at `/api/docs/` through the applicati
 | Logs            | `alloy`, `loki`, `docker-socket-proxy`                                                                         | The socket proxy is isolated on `docker-monitoring`; Alloy bridges that network to the default network. |
 | One-shot tools  | `certbot`, `monitoring-config`                                                                                 | Compose profile `tools`; started only by certificate/config rendering workflows.                        |
 
+The private API metrics endpoint serves cached SQL and FreeSWITCH observations
+plus current pool counters. An independent journal socket probe tracks
+capture availability even while the importer is blocked. Treat persisted
+desired and applied revisions, executed commands and concrete media evidence
+as separate lifecycle stages. See [Inbound Observability and Recovery](runbooks/inbound-observability.md).
+
 ## Authentication And Request Security
 
 1. `POST /auth/login` verifies the local password and active account.

@@ -19,12 +19,18 @@ export async function startIngressAgent(
   const journal = new IngressJournal(join(dirname(socketPath), "ingress.sqlite"), slots);
   await chmod(join(dirname(socketPath), "ingress.sqlite"), 0o600);
   let running = false,
-    failures = 0;
+    failures = 0,
+    lastCaptureFailureUs = 0;
+  function recordFailure(capture: boolean) {
+    failures++;
+    if (capture) lastCaptureFailureUs = Date.now() * 1000;
+  }
   const http = (control: boolean) =>
     createServer({ connectionsCheckingInterval: 100 }, async (req, res) => {
+      const capture = !control && (req.url === "/capture" || req.url === "/terminal");
       const exclusive = !(control && req.method === "GET") && req.url !== "/admission";
       if (running && exclusive) {
-        failures++;
+        recordFailure(capture);
         res.writeHead(503).end();
         return;
       }
@@ -38,7 +44,7 @@ export async function startIngressAgent(
         if (control && req.method === "GET" && req.url === "/records") {
           res.end(JSON.stringify(journal.records()));
         } else if (control && req.method === "GET" && req.url === "/status") {
-          res.end(JSON.stringify({ ...journal.status(), failures }));
+          res.end(JSON.stringify({ ...journal.status(), failures, lastCaptureFailureUs }));
         } else if (control && req.method === "GET" && req.url?.startsWith("/terminal-import?")) {
           const query = new URL(req.url, "http://localhost").searchParams;
           const uuid = query.get("uuid") ?? "";
@@ -75,7 +81,7 @@ export async function startIngressAgent(
           }
         }
       } catch {
-        failures++;
+        recordFailure(capture);
         // Fixed diagnostics exclude secrets, caller data, SQL errors and curl bodies.
         console.error("D03 journal request failed; evidence retained");
         res.writeHead(503).end("unavailable");

@@ -9,6 +9,7 @@ import {
 import { lockUserMediaAction } from "./user-media-lock.js";
 import { lockCampaignVoicemail } from "./dashboard/recordings.js";
 import { CallCapacity } from "./call-capacity.js";
+import { recordAdmissionConflict, recordAdmissionLockWait } from "./inbound-metrics.js";
 import { expireInboundOffers } from "./call-offer-expiry.js";
 
 // A01 namespace; distinct from user media (72201) and execution (A05/C03).
@@ -314,7 +315,12 @@ export async function withCallAdmission<T>(
       startPaused = Boolean(maintenance.rows[0]?.paused);
       if (startPaused && !input.allowPausedReplay) throw new AdmissionError("maintenance");
     }
-    await client.query("select pg_advisory_xact_lock($1,0)", [ADMISSION_LOCK_NAMESPACE]);
+    const lockStarted = performance.now();
+    try {
+      await client.query("select pg_advisory_xact_lock($1,0)", [ADMISSION_LOCK_NAMESPACE]);
+    } finally {
+      recordAdmissionLockWait((performance.now() - lockStarted) / 1000);
+    }
     const marker = await client.query(
       "select 1 from call_admission_migration where not reconciliation_required and reconciled_at is not null"
     );
@@ -340,6 +346,7 @@ export async function withCallAdmission<T>(
     return result;
   } catch (error) {
     admission?.close();
+    recordAdmissionConflict(error);
     await client.query("rollback");
     throw error;
   }

@@ -40,6 +40,7 @@ For the SIP trunk provider, support both registration-based and IP-authenticated
 - We must validate FreeSWITCH behavior for bridge teardown and voicemail playback early.
 - WebRTC setup requires correct WSS, NAT, RTP, and TLS configuration.
 - Production deployment must include SIP/RTP/firewall troubleshooting documentation.
+- Inbound monitoring follows the same ownership boundary. The private API scrape reports durable PostgreSQL and observed FreeSWITCH state. Check configuration and connection evidence as separate stages. See [Inbound Observability and Recovery](../runbooks/inbound-observability.md).
 
 ## Alternatives Considered
 

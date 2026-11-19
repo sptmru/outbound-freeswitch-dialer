@@ -114,6 +114,12 @@ Use [AWS NAT, firewall, STUN, and TURN](runbooks/aws-networking.md) for address 
 
 `METRICS_REFRESH_INTERVAL_SECONDS` controls the bounded background refresh of database- and FreeSWITCH-backed metric snapshots (15 seconds by default). Prometheus scrapes serialize the latest completed snapshot and current PostgreSQL pool counters; they do not start new database or ESL work per request.
 
+The private ingress journal status poll runs independently every five seconds
+when `FREESWITCH_INGRESS_ENABLED=true`. The inbound SQL freshness budget is
+twice the configured refresh interval plus 15 seconds. See
+[Inbound Observability and Recovery](runbooks/inbound-observability.md) for
+activation prerequisites and alert thresholds.
+
 Monitoring is part of the main Compose deployment. `scripts/deploy.sh` renders `monitoring/generated/prometheus.yml` and `monitoring/generated/alertmanager/alertmanager.yml`, validates all monitoring configs with the pinned runtime images, then starts the stack. Do not edit generated files directly.
 
 `LOKI_RETENTION_PERIOD` controls how long accepted logs remain queryable; it is separate from Loki's ingestion-age guard. Loki accepts entries up to 168 hours old, while Alloy drops entries older than 167 hours before batching them. The one-hour margin prevents an old Docker entry replayed after an Alloy restart from making Loki reject fresh entries in the same batch. Alloy exposes these intentional drops through `loki_process_dropped_lines_total` with the reason `outside_loki_ingestion_window`.

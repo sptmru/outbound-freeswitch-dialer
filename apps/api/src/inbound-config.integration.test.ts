@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import pg from "pg";
 import { databaseConfig, testDatabaseUrl, assertBlocked } from "../../../tests/fixtures/inbound/database.mjs";
+import { __testing as metrics } from "./metrics.js";
 import { runMigrations } from "./db.js";
 import type { AppConfig } from "./config.js";
 import {
@@ -169,7 +170,7 @@ test(
 );
 
 test(
-  "D02.2 DB: invalid render, write, reload and loaded-revision failure preserve last-good; failures remain actionable",
+  "D02.2/H05.2 DB: invalid render, write, reload and loaded-revision failure preserve last-good; failures remain actionable",
   options,
   async () => {
     const f = await fixture();
@@ -197,11 +198,18 @@ test(
         assert.equal(state.applied_hash, before.applied_hash);
         assert.ok(state.apply_error);
         assert.equal(state.verified_at, null);
+        assert.equal(await metrics.refreshDatabaseMetrics(f.pool, 900), true);
+        const scrape = await metrics.metrics();
+        assert.match(scrape, /inbound_configuration_state\{state="failed"\} 1/);
+        assert.match(scrape, /inbound_configuration_state\{state="verified"\} 0/);
+        assert.ok(!scrape.includes(state.apply_error));
         assert.equal(await readFile(f.active, "utf8"), before.applied_xml);
         assert.equal(f.loaded(), before.applied_xml);
       }
       assert.equal(await f.publisher().reconcile(), "applied");
       assert.equal((await f.state()).apply_error, null);
+      assert.equal(await metrics.refreshDatabaseMetrics(f.pool, 900), true);
+      assert.match(await metrics.metrics(), /inbound_configuration_state\{state="verified"\} 1/);
     } finally {
       await f.cleanup();
     }

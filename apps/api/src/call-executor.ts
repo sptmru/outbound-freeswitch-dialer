@@ -1,5 +1,10 @@
 import { randomUUID } from "node:crypto";
 import pg from "pg";
+import {
+  recordExecutorPressure,
+  registerExecutorMetrics,
+  startExecutorAcquisition
+} from "./inbound-metrics.js";
 import { withCallAdmission, type CallAdmission } from "./call-admission.js";
 
 export const EXECUTION_LOCK_NAMESPACE = 72_203;
@@ -136,6 +141,7 @@ export type ExecutionResult =
 export class CallExecutor {
   private readonly occupied = new Set<number>();
   private closed = false;
+  private readonly unregisterMetrics = registerExecutorMetrics(() => this.stats);
   private constructor(
     private readonly pool: pg.Pool,
     readonly replica: number
@@ -174,7 +180,23 @@ export class CallExecutor {
   }
   async close() {
     this.closed = true;
-    await this.pool.end();
+    try {
+      await this.pool.end();
+    } finally {
+      this.unregisterMetrics();
+    }
+  }
+
+  private async acquire() {
+    const finish = startExecutorAcquisition();
+    try {
+      const client = await this.pool.connect();
+      finish({ outcome: "acquired" });
+      return client;
+    } catch {
+      finish({ outcome: "failed" });
+      return undefined;
+    }
   }
 
   /** H01 observation lease: the same bounded critical seat and rank-0 call lock
@@ -188,7 +210,7 @@ export class CallExecutor {
   ): Promise<{ status: "inspected"; value: T } | { status: "deferred"; reason: string }> {
     if (this.closed) throw new ExecutionError("executor_closed");
     const seat = 3;
-    if (this.occupied.has(seat)) return { status: "deferred", reason: "executor_saturated" };
+    if (this.occupied.has(seat)) return recordExecutorPressure("executor_saturated");
     this.occupied.add(seat);
     let client: pg.PoolClient | undefined;
     let lost = false,
@@ -202,11 +224,8 @@ export class CallExecutor {
     };
     const timer = setTimeout(() => controller.abort(), 5000);
     try {
-      try {
-        client = await this.pool.connect();
-      } catch {
-        return { status: "deferred", reason: "execution_acquisition_timeout" };
-      }
+      client = await this.acquire();
+      if (!client) return recordExecutorPressure("execution_acquisition_timeout");
       client.on("error", latch);
       client.on("end", latch);
       seatLocked = (
@@ -215,7 +234,7 @@ export class CallExecutor {
           this.replica * 4 + seat
         ])
       ).rows[0].ok;
-      if (!seatLocked) return { status: "deferred", reason: "executor_replica_occupied" };
+      if (!seatLocked) return recordExecutorPressure("executor_replica_occupied");
       // Native received calls may not have any operation yet. Create only the
       // lock identity, never a command/attempt, before taking execution rank.
       await client.query(
@@ -266,7 +285,7 @@ export class CallExecutor {
   ): Promise<ExecutionResult> {
     if (this.closed) throw new ExecutionError("executor_closed");
     const seat = (priority === "critical" ? [3] : [0, 1, 2]).find((n) => !this.occupied.has(n));
-    if (seat === undefined) return { status: "deferred", reason: "executor_saturated" };
+    if (seat === undefined) return recordExecutorPressure("executor_saturated");
     this.occupied.add(seat); // Before any connection acquisition; no per-backlog waiters.
     let client: pg.PoolClient | undefined;
     let lost = false;
@@ -280,11 +299,8 @@ export class CallExecutor {
     };
     const owner = randomUUID();
     try {
-      try {
-        client = await this.pool.connect();
-      } catch {
-        return { status: "deferred", reason: "execution_acquisition_timeout" };
-      }
+      client = await this.acquire();
+      if (!client) return recordExecutorPressure("execution_acquisition_timeout");
       client.on("error", latch);
       client.on("end", latch);
       seatLocked = (
@@ -293,7 +309,7 @@ export class CallExecutor {
           this.replica * 4 + seat
         ])
       ).rows[0].ok;
-      if (!seatLocked) return { status: "deferred", reason: "executor_replica_occupied" };
+      if (!seatLocked) return recordExecutorPressure("executor_replica_occupied");
       const lookup = await client.query(
         `select k.lock_key from call_operations o join call_execution_keys k on k.call_id=o.call_id where o.id=$1`,
         [operationId]

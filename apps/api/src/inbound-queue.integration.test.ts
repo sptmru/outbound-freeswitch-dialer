@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { test } from "node:test";
 import pg from "pg";
 import { databaseConfig, testDatabaseUrl, assertBlocked } from "../../../tests/fixtures/inbound/database.mjs";
+import { __testing as metrics } from "./metrics.js";
 import { runMigrations } from "./db.js";
 import { importIngressRecord } from "./inbound-ingress.js";
 import type { IngressRecord } from "./ingress-journal.js";
@@ -526,3 +527,49 @@ test(
     }
   }
 );
+
+test("H05.1 DB: queue wait, flow and capacity use committed domain state", options, async () => {
+  const f = await fixture();
+  try {
+    const waiting = await f.seed();
+    const exited = await f.seed({ arrivedUs: Date.now() * 1000 - 5_000_000 });
+    await admitInboundQueue(f.pool, waiting.uuid);
+    await admitInboundQueue(f.pool, exited.uuid);
+    await f.pool.query(
+      "update calls set state='fallback',queue_exited_at=arrived_at+interval '2 seconds' where id=$1",
+      [exited.uuid]
+    );
+    await f.pool.query(
+      `insert into call_operations(call_id,idempotency_scope,idempotency_key,request_fingerprint,
+       command_kind,generation,command_uuid,request,state,deadline_at,result,resolved_at,resolution_evidence)
+       values($1,'H05','flow',repeat('a',64),'forward_external',1,gen_random_uuid(),'{"inboundFallback":true}',
+         'succeeded',now()+interval '5 seconds','{"outcome":"connected","secret":"redact-this-fixture"}',now(),'fixture evidence')`,
+      [exited.uuid]
+    );
+    assert.equal(await metrics.refreshDatabaseMetrics(f.pool, 900), true);
+    const scrape = await metrics.metrics();
+    for (const pattern of [
+      /inbound_queue_calls\{state="queued"\} 1/,
+      /inbound_queue_wait_seconds_window\{statistic="samples"\} 1/,
+      /inbound_queue_wait_seconds_window\{statistic="p95"\} 2/,
+      /inbound_flow_outcomes_window\{action="forward_external",outcome="connected"\} 1/,
+      /call_capacity_reserved_units\{resource="queue_waiting"\} 2/
+    ])
+      assert.match(scrape, pattern);
+    assert.ok(!scrape.includes(exited.uuid));
+    assert.ok(!scrape.includes("redact-this-fixture"));
+    const fresh = scrape.match(
+      /^outbound_dialer_inbound_database_last_success_timestamp_seconds (.+)$/m
+    )?.[1];
+    await f.pool.query("alter table call_offers rename to unavailable_offers");
+    assert.equal(await metrics.refreshDatabaseMetrics(f.pool, 900), false);
+    const unavailable = await metrics.metrics();
+    assert.match(unavailable, /^outbound_dialer_database_metrics_up 0$/m);
+    assert.equal(
+      unavailable.match(/^outbound_dialer_inbound_database_last_success_timestamp_seconds (.+)$/m)?.[1],
+      fresh
+    );
+  } finally {
+    await f.cleanup();
+  }
+});

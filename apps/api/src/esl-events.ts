@@ -38,6 +38,7 @@ import {
   setFreeSwitchEventQueueDepth,
   setFreeSwitchEventListenerConnected
 } from "./metrics.js";
+import { freeSwitchEventSubscription, persistenceDiagnostic } from "./esl-listener-state.js";
 import { OrderedRetryQueue } from "./ordered-retry-queue.js";
 import { createEarlyMediaFallbackController } from "./early-media-fallback.js";
 import {
@@ -55,37 +56,6 @@ interface EslFrame {
   body: string;
   headers: Record<string, string>;
 }
-
-const EVENT_NAMES = [
-  "BACKGROUND_JOB",
-  "CHANNEL_CREATE",
-  "CHANNEL_PROGRESS",
-  "CHANNEL_PROGRESS_MEDIA",
-  "CHANNEL_ANSWER",
-  "CHANNEL_BRIDGE",
-  "CHANNEL_PARK",
-  "CHANNEL_HANGUP",
-  "CHANNEL_HANGUP_COMPLETE",
-  "CHANNEL_DESTROY",
-  // FreeSWITCH treats every token after CUSTOM as a custom event subclass.
-  // Keep CUSTOM and its explicit subclasses last so CHANNEL_* names remain
-  // regular event subscriptions.
-  "CUSTOM",
-  "avmd::beep",
-  "amd::result",
-  "sofia::register",
-  "sofia::unregister",
-  "sofia::expire",
-  "outbound_dialer::inbound_captured",
-  "outbound_dialer::inbound_waiting_started",
-  "outbound_dialer::inbound_forward_finished",
-  "outbound_dialer::inbound_fallback_started",
-  "outbound_dialer::inbound_fallback_completed",
-  "outbound_dialer::inbound_fallback_failed",
-  "outbound_dialer::voicemail_playback_started",
-  "outbound_dialer::voicemail_playback_completed",
-  "outbound_dialer::voicemail_playback_failed"
-].join(" ");
 
 const AGENT_SIP_PROFILE = "internal-webrtc";
 const VOICEMAIL_PLAYBACK_EVENT_PREFIX = "outbound_dialer::voicemail_playback_";
@@ -134,12 +104,7 @@ export function startFreeSwitchEventListener(
       recoveryFence.persistenceFailed();
       recordFreeSwitchEventError();
       logger.error(
-        {
-          eventName: frame.headers["event-name"] ?? null,
-          eventSubclass: frame.headers["event-subclass"] ?? null,
-          callId: frame.headers["variable_outbound_dialer_call_id"] ?? null,
-          message: error instanceof Error ? error.message : String(error)
-        },
+        persistenceDiagnostic(frame.headers, error),
         "non-retryable FreeSWITCH event persistence failure"
       );
     },
@@ -148,10 +113,8 @@ export function startFreeSwitchEventListener(
       logger.warn(
         {
           attempt,
-          callId: frame.headers["variable_outbound_dialer_call_id"] ?? null,
+          ...persistenceDiagnostic(frame.headers, error),
           delayMilliseconds,
-          eventName: frame.headers["event-name"] ?? null,
-          message: error instanceof Error ? error.message : String(error),
           queueDepth: persistenceQueue.size
         },
         "retrying FreeSWITCH event persistence after transient failure"
@@ -172,7 +135,7 @@ export function startFreeSwitchEventListener(
         for (const call of result?.calls ?? [])
           if (call.error)
             logger.warn(
-              { callId: call.callId, message: call.error },
+              { callId: call.callId, event: "native_lifecycle_recovery_failed" },
               "native lifecycle recovery deferred after failure"
             );
         await persistenceQueue.waitForIdle();
@@ -236,7 +199,7 @@ export function startFreeSwitchEventListener(
 
         if (stage === "auth_reply") {
           if (frame.headers["reply-text"]?.startsWith("+OK")) {
-            nextSocket.write(`event plain ${EVENT_NAMES}\n\n`);
+            nextSocket.write(`event plain ${freeSwitchEventSubscription}\n\n`);
             stage = "subscribe_reply";
             continue;
           }
@@ -253,7 +216,7 @@ export function startFreeSwitchEventListener(
             stage = "events";
             recoveryFence.subscribed();
             setFreeSwitchEventListenerConnected(true);
-            logger.info({ events: EVENT_NAMES }, "FreeSWITCH event listener subscribed");
+            logger.info({ events: freeSwitchEventSubscription }, "FreeSWITCH event listener subscribed");
             reconciliationTask.request();
             continue;
           }
@@ -2402,7 +2365,7 @@ function getFreeSwitchEventUuid(frame: EslFrame): string | null {
 
 export const __testing = {
   buildCallRecordingPath,
-  eventNames: EVENT_NAMES,
+  eventNames: freeSwitchEventSubscription,
   extractFrames,
   getAttemptedVoicemailDetectionModules,
   isFailedBackgroundJob,
