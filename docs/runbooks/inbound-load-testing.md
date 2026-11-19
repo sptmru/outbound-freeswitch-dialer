@@ -24,6 +24,21 @@ by default. To diagnose SQL contention without physical storage, set
 `INBOUND_PG_STORAGE=tmpfs` explicitly. This keeps the same assertions and timing
 limits. It cannot establish storage performance or restart durability.
 
+For a sustained SIP/RTP run, set `I03_PG_WAL_PARENT` to a writable directory
+on a disk with measured sync latency. For example, on a host where `/var/tmp`
+is on the system disk and Docker volumes are on a separate device:
+
+```bash
+I03_PG_WAL_PARENT=/var/tmp npm run test:load:inbound -- sustained soak
+```
+
+The runner creates and removes a fresh WAL directory and keeps PGDATA on the
+disposable Docker volume. The default puts both on the Docker volume. Both
+modes use `fsync=on` and `synchronous_commit=on`. `pg-storage.txt` records the
+mounts, resolved WAL path and effective settings. `pg-wal-final.txt` records
+PostgreSQL's WAL sync counts and timing before teardown. The results qualify
+the disk configuration and workload recorded by that run.
+
 ## What the commands exercise
 
 | Command             | Workload                                                                                                                                                                                                                                                    | Evidence                                                                                                                                                                            |

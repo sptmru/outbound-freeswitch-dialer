@@ -4,20 +4,20 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 IMAGE="safarov/freeswitch@sha256:b31c743f4c911a19687c61e3214968f2a24f93f9d3d667cc26284192e158ffc6"
 PG_IMAGE="postgres@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73"
-RUN_DIR="$(mktemp -d /tmp/outbound-e02.XXXXXXXX)"
-FS_CONTAINER="outbound-e02-fs-$(basename "$RUN_DIR")"
-PG_CONTAINER="outbound-e02-pg-$(basename "$RUN_DIR")"
-NET_CONTAINER="outbound-e02-net-$(basename "$RUN_DIR")"
 NODE_BIN="$(command -v node)"
 mode=()
 rtp_end=20040
 timeout_seconds=600
 pg_memory=256m
+sustained=false
+wal_dir=""
+wal_parent="${I03_PG_WAL_PARENT:-}"
 case "${1:-}" in
   "") ;;
   --i03-load|--i03-soak|--i03-mixed)
     mode=("$@")
     if [[ "$1" == --i03-soak ]]; then
+      sustained=true
       case "${2:-}" in
         check|history) timeout_seconds=150 ;;
         normal) timeout_seconds=780 ;;
@@ -33,12 +33,27 @@ case "${1:-}" in
       rtp_end=20160
       export H02_RECORDINGS=1
     fi
-    sha256sum "$ROOT_DIR/scripts/i03-sip-rtp.mjs" "$ROOT_DIR/scripts/inbound-load-measurements.mjs" \
-      "$ROOT_DIR/scripts/i03-sip-soak.mjs" "$ROOT_DIR/scripts/i03-soak-worker.mjs" "$ROOT_DIR/scripts/i03-sip-mixed.mjs" \
-      "$ROOT_DIR/scripts/a06-budgets.mjs" "$ROOT_DIR/tests/fixtures/inbound/load-desk.mjs" > "$RUN_DIR/i03-source-sha256.txt"
     ;;
   *) echo "Unknown E02 fixture mode" >&2; exit 2 ;;
 esac
+if [[ -n "$wal_parent" ]]; then
+  if [[ "$sustained" != true ]]; then
+    echo 'I03_PG_WAL_PARENT requires an I03 sustained profile' >&2
+    exit 2
+  fi
+  wal_parent="$(realpath -e -- "$wal_parent")"
+  if [[ ! -d "$wal_parent" || "$wal_parent" == *,* ]]; then
+    echo 'I03_PG_WAL_PARENT must be an existing directory without commas' >&2
+    exit 2
+  fi
+  case "$(stat -f -c %T -- "$wal_parent")" in
+    tmpfs|ramfs) echo 'I03_PG_WAL_PARENT must be on disk-backed storage' >&2; exit 2 ;;
+  esac
+fi
+RUN_DIR="$(mktemp -d /tmp/outbound-e02.XXXXXXXX)"
+FS_CONTAINER="outbound-e02-fs-$(basename "$RUN_DIR")"
+PG_CONTAINER="outbound-e02-pg-$(basename "$RUN_DIR")"
+NET_CONTAINER="outbound-e02-net-$(basename "$RUN_DIR")"
 cleanup() {
   result=$?
   trap - EXIT
@@ -50,14 +65,34 @@ cleanup() {
       kill -TERM "$JOURNAL_PID" 2>/dev/null || true
     fi
   fi
+  if [[ "$sustained" == true ]]; then
+    docker exec "$PG_CONTAINER" psql -X -U postgres -d e02 -c 'select * from pg_stat_wal' \
+      > "$RUN_DIR/pg-wal-final.txt" 2>&1 || true
+  fi
   docker logs "$FS_CONTAINER" > "$RUN_DIR/freeswitch-container.log" 2>&1 || true
   docker logs "$PG_CONTAINER" > "$RUN_DIR/postgres.log" 2>&1 || true
-  if ! docker rm -fv "$FS_CONTAINER" "$PG_CONTAINER" "$NET_CONTAINER" > "$RUN_DIR/container-cleanup.txt" 2>&1; then result=1; fi
+  if [[ -n "$wal_dir" ]]; then
+    if docker rm -fv "$PG_CONTAINER" >> "$RUN_DIR/container-cleanup.txt" 2>&1 ||
+      { existing_pg="$(docker ps -a --filter "name=^/${PG_CONTAINER}$" --format '{{.Names}}')" && [[ -z "$existing_pg" ]]; }; then
+      if ! rm -rf -- "$wal_dir" >> "$RUN_DIR/container-cleanup.txt" 2>&1; then result=1; fi
+    else
+      echo "WAL directory retained at $wal_dir" >> "$RUN_DIR/container-cleanup.txt"
+      result=1
+    fi
+    if ! docker rm -fv "$FS_CONTAINER" "$NET_CONTAINER" >> "$RUN_DIR/container-cleanup.txt" 2>&1; then result=1; fi
+  elif ! docker rm -fv "$FS_CONTAINER" "$PG_CONTAINER" "$NET_CONTAINER" > "$RUN_DIR/container-cleanup.txt" 2>&1; then
+    result=1
+  fi
   echo "E02 artifacts: $RUN_DIR"
   exit "$result"
 }
 trap cleanup EXIT
 cd "$ROOT_DIR"
+if (( ${#mode[@]} )); then
+  sha256sum scripts/i03-sip-rtp.mjs scripts/inbound-load-measurements.mjs \
+    scripts/i03-sip-soak.mjs scripts/i03-soak-worker.mjs scripts/i03-sip-mixed.mjs \
+    scripts/a06-budgets.mjs tests/fixtures/inbound/load-desk.mjs > "$RUN_DIR/i03-source-sha256.txt"
+fi
 "$NODE_BIN" -e 'if (Number(process.versions.node.split(".")[0]) < 22) process.exit(1)'
 npm --workspace @outbound-dialer/shared run build
 node node_modules/typescript/bin/tsc -p apps/api/tsconfig.test.json
@@ -78,15 +113,33 @@ if [[ "${H01_RECOVERY:-0}" == 1 || "${1:-}" == --i03-soak ]]; then
 else
   echo tmpfs > "$RUN_DIR/storage.txt"
 fi
+pg_settings=()
+if [[ "$sustained" == true ]]; then
+  pg_settings=(-c fsync=on -c synchronous_commit=on -c track_wal_io_timing=on)
+fi
+if [[ -n "$wal_parent" ]]; then
+  wal_dir="$(mktemp -d -- "$wal_parent/outbound-i03-wal.XXXXXXXX")"
+  pg_storage+=(--mount "type=bind,src=$wal_dir,dst=/test-wal" -e POSTGRES_INITDB_WALDIR=/test-wal)
+  echo volume-with-wal-bind > "$RUN_DIR/storage.txt"
+fi
 docker run -d --name "$PG_CONTAINER" --network "container:$NET_CONTAINER" --memory "$pg_memory" --pids-limit 128 \
   "${pg_storage[@]}" \
   --mount "type=bind,src=$RUN_DIR/socket,dst=/db-socket" \
   -e POSTGRES_HOST_AUTH_METHOD=trust -e POSTGRES_DB=e02 "$PG_IMAGE" \
-  -c unix_socket_directories=/var/run/postgresql,/db-socket -c listen_addresses= > "$RUN_DIR/pg-id.txt"
+  -c unix_socket_directories=/var/run/postgresql,/db-socket -c listen_addresses= "${pg_settings[@]}" > "$RUN_DIR/pg-id.txt"
 for ((i=0;i<100;i++)); do
   if docker exec "$PG_CONTAINER" sh -c 'test "$(cat /proc/1/comm)" = postgres && pg_isready -h /db-socket -U postgres -d e02' >/dev/null 2>&1; then break; fi
   sleep 0.1
 done
+if [[ "$sustained" == true ]]; then
+  data_dir="$(docker inspect "$PG_CONTAINER" --format '{{range .Mounts}}{{if eq .Destination "/var/lib/postgresql/data"}}{{.Source}}{{end}}{{end}}')"
+  {
+    printf 'PGDATA '; findmnt -fn -T "$data_dir" -o SOURCE,FSTYPE,MAJ:MIN
+    printf 'WAL '; findmnt -fn -T "${wal_dir:-$data_dir}" -o SOURCE,FSTYPE,MAJ:MIN
+    docker exec "$PG_CONTAINER" sh -c 'readlink -f "$PGDATA/pg_wal"'
+    docker exec "$PG_CONTAINER" psql -X -U postgres -d e02 -c 'show fsync; show synchronous_commit; show wal_sync_method; show track_wal_io_timing;'
+  } > "$RUN_DIR/pg-storage.txt"
+fi
 docker run -d --name "$FS_CONTAINER" --network "container:$NET_CONTAINER" --memory 768m --pids-limit 256 \
   --security-opt no-new-privileges --cap-drop ALL \
   --mount "type=bind,src=$RUN_DIR,dst=/a02" --mount "type=bind,src=$RUN_DIR,dst=$RUN_DIR" --mount "type=bind,src=$ROOT_DIR/infra/freeswitch,dst=/repo,readonly" \
