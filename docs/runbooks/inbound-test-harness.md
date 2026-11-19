@@ -25,6 +25,10 @@ volume storage. Neither proves target disk durability or production acceptance.
 | `npm run test:prototype:rebridge`                                                | Same Linux/FS/PG dependencies                                                                 | FS + DB: A05 actual UDP SIP/RTP, known tones, decoded recordings, process/ESL faults; not browser/provider                                                                                        |
 | `npm run test:prototype:budgets`                                                 | Linux Docker, pinned PG image                                                                 | DB saturation with delayed **simulated ESL** and representative SQL control lanes; not product API load, SIP/RTP load or I03 acceptance                                                           |
 
+Run `INBOUND_PG_STORAGE=tmpfs npm run test:inbound:browser:isolated` for the
+[I01 Chromium and PostgreSQL matrix](../inbound-browser-acceptance.md). It uses
+the product API routes, an isolated database, and simulated telephony.
+
 `test:load:inbound` is reserved for I03 and remains unimplemented. Existing
 `test:load:desk` and `test:load:sip-rtp` require their own configured test environment;
 they are not substitutes for inbound/transfer workloads. No new A07 command accepts

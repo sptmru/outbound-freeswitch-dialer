@@ -54,7 +54,8 @@
     "test:recovery:freeswitch": "H01_RECOVERY=1 bash scripts/test-e02-acceptance.sh",
     "test:recording:transfers:freeswitch": "H02_RECORDINGS=1 G02_TRANSFERS=1 bash scripts/test-e02-acceptance.sh",
     "test:recording:forwarding:freeswitch": "H02_RECORDINGS=1 F04_FORWARDING=1 bash scripts/test-d04-queue.sh",
-    "test:history:browser": "playwright test --config playwright.h03.config.ts"
+    "test:history:browser": "playwright test --config playwright.h03.config.ts",
+    "test:inbound:browser:isolated": "bash scripts/test-inbound-db.sh --browser"
   },
   "engines": {
     "node": ">=22.13.0"

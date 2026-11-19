@@ -3,6 +3,12 @@ set -euo pipefail
 # Creates its own database. No .env, published ports, application DB or external calls.
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
+suite=db
+case "${1:-}" in
+  "") ;;
+  --browser) suite=browser; shift ;;
+  *) echo 'Usage: test-inbound-db.sh [--browser [Playwright arguments]]' >&2; exit 1 ;;
+esac
 PG_STORAGE="${INBOUND_PG_STORAGE:-volume}"
 storage_args=()
 case "$PG_STORAGE" in
@@ -48,5 +54,17 @@ docker inspect "$PG_CONTAINER" --format '{{.HostConfig.NetworkMode}} {{json .Hos
 export TEST_DATABASE_URL="postgresql://postgres@localhost/inbound_test?host=$RUN_DIR/socket"
 unset DATABASE_URL
 export INBOUND_TEST_ARTIFACTS="$RUN_DIR"
-timeout 600 npm run test:inbound:db > "$RUN_DIR/result.txt" 2>&1 || { cat "$RUN_DIR/result.txt"; exit 1; }
+if [[ "$suite" == browser ]]; then
+  export I01_BROWSER_ARTIFACTS="$RUN_DIR/browser"
+  node --version > "$RUN_DIR/node-version.txt"
+  sha256sum playwright.i01.config.ts tests/e2e/inbound-integrated.spec.mts tests/fixtures/i01/* > "$RUN_DIR/browser-source-sha256.txt"
+  timeout 600 bash -c '
+    set -e
+    npm --workspace @outbound-dialer/shared run build
+    npm exec --workspace @outbound-dialer/api -- tsc -p tsconfig.test.json
+    exec npm exec -- playwright test --config playwright.i01.config.ts "$@"
+  ' bash "$@" > "$RUN_DIR/result.txt" 2>&1 || { cat "$RUN_DIR/result.txt"; exit 1; }
+else
+  timeout 600 npm run test:inbound:db > "$RUN_DIR/result.txt" 2>&1 || { cat "$RUN_DIR/result.txt"; exit 1; }
+fi
 cat "$RUN_DIR/result.txt"

@@ -229,3 +229,5 @@ DB/API/FreeSWITCH checks from the mandatory representative human listening check
 H02 remains open while that check is unverified.
 
 H03 [inbound/transfer reporting](inbound-history-reporting.md) adds the native history/read models, filters, participant attribution and CSV/ZIP metadata. Local DB/API/browser and regression results are recorded with issue H03 #40; target enablement remains I05.
+
+[I01 integrated Chromium acceptance](inbound-browser-acceptance.md) exercises product API routes and migrated PostgreSQL with simulated phone and media effects. The runbook lists the supplemental browser and isolated FreeSWITCH regression commands.

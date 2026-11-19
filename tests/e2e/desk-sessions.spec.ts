@@ -7,6 +7,7 @@ const user = {
   role: "admin",
   isActive: true
 };
+const unavailable = { allowed: false, reason: "endpoint_unavailable" };
 
 test("D01.1 B: Desk enter/register/leave uses one fenced session; non-Desk route has no heartbeat (simulated SIP/API)", async ({
   page
@@ -49,7 +50,13 @@ test("D01.1 B: Desk enter/register/leave uses one fenced session; non-Desk route
       offer: null,
       transfer: null,
       autoNextIntent: null,
-      actions: {}
+      actions: {
+        manualStart: unavailable,
+        autoNext: unavailable,
+        accept: unavailable,
+        ignore: unavailable,
+        transfer: unavailable
+      }
     }
   };
   await page.addInitScript(() => {

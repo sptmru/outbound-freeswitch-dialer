@@ -7,7 +7,8 @@ export default defineConfig({
     "**/agent-desk-offers.spec.ts",
     "**/agent-desk-transfers.spec.ts",
     "**/inbound-admin.spec.ts",
-    "**/inbound-history.spec.ts"
+    "**/inbound-history.spec.ts",
+    "**/inbound-integrated.spec.mts"
   ],
   fullyParallel: true,
   forbidOnly: Boolean(process.env.CI),

@@ -449,12 +449,13 @@ export function registerDashboardRoutes(
   manualOutbound?: { wakeExecutor(operationId: string): Promise<void> },
   nativeControls?: { wakeExecutor(operationId: string): Promise<void> },
   nativeSupervisor?: { wakeExecutor(operationId: string): Promise<void> },
-  inboundConnection?: { wakeExecutor(operationId: string): Promise<void> }
+  inboundConnection?: { wakeExecutor(operationId: string): Promise<void> },
+  transferConnection?: { wakeExecutor(operationId: string): Promise<void> }
 ): void {
   registerInboundAdminRoutes(app, config, pool);
   registerDeskSessionRoutes(app, config, pool);
   registerServiceInviteRoutes(app, config, pool);
-  registerCallOfferRoutes(app, config, pool, inboundConnection);
+  registerCallOfferRoutes(app, config, pool, inboundConnection, transferConnection);
   registerTransferRoutes(app, config, pool);
   async function coordinatedSupervisor(
     request: FastifyRequest,
