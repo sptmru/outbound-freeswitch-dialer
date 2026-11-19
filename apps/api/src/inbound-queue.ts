@@ -498,7 +498,10 @@ export function createInboundQueueCoordinator(
   command: IngressCommand,
   executor: CallExecutor,
   esl: { host: string; port: number; password: string },
-  checkpoint?: (point: "before-insert" | "after-commit", uuid?: string) => Promise<void>
+  checkpoint?: (
+    point: "before-insert" | "after-commit" | "after-admission-commit",
+    uuid?: string
+  ) => Promise<void>
 ) {
   const driver = createCommandDriver({
     ...esl,
@@ -553,6 +556,7 @@ export function createInboundQueueCoordinator(
           if (ended) return;
           const op = await admitInboundQueue(pool, row.uuid);
           if (!op || ["failed", "canceled"].includes(op.state)) return;
+          await checkpoint?.("after-admission-commit", row.uuid);
           await ingressRequest(socket, "/admit", { uuid: row.uuid, operationId: op.id });
           await executor.run(op.id, "normal", driver);
           await cleanupIfNeeded(pool, row.uuid);

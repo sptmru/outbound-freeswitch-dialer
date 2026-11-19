@@ -6,6 +6,21 @@ import { join } from "node:path";
 import { endpoint, until, decodeUlaw, assertTone } from "./a05-media.mjs";
 import { InboundConfigurationPublisher } from "../apps/api/dist-test/freeswitch/inbound-config.js";
 import { inboundFallbackExecutor, advanceInboundFallback } from "../apps/api/dist-test/inbound-fallback.js";
+import { withCallAdmission } from "../apps/api/dist-test/call-admission.js";
+
+async function putForwardingLimit(pool, forwarding) {
+  const client = await pool.connect();
+  try {
+    return await withCallAdmission(client, {}, async ({ capacity }) => {
+      const limits = await capacity.limits();
+      await capacity.configure({ ...limits, forwarding });
+      return limits.forwarding;
+    });
+  } finally {
+    client.release();
+  }
+}
+
 export async function runForwarding({
   f,
   queue,
@@ -165,6 +180,79 @@ export async function runForwarding({
         assertTone(phone.received.slice(-1600), 440);
         await recording?.mark("connected external conversation", [440, 880]);
         if (scenario === "answered") {
+          const previousLimit = await putForwardingLimit(pool, 1);
+          try {
+            const excess = await startCall("+14155550299");
+            await recover();
+            await until(
+              async () => (await call(excess.row.uuid))?.pstn_answered_at,
+              "second caller admitted"
+            );
+            const externalAudioStart = phone.received.length;
+            await until(
+              () =>
+                checked(async () => {
+                  await worker.tick(excess.row.uuid);
+                  return Boolean((await call(excess.row.uuid)).ended_at);
+                }),
+              "over-capacity forwarding takes failure continuation",
+              25000
+            );
+            const excessResult = await excess.result;
+            await until(
+              () =>
+                checked(async () => {
+                  await worker.tick(excess.row.uuid);
+                  return !(
+                    await pool.query(
+                      "select 1 from call_operations where call_id=$1 and resolved_at is null",
+                      [excess.row.uuid]
+                    )
+                  ).rowCount;
+                }),
+              "fixed terminal forwarding job reconciled"
+            );
+            await recover();
+            await clean(excess.row.uuid);
+            const refused = (
+              await pool.query(
+                `select o.result->>'reason' as reason,
+                  (select count(*)::int from call_execution_attempts where operation_id=o.id) as attempts,
+                  (select count(*)::int from call_participants where call_id=o.call_id and role='external') as external_legs
+                 from call_operations o
+                 where o.call_id=$1 and o.command_kind='forward_external'`,
+                [excess.row.uuid]
+              )
+            ).rows;
+            assert.deepEqual(refused, [{ reason: "capacity_exceeded", attempts: 0, external_legs: 0 }]);
+            assert.equal(new Set(phone.invites.map((i) => i.id)).size, 1);
+            assert.equal(await command(`uuid_exists ${op.request.externalUuid}`), "true");
+            assert.equal((await call(c.row.uuid)).ended_at, null);
+            assert.ok(phone.received.length > externalAudioStart + 2400);
+            const sourceTone = assertTone(phone.received.slice(-2400), 440);
+            const destinationTone = assertTone(
+              c.control
+                .packets()
+                .slice(-15)
+                .flatMap((p) => p.payload.map(decodeUlaw)),
+              880
+            );
+            const fallbackTone = assertTone(
+              excessResult.rtp.slice(-15).flatMap((p) => p.payload.map(decodeUlaw)),
+              660
+            );
+            await pass("I02.4 forwarding capacity refusal preserves existing two-way media", {
+              admittedCall: c.row.uuid,
+              excessCall: excess.row.uuid,
+              capacity: 1,
+              refusal: refused[0],
+              sourceTone,
+              destinationTone,
+              fallbackTone
+            });
+          } finally {
+            await putForwardingLimit(pool, previousLimit);
+          }
           await until(
             () => Date.now() > Number(op.request.flowDeadlineEpoch) * 1000 + 1000,
             "past original flow guard",

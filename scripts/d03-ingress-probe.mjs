@@ -228,9 +228,11 @@ try {
     }),
     /alarm checkpoint/
   );
+  await ingressMetrics.refreshIngressJournalMetrics(socket);
   const exposed = await ingressMetrics.metrics();
-  assert.match(exposed, /outbound_dialer_ingress_journal_used 2/);
-  assert.match(exposed, /outbound_dialer_ingress_journal_capacity 2/);
+  assert.match(exposed, /^outbound_dialer_ingress_journal_up 1$/m);
+  assert.match(exposed, /^outbound_dialer_ingress_journal_used 2$/m);
+  assert.match(exposed, /^outbound_dialer_ingress_journal_capacity 2$/m);
   await pass("D03.3 full unacknowledged journal refuses without evicting evidence", {
     ...fullRefusal,
     alarm

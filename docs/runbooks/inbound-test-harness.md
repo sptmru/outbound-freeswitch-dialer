@@ -29,6 +29,9 @@ Run `INBOUND_PG_STORAGE=tmpfs npm run test:inbound:browser:isolated` for the
 [I01 Chromium and PostgreSQL matrix](../inbound-browser-acceptance.md). It uses
 the product API routes, an isolated database, and simulated telephony.
 
+Run `npm run test:inbound:freeswitch` for the [I02 pinned FreeSWITCH matrix](../inbound-freeswitch-acceptance.md).
+It aggregates real local SIP/RTP, Chromium WebRTC and durable recovery probes.
+
 `test:load:inbound` is reserved for I03 and remains unimplemented. Existing
 `test:load:desk` and `test:load:sip-rtp` require their own configured test environment;
 they are not substitutes for inbound/transfer workloads. No new A07 command accepts

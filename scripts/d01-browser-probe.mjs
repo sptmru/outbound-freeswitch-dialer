@@ -357,6 +357,7 @@ try {
     user: "postgres",
     connectionTimeoutMillis: 1000
   });
+  report.database = (await f.pool.query("select version()")).rows[0].version;
   const user = (await f.pool.query("select * from users where id=$1", [f.userId])).rows[0];
   const service = new DeskSessions(f.pool, config);
   app = Fastify();
@@ -430,6 +431,12 @@ try {
       oldSnapshot = await oldPage.evaluate(() => window.d01.deskSession);
       oldSip = (await f.pool.query("select * from agent_desk_sessions where id=$1", [oldSnapshot.id]))
         .rows[0];
+      assert.ok(oldSip.verified_endpoint);
+      assert.equal(
+        (await f.pool.query("select state from agent_call_slots where agent_id=$1", [f.agentId])).rows[0]
+          .state,
+        "free"
+      );
       await oldPage.route("**/api/agent/desk-sessions/*", (route) => route.abort());
     }
     const context = await browser.newContext({ ignoreHTTPSErrors: true, permissions: ["microphone"] });
@@ -473,6 +480,25 @@ try {
     }
     const initial = await page.evaluate(() => window.d01.deskSession);
     if (serviceMatrix) {
+      assert.notEqual(initial.id, oldSnapshot.id);
+      assert.ok(BigInt(initial.bindingGeneration) > BigInt(oldSnapshot.bindingGeneration));
+      const current = (
+        await f.pool.query("select * from agent_desk_sessions where agent_id=$1 and revoked_at is null", [
+          f.agentId
+        ])
+      ).rows;
+      assert.equal(current.length, 1);
+      assert.equal(current[0].id, initial.id);
+      assert.notEqual(current[0].verified_endpoint, oldSip.verified_endpoint);
+      assert.ok(
+        (await f.pool.query("select revoked_at from agent_desk_sessions where id=$1", [oldSnapshot.id]))
+          .rows[0].revoked_at
+      );
+      await pass(`${direction}: idle takeover replaces verified controller with a new generation`, {
+        obsoleteSession: oldSnapshot.id,
+        currentSession: initial.id,
+        generation: initial.bindingGeneration
+      });
       // Fault injection: retain a revoked generation's directory as if obsolete
       // cleanup were delayed. Both distinct endpoint identities really REGISTER.
       const secret = decryptSecret(config, oldSip.sip_secret_encrypted);
@@ -552,11 +578,24 @@ try {
       );
       await pass(`${direction}: unauthorized INVITE delivery rejected before media`, { rejected });
     }
-    for (const [uuid, destination] of [
-      [seeded.agentUuid, contact],
-      [seeded.customerUuid, target],
-      ...(seeded.sourceUuid ? [[seeded.sourceUuid, seeded.sourceTarget]] : [])
-    ]) {
+    const endpoints = [[seeded.customerUuid, target]];
+    if (seeded.sourceUuid) endpoints.push([seeded.sourceUuid, seeded.sourceTarget]);
+    endpoints.push([seeded.agentUuid, contact]);
+    for (const [uuid, destination] of endpoints) {
+      if (serviceMatrix && seeded.sourceUuid && uuid === seeded.agentUuid) {
+        const start = customer.received.length;
+        assert.match(await command(`uuid_bridge ${seeded.customerUuid} ${seeded.sourceUuid}`), /^\+OK/);
+        await until(
+          () => customer.received.length >= start + 4800 && transferSource.received.length >= 4800,
+          "live decoded source and customer media before browser rebridge"
+        );
+        await pass("transfer: source and customer exchange decoded media before recipient INVITE", {
+          sourceUuid: seeded.sourceUuid,
+          customerUuid: seeded.customerUuid,
+          sourceTone: assertTone(transferSource.received.slice(-2400), 440),
+          customerTone: assertTone(customer.received.slice(-2400), 660)
+        });
+      }
       let committed, release, unblock, fulfilled, finish;
       if (serviceMatrix && uuid === seeded.agentUuid) {
         committed = new Promise((resolve) => {
@@ -625,9 +664,29 @@ try {
         throw error;
       });
     }
-    await command(`uuid_bridge ${seeded.agentUuid} ${seeded.customerUuid}`);
+    assert.match(await command(`uuid_bridge ${seeded.customerUuid} ${seeded.agentUuid}`), /^\+OK/);
     await page.waitForFunction(() => window.d01?.callState === "active");
     const baseline = await media(page);
+    if (serviceMatrix && seeded.sourceUuid) {
+      const bridges = observer.events
+        .filter(
+          (event) => event["event-name"] === "CHANNEL_BRIDGE" && event["unique-id"] === seeded.customerUuid
+        )
+        .map((event) => ({
+          peer: event["other-leg-unique-id"],
+          at: event["event-date-timestamp"]
+        }));
+      assert.deepEqual(
+        bridges.map(({ peer }) => peer),
+        [seeded.sourceUuid, seeded.agentUuid],
+        "same live customer leg moves from source to browser recipient"
+      );
+      await pass("transfer: native rebridge preserves customer UUID and reaches the browser", {
+        customerUuid: seeded.customerUuid,
+        bridges,
+        media: baseline
+      });
+    }
     if (serviceMatrix)
       await pass(`${direction}: held authorization response produces one media session`, {
         peers: baseline.browser.peers,

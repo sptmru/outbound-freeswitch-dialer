@@ -1,14 +1,23 @@
 // Real replacement worker process. Explicit disposable configuration over IPC;
 // no application environment or production bootstrap is read.
 import pg from "pg";
+import { once } from "node:events";
 import { CallExecutor } from "../apps/api/dist-test/call-executor.js";
 import { lifecycleRecoveryRuntime } from "../apps/api/dist-test/lifecycle-recovery-runtime.js";
 import { startFreeSwitchEventListener } from "../apps/api/dist-test/esl-events.js";
 import { createInboundQueueCoordinator } from "../apps/api/dist-test/inbound-queue.js";
 import { sendFreeSwitchApiCommand } from "../apps/api/dist-test/esl.js";
+process.once("disconnect", () => process.exit(1));
 process.once("message", async (input) => {
   const pool = new pg.Pool({ ...input.database, max: 3 });
   const executor = await CallExecutor.create(input.executor, 1);
+  if (input.waitForResume) {
+    await pool.query("select 1");
+    const resume = once(process, "message");
+    process.send({ type: "prepared", pid: process.pid });
+    const [call] = await resume;
+    input.callId = call.callId;
+  }
   if (input.checkpoint) {
     const command = async (text) =>
       (
@@ -90,5 +99,4 @@ process.once("message", async (input) => {
     await pool.end();
     process.exit(0);
   });
-  process.once("disconnect", () => process.exit(1));
 });

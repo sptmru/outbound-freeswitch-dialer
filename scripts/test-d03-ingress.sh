@@ -34,7 +34,7 @@ node node_modules/typescript/bin/tsc -p apps/api/tsconfig.test.json
 mkdir "$RUN_DIR/socket"
 chmod 777 "$RUN_DIR/socket"
 git rev-parse HEAD > "$RUN_DIR/base-revision.txt"
-sha256sum apps/api/src/freeswitch/*.ts infra/freeswitch/entrypoint.sh infra/freeswitch/templates/inbound/* apps/api/src/ingress-*.ts apps/api/src/inbound-ingress*.ts \
+sha256sum apps/api/src/freeswitch/*.ts infra/freeswitch/entrypoint.sh infra/freeswitch/templates/inbound/* apps/api/src/ingress-*.ts apps/api/src/inbound-ingress*.ts apps/api/src/metrics.ts \
   apps/api/db/migrations/*.sql scripts/d03-ingress-probe.mjs scripts/d03-import-worker.mjs tests/fixtures/inbound/cleanup.mjs "$0" > "$RUN_DIR/source-sha256.txt"
 docker image inspect "$IMAGE" "$PG_IMAGE" --format '{{.Id}} {{json .RepoDigests}}' > "$RUN_DIR/images.txt"
 docker run -d --name "$NET_CONTAINER" --network none --memory 32m --pids-limit 8 \

@@ -101,7 +101,7 @@ try {
     assert.equal(result.rtp.length, 0);
     assert.ok(result.messages.find((m) => m.first.startsWith(`SIP/2.0 ${spec.status}`)).ms < 3000);
     await pass(`D02.1 ${spec.name}`, {
-      status: result.final,
+      sipStatus: result.final,
       messages: result.messages.map((m) => ({ first: m.first, ms: m.ms }))
     });
   }

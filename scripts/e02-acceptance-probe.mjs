@@ -598,6 +598,51 @@ try {
       "E02.4 three actual rejected SIP connects, fixed backoff, retained queue permit, unchanged deadline and bounded fallback",
       { attempts, invites: phone.invites.length - rejectedBefore }
     );
+
+    let canceledInvites = 0;
+    phone.setBehavior({ answerGate: new Promise(() => {}), onCancel: () => canceledInvites++ });
+    const unanswered = await startCall();
+    const unansweredAccept = await accept(unanswered);
+    const unansweredRoot = (
+      await f.pool.query("select * from call_operations where id=$1", [unansweredAccept.result.operationId])
+    ).rows[0];
+    const originalQueue = await call(unanswered.row.uuid);
+    const beforeTimeout = phone.invites.length;
+    const began = performance.now();
+    await runtime.wakeExecutor(unansweredRoot.id);
+    const settled = await until(
+      async () => {
+        await runtime.reconcile();
+        const attempt = (
+          await f.pool.query("select * from inbound_connection_attempts where operation_id=$1", [
+            unansweredRoot.id
+          ])
+        ).rows[0];
+        return attempt.settled_at ? attempt : null;
+      },
+      "unanswered inbound connection settles after fixed SIP cleanup",
+      15000
+    );
+    const elapsedMs = performance.now() - began;
+    assert.ok(canceledInvites > 0, "FreeSWITCH canceled the ringing SIP recipient");
+    assert.equal(new Set(phone.invites.slice(beforeTimeout).map((invite) => invite.id)).size, 1);
+    assert.equal(await command(`uuid_exists ${unansweredRoot.request.agentUuid}`), "false");
+    const afterTimeout = await call(unanswered.row.uuid);
+    assert.equal(afterTimeout.agent_connected_at, null);
+    assert.equal(afterTimeout.ended_at, null);
+    assert.equal(afterTimeout.queue_deadline_at.getTime(), originalQueue.queue_deadline_at.getTime());
+    unanswered.control.hangup();
+    await unanswered.result;
+    await clean(unanswered.row.uuid);
+    await recover();
+    await pass("I02.1 unanswered inbound agent leg times out without changing the caller deadline", {
+      callId: unanswered.row.uuid,
+      operationId: unansweredRoot.id,
+      agentUuid: unansweredRoot.request.agentUuid,
+      canceledInvites,
+      settled: settled.outcome,
+      elapsedMs
+    });
     phone.setBehavior();
   }
   if (process.env.H01_RECOVERY === "1") {

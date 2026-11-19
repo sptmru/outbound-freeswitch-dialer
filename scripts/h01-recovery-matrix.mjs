@@ -43,6 +43,7 @@ export async function proveLifecycleRecovery({
     messages = [],
     forwarding;
   const history = [];
+  const children = new Set();
   async function end(c) {
     try {
       c.control.hangup();
@@ -54,26 +55,40 @@ export async function proveLifecycleRecovery({
   async function wait(type, ms = 10000) {
     return until(() => messages.find((x) => x.type === type), `H01 worker ${type}`, ms);
   }
-  async function start(extra = {}) {
-    assert.equal(child, undefined);
-    messages = [];
-    child = fork(new URL("./h01-recovery-worker.mjs", import.meta.url), [], {
+  function launch(extra) {
+    const worker = fork(new URL("./h01-recovery-worker.mjs", import.meta.url), [], {
       env: { PATH: process.env.PATH },
       stdio: ["ignore", log.fd, log.fd, "ipc"]
     });
-    child.on("message", (m) => {
-      messages.push(m);
+    const inbox = [];
+    children.add(worker);
+    worker.once("exit", () => children.delete(worker));
+    worker.on("message", (m) => {
+      inbox.push(m);
       history.push(m);
     });
-    child.send({ database, executor: limited.database, socket, esl, forwarding, ...extra });
+    worker.send({ database, executor: limited.database, socket, esl, forwarding, ...extra });
+    return { worker, inbox };
+  }
+  function adopt(worker) {
+    assert.equal(child, undefined);
+    child = worker.worker;
+    messages = worker.inbox;
+  }
+  async function start(extra = {}) {
+    adopt(launch(extra));
     await wait(extra.checkpoint ? "checkpoint" : "subscribed");
     if (!extra.checkpoint && !extra.stopBefore) await wait("pass", 15000);
   }
+  async function killWorker(worker) {
+    if (worker.exitCode !== null || worker.signalCode !== null) return;
+    const exit = once(worker, "exit");
+    worker.kill("SIGKILL");
+    await exit;
+  }
   async function stop() {
     if (!child) return;
-    const exit = once(child, "exit");
-    child.kill("SIGKILL");
-    await exit;
+    await killWorker(child);
     child = undefined;
   }
   const call = async (id) => (await f.pool.query("select * from calls where id=$1", [id])).rows[0];
@@ -102,6 +117,20 @@ export async function proveLifecycleRecovery({
     assert.deepEqual(
       [after.arrived_at, after.queue_deadline_at, after.campaign_id],
       [before.arrived_at, before.queue_deadline_at, before.campaign_id]
+    );
+  }
+  async function waitForTerminalAck(id) {
+    await until(
+      async () =>
+        (
+          await f.pool.query(
+            `select 1 from inbound_ingress_evidence
+             where ingress_id=$1 and terminal_at is not null and acknowledged_sequence=evidence_sequence`,
+            [id]
+          )
+        ).rowCount === 1,
+      "exact terminal journal sequence acknowledged",
+      5000
     );
   }
   async function freshDesk() {
@@ -138,8 +167,95 @@ export async function proveLifecycleRecovery({
     return { c, a, before };
   }
   try {
-    // Actual process death before first INSERT and after COMMIT before ACK.
-    for (const checkpoint of ["before-insert", "after-commit"]) {
+    // Kill the actual worker at an import or admission boundary before its ACK.
+    for (const checkpoint of ["before-insert", "after-commit", "after-admission-commit"]) {
+      // The native poll is only ten 100 ms iterations. Start both OS processes
+      // before SIP arrival so this case measures the outage, not module loading.
+      const faulted = launch({ checkpoint, waitForResume: true });
+      const replacement = launch({ waitForResume: true });
+      await until(
+        () => [faulted, replacement].every((w) => w.inbox.some((m) => m.type === "prepared")),
+        "crash worker and replacement initialized"
+      );
+      const live = await startCall();
+      adopt(faulted);
+      child.send({ callId: live.row.uuid });
+      await wait("checkpoint");
+      await stop();
+      const before = await call(live.row.uuid);
+      assert.equal(
+        before?.state,
+        { "before-insert": undefined, "after-commit": "received", "after-admission-commit": "queued" }[
+          checkpoint
+        ]
+      );
+      assert.equal(await command(`uuid_exists ${live.row.uuid}`), "true");
+      const waitingOperation = async () =>
+        (
+          await f.pool.query(
+            `select o.id, o.command_uuid, o.state from inbound_queue_admissions a
+             join call_operations o on o.id=a.operation_id where a.call_id=$1`,
+            [live.row.uuid]
+          )
+        ).rows[0];
+      const beforeAdmissionAck = await waitingOperation();
+      if (checkpoint === "after-admission-commit") {
+        assert.equal(beforeAdmissionAck?.state, "pending");
+        assert.equal(before.pstn_answered_at, null);
+      } else assert.equal(beforeAdmissionAck, undefined);
+      const beforeRecovery = performance.now();
+      adopt(replacement);
+      child.send({});
+      await wait("subscribed");
+      await until(() => waiting(live.row.uuid), "live ingress reaches confirmed waiting after worker loss");
+      const recoveryMs = performance.now() - beforeRecovery;
+      const operation = await waitingOperation();
+      if (beforeAdmissionAck) {
+        assert.equal(operation.id, beforeAdmissionAck.id);
+        assert.equal(operation.command_uuid, beforeAdmissionAck.command_uuid);
+      }
+      const active = await call(live.row.uuid);
+      if (before) await sameDeadline(live.row.uuid, before);
+      await until(() => live.control.packets().length >= 15, "actual RTP on recovered caller");
+      const result = await end(live);
+      assert.equal(result.final, 200);
+      const waitingTone = assertTone(
+        result.rtp.slice(-15).flatMap((p) => p.payload.map(decodeUlaw)),
+        440
+      );
+      await clean(live.row.uuid);
+      await waitForTerminalAck(live.row.uuid);
+      await stop();
+      const replay = (
+        await f.pool.query(
+          `select
+            (extract(epoch from c.arrived_at)*1000000)::bigint::text as arrived,
+            (select count(*)::int from call_operations o where o.call_id=c.id and o.request->>'inboundWaiting'='true') as operations,
+            (select count(*)::int from call_events e where e.call_id=c.id and e.event_type='inbound_waiting_started') as waiting_events,
+            (select count(*)::int from call_execution_attempts where operation_id=$2) as command_attempts
+          from calls c where c.id=$1`,
+          [live.row.uuid, operation.id]
+        )
+      ).rows[0];
+      assert.deepEqual(replay, {
+        arrived: String(live.row.arrivedUs),
+        operations: 1,
+        waiting_events: 1,
+        command_attempts: 1
+      });
+      await pass(`I02.2 live caller recovers after ${checkpoint} worker loss`, {
+        callId: live.row.uuid,
+        sipCallId: result.callId,
+        sip: result.messages.map(({ first, ms }) => ({ first, ms })),
+        checkpoint,
+        queueDeadline: active.queue_deadline_at,
+        operation,
+        recoveryMs,
+        waitingTone,
+        ...replay
+      });
+
+      if (checkpoint === "after-admission-commit") continue;
       const c = await startCall();
       await start({ checkpoint, callId: c.row.uuid });
       await stop();
@@ -155,16 +271,28 @@ export async function proveLifecycleRecovery({
         15000
       );
       await clean(c.row.uuid);
+      await waitForTerminalAck(c.row.uuid);
       const stamps = (
         await f.pool.query(
-          "select (extract(epoch from arrived_at)*1000000)::bigint::text as arrived from calls where id=$1",
+          `select (extract(epoch from arrived_at)*1000000)::bigint::text as arrived,
+             pstn_answered_at, agent_connected_at, fallback_started_at,
+             (select count(*)::int from call_operations where call_id=$1) as operations,
+             (select count(*)::int from call_offers where call_id=$1) as offers
+           from calls where id=$1`,
           [c.row.uuid]
         )
       ).rows[0];
-      assert.equal(stamps.arrived, String(c.row.arrivedUs));
+      assert.deepEqual(stamps, {
+        arrived: String(c.row.arrivedUs),
+        pstn_answered_at: null,
+        agent_connected_at: null,
+        fallback_started_at: null,
+        operations: 0,
+        offers: 0
+      });
       await pass(
         `H01.3 composed ${checkpoint} worker SIGKILL, journal process restart and ended-during-outage replay`,
-        { callId: c.row.uuid, checkpoint, history: [...history] }
+        { callId: c.row.uuid, checkpoint, terminalOnly: stamps, history: [...history] }
       );
       await stop();
     }
@@ -191,7 +319,8 @@ export async function proveLifecycleRecovery({
     } finally {
       process.kill(journalPid, "SIGCONT");
     }
-    const capacity = JSON.parse(await ingressRequest(socket, "/status")).capacity;
+    const { capacity, unacknowledged } = JSON.parse(await ingressRequest(socket, "/status"));
+    assert.equal(unacknowledged, 0, "journal exhaustion starts without pending receipts from prior cases");
     const captured = [];
     for (let n = 0; n < capacity; n++) {
       const c = await startCall();
@@ -799,6 +928,7 @@ export async function proveLifecycleRecovery({
         JSON.stringify((await f.pool.query(`select * from ${table}`)).rows, null, 2)
       );
     await stop();
+    await Promise.all([...children].map(killWorker));
     await log.close();
   }
 }
