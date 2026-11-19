@@ -5,6 +5,7 @@ import { once } from "node:events";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import pg from "pg";
+import { createControlPressure } from "./i03-control-pressure.mjs";
 import { render } from "./a05-rebridge-probe.mjs";
 import { relay } from "./a05-executor.mjs";
 import { openEsl } from "./a02-ingress-probe.mjs";
@@ -346,6 +347,8 @@ try {
   executors.push(first);
   const held = [];
   const backlog = [];
+  const pressure =
+    process.env.I03_SLOW_ESL === "1" ? await createControlPressure(pool, database, directory) : undefined;
   try {
     for (let n = 0; n < 6; n++) {
       const relaySocket = await relay();
@@ -354,6 +357,8 @@ try {
       held.push({ relaySocket, op, executing });
       await until(() => relaySocket.queued, "saturated normal seat");
     }
+    const validPressure = pressure?.run();
+    validPressure?.catch(() => {});
     const hangup = await enqueue("hangup", `uuid_kill ${liveUuid} NORMAL_CLEARING`, live.callId, liveUuid);
     const began = performance.now();
     const ended = await executor.run(hangup.id, "critical", driver());
@@ -380,7 +385,21 @@ try {
       executors.every((e) => e.stats.running === 3),
       "normal executors remain held at overload"
     );
+    if (validPressure) {
+      const backed = await validPressure;
+      assert.ok(
+        executors.every((e) => e.stats.running === 3),
+        "normal ESL remains held through the control wave"
+      );
+      assert.equal(backed.status, "passed", backed.result);
+      await pass("I03.3 protected SQL budget during six held real ESL command transports", {
+        ...backed,
+        hangupMs,
+        executorStats: executors.map((e) => e.stats)
+      });
+    }
   } finally {
+    await pressure?.close();
     for (const h of held) await h.relaySocket.close();
     await Promise.all(held.map((h) => h.executing));
     for (const h of held) {

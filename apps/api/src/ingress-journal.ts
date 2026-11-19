@@ -22,6 +22,11 @@ export interface IngressRecord extends IngressCapture {
   terminalUs: number | null;
   terminalReason: string | null;
 }
+export interface IngressJournalEntry {
+  record: IngressRecord;
+  acknowledgedSequence: number;
+  admissionId: string | null;
+}
 export function validateIngress(row: IngressCapture) {
   for (const id of [row.uuid, row.numberId, row.queueId, row.campaignId]) assert.match(id, ingressUuid);
   assert.ok(Number.isSafeInteger(row.arrivedUs) && row.arrivedUs > 0);
@@ -96,6 +101,16 @@ export class IngressJournal {
       .prepare("SELECT record FROM evidence ORDER BY rowid")
       .all()
       .map((r) => JSON.parse(String(r.record)));
+  }
+  reconciliationEntries(): IngressJournalEntry[] {
+    return this.db
+      .prepare("SELECT record,ack,admission FROM evidence ORDER BY rowid")
+      .all()
+      .map((row) => ({
+        record: JSON.parse(String(row.record)),
+        acknowledgedSequence: Number(row.ack),
+        admissionId: row.admission === null ? null : String(row.admission)
+      }));
   }
   private transaction<T>(fn: () => T): T {
     this.db.exec("BEGIN IMMEDIATE");

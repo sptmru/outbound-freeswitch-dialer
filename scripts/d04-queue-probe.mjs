@@ -189,7 +189,15 @@ try {
   }, "journal startup");
   cursor = observer.eventFrames.length;
   timer = setInterval(() => void drain(), 10);
-  const coordinator = createInboundQueueCoordinator(f.pool, socket, command, limited.executor, esl);
+  let withheldPark;
+  const coordinator = createInboundQueueCoordinator(
+    f.pool,
+    socket,
+    (text) =>
+      withheldPark && text === `uuid_getvar ${withheldPark} current_application` ? "lua" : command(text),
+    limited.executor,
+    esl
+  );
   const recover = async () => {
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
@@ -252,6 +260,31 @@ try {
   ).rows[0];
   for (const caller of ["+14155550199", "+14155550200", "anonymous"]) {
     const c = await startCall(caller);
+    if (caller === "+14155550199") {
+      withheldPark = c.row.uuid;
+      await recover();
+      const operation = (
+        await f.pool.query(
+          `select o.id,o.state,exists(select 1 from call_execution_attempts t where t.operation_id=o.id) as sent
+           from call_operations o join inbound_queue_admissions a on a.operation_id=o.id where a.call_id=$1`,
+          [withheldPark]
+        )
+      ).rows[0];
+      assert.equal(operation.state, "pending");
+      assert.equal(operation.sent, false);
+      assert.equal((await call(withheldPark)).pstn_answered_at, null);
+      withheldPark = undefined;
+      await until(
+        () => command(`uuid_getvar ${c.row.uuid} current_application`).then((app) => app === "park"),
+        "initial FreeSWITCH park"
+      );
+      await recover();
+      assert.equal(
+        (await f.pool.query("select state from call_operations where id=$1", [operation.id])).rows[0].state,
+        "succeeded"
+      );
+      await pass("D04 waiting transfer starts only after native park", { uuid: c.row.uuid, operation });
+    }
     await recover();
     await until(
       () => checked(async () => Boolean((await call(c.row.uuid)).pstn_answered_at)),

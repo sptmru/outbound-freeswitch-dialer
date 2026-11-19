@@ -1,5 +1,6 @@
 import { persistTransferEvent, persistTransferJob } from "./transfer-connection.js";
 import { RecoveryPersistenceFence } from "./recovery-persistence-fence.js";
+import { commandReceiptAckIntervalMs } from "./command-recovery.js";
 import { persistRecoveryCleanupJob } from "./recovery-cleanup.js";
 import type { RecoveryBarrier } from "./inbound-recovery.js";
 import { persistInboundForwardingEvent } from "./inbound-forwarding.js";
@@ -77,6 +78,7 @@ export function startFreeSwitchEventListener(
   logger: Logger,
   nativeRecovery?: {
     reconcile(barrier: RecoveryBarrier): Promise<{ calls: Array<{ callId: string; error?: string }> }>;
+    acknowledgeReceipts?(): Promise<Array<{ callId: string; error: unknown }>>;
   }
 ): () => void {
   configureFreeSwitchEventQueueMetrics(config.FREESWITCH_ESL_EVENT_QUEUE_MAX_SIZE);
@@ -152,6 +154,19 @@ export function startFreeSwitchEventListener(
     config.FREESWITCH_ESL_RECONCILE_INTERVAL_SECONDS * 1000
   );
   reconciliationTimer.unref?.();
+
+  const receiptTask = new CoalescedTask(
+    async () => {
+      const failures = await nativeRecovery?.acknowledgeReceipts?.();
+      for (const { callId, error } of failures ?? [])
+        logger.warn({ callId, error }, "FreeSWITCH command journal ACK deferred");
+    },
+    (error) => logger.error(error, "failed to query pending FreeSWITCH command journal ACKs")
+  );
+  const receiptTimer = nativeRecovery?.acknowledgeReceipts
+    ? setInterval(() => receiptTask.request(), commandReceiptAckIntervalMs)
+    : undefined;
+  receiptTimer?.unref();
 
   const scheduleReconnect = () => {
     if (stopped || reconnectTimer) {
@@ -309,6 +324,8 @@ export function startFreeSwitchEventListener(
     setFreeSwitchEventListenerConnected(false);
     clearInterval(reconciliationTimer);
     reconciliationTask.stop();
+    clearInterval(receiptTimer);
+    receiptTask.stop();
     if (reconnectTimer) {
       clearTimeout(reconnectTimer);
       reconnectTimer = null;

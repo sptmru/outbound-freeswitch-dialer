@@ -7,5 +7,15 @@ case "${1:-}" in
   sip-rtp)
     if [[ $# != 1 ]]; then echo 'sip-rtp takes no arguments' >&2; exit 2; fi
     exec bash "$ROOT_DIR/scripts/test-e02-acceptance.sh" --i03-load ;;
-  *) echo 'Usage: npm run test:load:inbound -- control {smoke|reference} | sip-rtp' >&2; exit 2 ;;
+
+  slow-esl)
+    if [[ $# != 1 ]]; then echo 'slow-esl takes no arguments' >&2; exit 2; fi
+    I03_SLOW_ESL=1 exec bash "$ROOT_DIR/scripts/test-c03-executor.sh" ;;
+  mixed)
+    if [[ $# != 1 ]]; then echo 'mixed takes no arguments' >&2; exit 2; fi
+    exec bash "$ROOT_DIR/scripts/test-e02-acceptance.sh" --i03-mixed ;;
+  sustained)
+    if [[ $# != 2 ]]; then echo 'Expected sustained {check|history|normal|soak}' >&2; exit 2; fi
+    exec bash "$ROOT_DIR/scripts/test-e02-acceptance.sh" --i03-soak "$2" ;;
+  *) echo 'Usage: npm run test:load:inbound -- control {smoke|reference} | sip-rtp | slow-esl | mixed | sustained {check|history|normal|soak}' >&2; exit 2 ;;
 esac

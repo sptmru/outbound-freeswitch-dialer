@@ -75,6 +75,7 @@ export async function endpoint({
   password,
   source,
   frequency,
+  maxRtpPort = 20040,
   rejectCode,
   answerGate,
   onInvite,
@@ -115,7 +116,7 @@ export async function endpoint({
     const ip = body.match(/c=IN IP4 ([^\r\n]+)/)?.[1];
     const port = Number(body.match(/m=audio (\d+)/)?.[1]);
     assert.equal(ip, "127.0.0.1");
-    assert.ok(port >= 20000 && port <= 20040);
+    assert.ok(port >= 20000 && port <= maxRtpPort);
     target = { address: ip, port };
   }
   function request(method, uri, from, to, id, cseq, extra = [], body = "") {

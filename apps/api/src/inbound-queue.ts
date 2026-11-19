@@ -532,47 +532,80 @@ export function createInboundQueueCoordinator(
       return waitingResolution(op, db);
     }
   });
-  return {
-    async reconcile() {
-      const status = await reconcileIngress(pool, socket, command, checkpoint, {
-        async beforeImport(row) {
-          if (row.terminalUs !== null)
-            await persistInboundQueueEvent(
-              pool,
-              {
-                variable_outbound_dialer_ingress_uuid: row.uuid,
-                "unique-id": row.uuid,
-                "event-name": "INGRESS_ABSENT",
-                "event-date-timestamp": String(row.terminalUs)
-              },
-              "",
-              true
-            );
-        },
-        async afterImport(row) {
-          if (row.terminalUs !== null) return;
-          const ended = (await pool.query("select ended_at from calls where id=$1", [row.uuid])).rows[0]
-            ?.ended_at;
-          if (ended) return;
-          const op = await admitInboundQueue(pool, row.uuid);
-          if (!op || ["failed", "canceled"].includes(op.state)) return;
-          await checkpoint?.("after-admission-commit", row.uuid);
-          await ingressRequest(socket, "/admit", { uuid: row.uuid, operationId: op.id });
-          await executor.run(op.id, "normal", driver);
-          await cleanupIfNeeded(pool, row.uuid);
-        }
-      });
-      // Journal terminal ACK/recycling cannot strand a late fixed job. Inspect
-      // bounded SQL work even when its receipt is no longer in the local spool.
-      const unresolved = (
-        await pool.query(`select id,call_id from call_operations
+  async function waitingApplication(callId: string) {
+    return (await command(`uuid_getvar ${callId} current_application`)).trim();
+  }
+  async function waitForIngressPark(callId: string) {
+    // The ingress Lua polls the committed receipt every 100 ms. FreeSWITCH
+    // reports the nested capture event as the current application during polling.
+    // Probe outside SQL/executor locks and leave longer delays to recovery.
+    const until = performance.now() + 125;
+    let application = await waitingApplication(callId);
+    while ((application === "lua" || application === "event") && performance.now() < until) {
+      await delay(20);
+      application = await waitingApplication(callId);
+    }
+    return application === "park";
+  }
+  async function reconcileReceipts() {
+    return reconcileIngress(pool, socket, command, checkpoint, {
+      async beforeImport(row) {
+        if (row.terminalUs !== null)
+          await persistInboundQueueEvent(
+            pool,
+            {
+              variable_outbound_dialer_ingress_uuid: row.uuid,
+              "unique-id": row.uuid,
+              "event-name": "INGRESS_ABSENT",
+              "event-date-timestamp": String(row.terminalUs)
+            },
+            "",
+            true
+          );
+      },
+      async afterImport(row) {
+        if (row.terminalUs !== null) return;
+        const ended = (await pool.query("select ended_at from calls where id=$1", [row.uuid])).rows[0]
+          ?.ended_at;
+        if (ended) return;
+        const op = await admitInboundQueue(pool, row.uuid);
+        if (!op || ["failed", "canceled"].includes(op.state)) return;
+        await checkpoint?.("after-admission-commit", row.uuid);
+        await ingressRequest(socket, "/admit", { uuid: row.uuid, operationId: op.id });
+      }
+    });
+  }
+  async function reconcileWaiting(waitForPark = false) {
+    // SQL work survives journal recycling. A slow sender can be reconciled
+    // independently of newer captures and their admission receipts.
+    const unresolved = (
+      await pool.query<{
+        id: string;
+        call_id: string;
+        state: string;
+      }>(`select id,call_id,state from call_operations
         where request->>'inboundWaiting'='true' and resolved_at is null
         order by deadline_at,id limit 8`)
-      ).rows;
-      for (const op of unresolved) {
-        await executor.run(op.id, "normal", driver);
-        await cleanupIfNeeded(pool, op.call_id);
+    ).rows;
+    for (const op of unresolved) {
+      // The Lua poll has to consume the receipt before C03 starts transfer.
+      // Transferring out of its sleep can run the original route's 503 action.
+      if (op.state === "pending") {
+        const parked = waitForPark
+          ? await waitForIngressPark(op.call_id)
+          : (await waitingApplication(op.call_id)) === "park";
+        if (!parked) continue;
       }
+      await executor.run(op.id, "normal", driver);
+      await cleanupIfNeeded(pool, op.call_id);
+    }
+  }
+  return {
+    reconcileReceipts,
+    reconcileWaiting,
+    async reconcile() {
+      const status = await reconcileReceipts();
+      await reconcileWaiting(true);
       return status;
     }
   };

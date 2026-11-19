@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { mkdtemp, rm } from "node:fs/promises";
+import { join } from "node:path";
 import { test } from "node:test";
 import pg from "pg";
 import { databaseConfig, testDatabaseUrl, assertBlocked } from "../../../tests/fixtures/inbound/database.mjs";
 import { runMigrations } from "./db.js";
-import { importIngressRecord } from "./inbound-ingress.js";
+import { importIngressRecord, reconcileIngress } from "./inbound-ingress.js";
+import { readIngressRecords, startIngressAgent } from "./ingress-agent.js";
 import type { IngressRecord } from "./ingress-journal.js";
 const options = { skip: !process.env.TEST_DATABASE_URL, timeout: 60000 };
 async function fixture() {
@@ -54,6 +57,107 @@ async function fixture() {
     }
   };
 }
+test(
+  "D03 skips 128-slot terminal history and repairs either incomplete ACK checkpoint",
+  options,
+  async () => {
+    const f = await fixture();
+    const directory = await mkdtemp("/tmp/inbound-reconcile-");
+    const socket = join(directory, "agent.sock");
+    let disappeared: string | undefined;
+    const command = async (text: string) => {
+      if (disappeared && text === `uuid_exists ${disappeared}`) return "false";
+      assert.equal(text, "show channels as json");
+      return "{}";
+    };
+    const agent = await startIngressAgent(socket, command, 128, 0);
+    try {
+      const incomplete: string[] = [];
+      for (let i = 0; i < 128; i++) {
+        const uuid = randomUUID();
+        agent.journal.capture({
+          uuid,
+          arrivedUs: Date.now() * 1000,
+          did: f.row.did,
+          numberId: f.row.numberId,
+          routeRevision: f.row.routeRevision,
+          queueId: f.row.queueId,
+          queueRevision: f.row.queueRevision,
+          campaignId: f.row.campaignId,
+          timeoutMs: f.row.timeoutMs,
+          routeData: f.row.routeData,
+          callingNumber: f.row.callingNumber
+        });
+        const row = agent.journal.terminal(uuid);
+        await importIngressRecord(f.pool, row);
+        // Simulate one crash before the SQLite ACK and one after it but before SQL records it.
+        if (i > 0) agent.journal.acknowledge(uuid, row.sequence);
+        if (i > 1) {
+          await f.pool.query(
+            "update inbound_ingress_evidence set acknowledged_sequence=$2 where ingress_id=$1",
+            [uuid, row.sequence]
+          );
+        } else incomplete.push(uuid);
+      }
+      const replayed: string[] = [];
+      const hooks = {
+        async beforeImport(row: IngressRecord) {
+          replayed.push(row.uuid);
+        },
+        async afterImport() {}
+      };
+      const legacy = await readIngressRecords(socket);
+      assert.equal(legacy.length, 128);
+      assert.ok(legacy.every((row) => row.sequence === 2 && row.terminalUs !== null));
+      await reconcileIngress(f.pool, socket, command, undefined, hooks);
+      assert.deepEqual(replayed, incomplete);
+      assert.equal(agent.journal.status().unacknowledged, 0);
+      assert.equal(
+        (await f.pool.query("select 1 from inbound_ingress_evidence where acknowledged_sequence<>2"))
+          .rowCount,
+        0
+      );
+      replayed.length = 0;
+      await reconcileIngress(f.pool, socket, command, undefined, hooks);
+      assert.deepEqual(replayed, []);
+
+      await f.pool.query("insert into call_legs(call_id,type) values($1,'agent')", [incomplete[0]]);
+      await reconcileIngress(f.pool, socket, command, undefined, hooks);
+      assert.deepEqual(replayed, [incomplete[0]], "An exact ACK cannot bypass pending D04 cleanup");
+      await f.pool.query("update call_legs set ended_at=clock_timestamp() where call_id=$1", [incomplete[0]]);
+
+      const {
+        journalId: _journalId,
+        sequence: _sequence,
+        terminalUs: _terminalUs,
+        terminalReason: _terminalReason,
+        ...capture
+      } = f.row;
+      const live = agent.journal.capture({ ...capture, arrivedUs: Date.now() * 1000 });
+      await importIngressRecord(f.pool, live);
+      agent.journal.acknowledge(live.uuid, live.sequence);
+      await f.pool.query("update inbound_ingress_evidence set acknowledged_sequence=$2 where ingress_id=$1", [
+        live.uuid,
+        live.sequence
+      ]);
+      // The initial live ACK never hides a missing hangup hook.
+      disappeared = live.uuid;
+      await reconcileIngress(f.pool, socket, command);
+      const evidence = (
+        await f.pool.query(
+          "select terminal_at,acknowledged_sequence from inbound_ingress_evidence where ingress_id=$1",
+          [live.uuid]
+        )
+      ).rows[0];
+      assert.ok(evidence.terminal_at);
+      assert.equal(evidence.acknowledged_sequence, "2");
+    } finally {
+      await agent.close();
+      await rm(directory, { recursive: true, force: true });
+      await f.cleanup();
+    }
+  }
+);
 test(
   "D03.1 DB: before-INSERT and after-COMMIT faults replay one identity, original microsecond arrival/route/deadline",
   options,

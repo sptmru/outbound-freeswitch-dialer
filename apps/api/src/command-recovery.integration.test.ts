@@ -6,7 +6,7 @@ import { limitedExecutor } from "../../../tests/fixtures/inbound/supervisor.mjs"
 import { databaseConfig, testDatabaseUrl } from "../../../tests/fixtures/inbound/database.mjs";
 import { withCallAdmission } from "./call-admission.js";
 import { enqueueCallCommand } from "./call-executor.js";
-import { recoverCommandReceipts } from "./command-recovery.js";
+import { acknowledgeResolvedCommandReceipts, recoverCommandReceipts } from "./command-recovery.js";
 const options = { skip: !process.env.TEST_DATABASE_URL, timeout: 30000 };
 async function fixture(armed = true, protocol: string | null = "fs-fenced-v1") {
   const config = databaseConfig(testDatabaseUrl());
@@ -35,6 +35,42 @@ async function fixture(armed = true, protocol: string | null = "fs-fenced-v1") {
     }
   };
 }
+
+test("H01 ACK retries committed native receipts without an ESL observation ticket", options, async () => {
+  const f = await fixture();
+  try {
+    const { command_uuid: job } = (await f.snapshot()).call_operations[0];
+    const commands: string[] = [];
+    let response = "-ERR journal unavailable";
+    const command = async (cmd: string) => {
+      if (cmd === "global_getvar conf_dir") return "/test";
+      commands.push(cmd);
+      return response;
+    };
+    const pending = async () =>
+      (await f.pool.query("select operation_id from call_command_receipt_acks")).rows;
+    const ack = () => acknowledgeResolvedCommandReceipts(f.pool, f.executor, command);
+    assert.deepEqual(await ack(), []);
+    assert.deepEqual(commands, []);
+    await f.pool.query(
+      "update call_operations set state='failed',resolved_at=clock_timestamp(),resolution_evidence='fixture old work complete' where id=$1",
+      [f.c.operationId]
+    );
+    assert.equal((await ack())[0]?.callId, f.c.callId);
+    assert.deepEqual(await pending(), []);
+    response = "+OK";
+    assert.deepEqual(await ack(), []);
+    assert.deepEqual(await pending(), [{ operation_id: f.c.operationId }]);
+    assert.deepEqual(await ack(), []);
+    assert.deepEqual(
+      commands,
+      Array(2).fill(`lua /test/scripts/outbound-command.lua ack ${f.boot} ${job} ${f.c.operationId}`)
+    );
+  } finally {
+    await f.cleanup();
+  }
+});
+
 for (const state of ["revoked", "obsolete", "unarmed"])
   test(`H01 sender fence ${state} resolves old work without manufacturing success`, options, async () => {
     const f = await fixture(state !== "unarmed");

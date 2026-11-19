@@ -55,7 +55,12 @@ successful `BACKGROUND_JOB` events. Action-specific resolvers require the fixed
 job plus exact leg/effect or producer completion. The live channel profile (`Unique-ID`, `Caller-Channel-Answered-Time`)
 and exact bridge-peer probes can recover effects missed during an ESL outage, without changing call identity.
 
-SQL resolution precedes receipt ACK. Revocation tombstones survive ACK for the
+SQL resolution precedes receipt ACK. A bounded worker drains committed receipts
+independently of the ESL event persistence ticket. It takes the same call
+execution lock before sending the exact switch incarnation, command UUID and
+operation ID, and records the ACK in PostgreSQL after FreeSWITCH confirms it.
+Unresolved receipt inspection and media recovery still require a current ESL
+observation. Revocation tombstones survive ACK for the
 whole switch incarnation, because original bytes can arrive afterwards. They
 are recycled after incarnation change. The journal is bounded to 256 receipts
 and 2048 SQLite pages; exhaustion or storage errors fail closed and retain

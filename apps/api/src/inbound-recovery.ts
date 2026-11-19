@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { withCallAdmission } from "./call-admission.js";
 import { isCoordinatedCall, reconcileCoordinatedCallCleanup } from "./call-cleanup.js";
 import { enqueueCallCommand, type CallExecutor } from "./call-executor.js";
-import { recoverCommandReceipts } from "./command-recovery.js";
+import { acknowledgeResolvedCommandReceipts, recoverCommandReceipts } from "./command-recovery.js";
 import { expireInboundOffers } from "./call-offer-expiry.js";
 import { ingressUuid } from "./ingress-journal.js";
 
@@ -189,6 +189,7 @@ export function createLifecycleRecovery(
   let cursor: string | null = null;
   let running = false;
   return {
+    acknowledgeReceipts: () => acknowledgeResolvedCommandReceipts(pool, executor, command),
     async reconcile(barrier: RecoveryBarrier) {
       if (running) return { status: "coalesced" as const, calls: [] };
       running = true;

@@ -3,12 +3,23 @@ import type pg from "pg";
 import { CoalescedTask } from "./coalesced-task.js";
 import type { AppConfig } from "./config.js";
 import { sendFreeSwitchApiCommand } from "./esl.js";
-import { ingressRequest, readIngressRecords, type IngressCommand } from "./ingress-agent.js";
+import { ingressRequest, readIngressReconciliationEntries, type IngressCommand } from "./ingress-agent.js";
 import { captureFromDump, validateIngress, ingressUuid, type IngressRecord } from "./ingress-journal.js";
 import { recordIngressImportResult } from "./metrics.js";
+import { AdmissionDiscoveryChanged } from "./call-admission.js";
 
 const timestamp = (parameter: number) =>
   `('epoch'::timestamptz + ($${parameter}::bigint/1000000)*interval '1 second' + ($${parameter}::bigint%1000000)*interval '1 microsecond')`;
+interface IngressCheckpoint {
+  ingress_id: string;
+  journal_id: string;
+  evidence_sequence: string;
+  imported_sequence: string;
+  acknowledged_sequence: string;
+  terminal_us: string | null;
+  operation_id: string | null;
+  terminal_cleanup_pending: boolean;
+}
 export function ingressSnapshot(row: IngressRecord) {
   return {
     numberId: row.numberId,
@@ -141,9 +152,73 @@ async function runIngressReconciliation(
   queue?: { beforeImport(row: IngressRecord): Promise<void>; afterImport(row: IngressRecord): Promise<void> }
 ) {
   // Begin with the independent journal, including entries with no calls row.
-  for (let row of (await readIngressRecords(socket)).sort(
-    (a, b) => Number(b.terminalUs !== null) - Number(a.terminalUs !== null)
+  const entries = await readIngressReconciliationEntries(socket);
+  const captured = new Set(entries.map(({ record }) => record.uuid));
+  const acknowledged = entries.filter(
+    ({ record, acknowledgedSequence }) => record.sequence === acknowledgedSequence
+  );
+  const checkpoints = new Map<string, IngressCheckpoint>();
+  if (acknowledged.length) {
+    const { rows } = await pool.query<IngressCheckpoint>(
+      `
+      select e.ingress_id,e.journal_id,e.evidence_sequence,e.imported_sequence,e.acknowledged_sequence,
+        extract(epoch from e.terminal_at)*1000000 as terminal_us,a.operation_id,
+        e.terminal_at is not null and (
+          exists (select 1 from call_legs l where l.call_id=e.call_id and l.ended_at is null)
+          or exists (select 1 from agent_call_slots s where s.call_id=e.call_id and s.state<>'free')
+          or exists (select 1 from call_capacity_reservations r where r.call_id=e.call_id and r.state<>'released')
+        ) as terminal_cleanup_pending
+      from inbound_ingress_evidence e
+      left join inbound_queue_admissions a on a.call_id=e.call_id
+      where e.ingress_id=any($1::uuid[])`,
+      [acknowledged.map(({ record }) => record.uuid)]
+    );
+    for (const checkpoint of rows) checkpoints.set(checkpoint.ingress_id, checkpoint);
+  }
+  const settled = (entry: (typeof entries)[number]) => {
+    const { record, acknowledgedSequence, admissionId } = entry;
+    if (record.sequence !== acknowledgedSequence) return false;
+    const checkpoint = checkpoints.get(record.uuid);
+    // Retention may purge SQL only after the exact terminal ACK. Treat recycled history like
+    // the missing-row replay guard in importIngressRecord.
+    if (!checkpoint) return record.terminalUs !== null;
+    const sequence = String(record.sequence);
+    return (
+      checkpoint.journal_id === record.journalId &&
+      checkpoint.evidence_sequence === sequence &&
+      checkpoint.imported_sequence === sequence &&
+      checkpoint.acknowledged_sequence === sequence &&
+      (record.terminalUs !== null
+        ? checkpoint.terminal_us !== null &&
+          Number(checkpoint.terminal_us) === record.terminalUs &&
+          (!queue || !checkpoint.terminal_cleanup_pending)
+        : checkpoint.terminal_us === null &&
+          (!queue || (admissionId !== null && checkpoint.operation_id === admissionId)))
+    );
+  };
+
+  // Check new captures before probing previously admitted live channels. Terminal updates
+  // still go through their original reducer and take priority over any stale live copy.
+  const recoveredLive: IngressRecord[] = [];
+  let deferredTerminal: AdmissionDiscoveryChanged | undefined;
+  for (const entry of entries.sort(
+    (a, b) => Number(b.record.terminalUs !== null) - Number(a.record.terminalUs !== null)
   )) {
+    const row = entry.record;
+    if (settled(entry)) {
+      if (row.terminalUs === null) recoveredLive.push(row);
+      continue;
+    }
+    try {
+      await reconcileRow(row);
+    } catch (error) {
+      if (row.terminalUs === null || !(error instanceof AdmissionDiscoveryChanged)) throw error;
+      // An ESL transition can change the terminal call's lock set. Keep that
+      // receipt pending while processing independent new captures in this batch.
+      deferredTerminal ??= error;
+    }
+  }
+  async function reconcileRow(row: IngressRecord) {
     if (row.terminalUs === null) {
       const exists = (await command(`uuid_exists ${row.uuid}`)).trim();
       assert.ok(exists === "true" || exists === "false", "Unknown FS discovery response");
@@ -179,7 +254,7 @@ async function runIngressReconciliation(
       assert.ok(result === "pending" || result === "settled", "Unknown journal receipt state");
       return result === "pending";
     });
-    if (!imported) continue;
+    if (!imported) return;
     await queue?.afterImport(row);
     // A delayed live ACK cannot acknowledge a newer terminal sequence (journal CAS).
     await ingressRequest(socket, "/ack", { uuid: row.uuid, sequence: String(row.sequence) });
@@ -194,8 +269,22 @@ async function runIngressReconciliation(
   const discovery = JSON.parse(await command("show channels as json"));
   assert.ok(Array.isArray(discovery.rows ?? []));
   assert.ok((discovery.rows?.length ?? 0) <= 200, "FS channel discovery exceeded hard maximum");
+  const live = new Set((discovery.rows ?? []).map((channel: { uuid?: string }) => channel.uuid));
+  for (const row of recoveredLive) {
+    if (live.has(row.uuid)) continue;
+    const exists = (await command(`uuid_exists ${row.uuid}`)).trim();
+    assert.ok(exists === "true" || exists === "false", "Unknown FS discovery response");
+    if (exists === "false") {
+      await reconcileRow(JSON.parse(await ingressRequest(socket, "/terminal", { uuid: row.uuid })));
+    }
+  }
   for (const channel of discovery.rows ?? []) {
-    if (!ingressUuid.test(channel.uuid ?? "")) continue;
+    if (
+      channel.direction === "outbound" ||
+      !ingressUuid.test(channel.uuid ?? "") ||
+      captured.has(channel.uuid)
+    )
+      continue;
     let dump;
     try {
       dump = await command(`uuid_dump ${channel.uuid}`);
@@ -208,6 +297,7 @@ async function runIngressReconciliation(
     // old channel cannot manufacture a new durability receipt during recovery.
     await ingressRequest(socket, "/discover", { uuid: channel.uuid });
   }
+  if (deferredTerminal) throw deferredTerminal;
   return JSON.parse(await ingressRequest(socket, "/status"));
 }
 export async function reconcileIngress(...args: Parameters<typeof runIngressReconciliation>) {

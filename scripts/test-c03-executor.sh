@@ -29,7 +29,9 @@ cd "$ROOT_DIR"
 npm --workspace @outbound-dialer/shared run build
 node node_modules/typescript/bin/tsc -p apps/api/tsconfig.test.json
 "$NODE_BIN" "$ROOT_DIR/scripts/c03-executor-probe.mjs" render "$RUN_DIR"
-sha256sum "$ROOT_DIR"/scripts/c03-*.mjs "$ROOT_DIR"/scripts/a0{4,5}-*.mjs "$0" \
+sha256sum "$ROOT_DIR"/scripts/c03-*.mjs "$ROOT_DIR"/scripts/i03-control-pressure*.mjs \
+  "$ROOT_DIR"/scripts/inbound-load-measurements.mjs "$ROOT_DIR"/scripts/a06-budgets.mjs \
+  "$ROOT_DIR"/scripts/a0{4,5}-*.mjs "$0" \
   "$ROOT_DIR"/apps/api/src/call-executor*.ts "$ROOT_DIR"/apps/api/src/call-command-transport*.ts \
   "$ROOT_DIR"/apps/api/src/call-admission.ts "$ROOT_DIR"/apps/api/db/migrations/*.sql \
   "$ROOT_DIR/tests/fixtures/inbound/executor-worker.mjs" \

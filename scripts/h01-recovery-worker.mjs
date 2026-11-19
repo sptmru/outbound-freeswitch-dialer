@@ -84,6 +84,7 @@ process.once("message", async (input) => {
     pool,
     logger,
     {
+      acknowledgeReceipts: recovery.acknowledgeReceipts,
       async reconcile(barrier) {
         const result = await recovery.reconcile(barrier);
         for (const call of result.calls)

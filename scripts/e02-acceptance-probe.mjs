@@ -1,3 +1,5 @@
+import { runSipRtpMixed } from "./i03-sip-mixed.mjs";
+import { prefillSoakHistory, runSipRtpSoak } from "./i03-sip-soak.mjs";
 import { runSipRtpLoad } from "./i03-sip-rtp.mjs";
 import { proveTransferExecution, proveOutboundTransferExecution } from "./g02-transfer-execution.mjs";
 import { proveQuiescentRecovery } from "./h01-quiescent-recovery.mjs";
@@ -35,6 +37,8 @@ import {
 import { reconcileCoordinatedCallCleanup } from "../apps/api/dist-test/call-cleanup.js";
 const directory = process.argv[2];
 const i03 = process.argv[3] === "--i03-load";
+const mixed = process.argv[3] === "--i03-mixed";
+const soak = process.argv[3] === "--i03-soak" ? process.argv[4] : undefined;
 assert.match(directory ?? "", /^\/tmp\/outbound-e02\.[A-Za-z0-9]+$/);
 const socket = join(directory, "agent.sock");
 const config = {
@@ -46,15 +50,15 @@ const config = {
   FREESWITCH_ESL_PASSWORD: "a02-disposable-only",
   FREESWITCH_GENERATED_CONFIG_DIR: join(directory, "generated"),
   FREESWITCH_INBOUND_TRUSTED_CIDRS: "127.0.0.2/32",
-  FREESWITCH_INBOUND_PRE_ADMISSION_LIMIT: 2,
-  FREESWITCH_TRUNK_CHANNEL_LIMIT: 4,
+  FREESWITCH_INBOUND_PRE_ADMISSION_LIMIT: soak || mixed ? 8 : 2,
+  FREESWITCH_TRUNK_CHANNEL_LIMIT: soak || mixed ? 40 : 4,
   FREESWITCH_INBOUND_WAIT_SECONDS: 3
 };
 const esl = {
   host: "127.0.0.1",
   port: 8021,
   password: config.FREESWITCH_ESL_PASSWORD,
-  fenced: process.env.H01_RECOVERY === "1"
+  fenced: Boolean(soak) || process.env.H01_RECOVERY === "1"
 };
 const report = {
   date: new Date().toISOString(),
@@ -67,6 +71,12 @@ const report = {
 const save = () => writeFile(join(directory, "report.json"), JSON.stringify(report, null, 2));
 const command = async (text) => {
   const body = (await sendFreeSwitchApiCommand(config, text)).body.trim();
+  if (soak) {
+    report.commandCount = (report.commandCount ?? 0) + 1;
+    // The sustained report keeps per-call evidence and FreeSWITCH logs live on disk.
+    // Repeated native discovery replies can exceed the size of a JSON string.
+    if (report.commands.length === 32) report.commands.shift();
+  }
   report.commands.push({ text, body });
   return body;
 };
@@ -85,6 +95,7 @@ let f,
   eventError,
   draining = false,
   cursor = 0,
+  consumedFrames = 0,
   transferRuntime;
 const log = await open(join(directory, "agent.log"), "a");
 let inflight;
@@ -111,8 +122,21 @@ async function drain() {
   } catch (e) {
     eventError = e;
   } finally {
+    if (soak && cursor >= 512) {
+      consumedFrames += cursor;
+      observer.eventFrames.splice(0, cursor);
+      observer.events.splice(0, cursor);
+      cursor = 0;
+    }
     draining = false;
   }
+}
+function recoveryTicket() {
+  const isCurrent = () =>
+    observer.connected && !eventError && !draining && cursor === observer.eventFrames.length;
+  if (!isCurrent()) return null;
+  const revision = consumedFrames + cursor;
+  return () => isCurrent() && revision === consumedFrames + cursor;
 }
 async function checked(fn) {
   if (eventError) throw eventError;
@@ -195,16 +219,19 @@ try {
   report.database = (await f.pool.query("select version()")).rows[0].version;
   const queue = (await f.pool.query("select id from inbound_queues limit 1")).rows[0].id;
   await f.pool.query("update inbound_queues set queue_timeout_ms=18000 where id=$1", [queue]);
-  await f.pool.query(
-    "insert into inbound_numbers(normalized_did,label,queue_id,enabled) values('+12025550100','E02',$1,true)",
+  const {
+    rows: [number]
+  } = await f.pool.query(
+    "insert into inbound_numbers(normalized_did,label,queue_id,enabled) values('+12025550100','E02',$1,true) returning id",
     [queue]
   );
   assert.equal(await new InboundConfigurationPublisher(f.pool, config).reconcile(), "applied");
+  if (soak === "history") await prefillSoakHistory(f, directory, queue, number.id);
   agent = fork(new URL("../apps/api/dist-test/ingress-agent.js", import.meta.url), [], {
     env: {
       FREESWITCH_INGRESS_ENABLED: "true",
       FREESWITCH_INGRESS_SOCKET: socket,
-      FREESWITCH_INGRESS_JOURNAL_SLOTS: "8",
+      FREESWITCH_INGRESS_JOURNAL_SLOTS: soak ? "128" : "8",
       FREESWITCH_ESL_PASSWORD: esl.password
     },
     stdio: ["ignore", log.fd, log.fd, "ipc"]
@@ -220,10 +247,10 @@ try {
   cursor = observer.eventFrames.length;
   timer = setInterval(() => void drain(), 10);
   const coordinator = createInboundQueueCoordinator(f.pool, socket, command, limited.executor, esl);
-  const recover = async () => {
+  const recover = async (work = coordinator.reconcile) => {
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
-        return await coordinator.reconcile();
+        return await work();
       } catch (error) {
         if (attempt === 2 || !adapter.isTransientPersistenceError(error)) throw error;
       }
@@ -284,7 +311,37 @@ try {
     assert.equal((await call(c.row.uuid)).agent_connected_at, null);
     return { offer, payload, url, result };
   }
-  if (i03) {
+  if (soak) {
+    await runSipRtpSoak({
+      profile: soak,
+      f,
+      config: httpConfig,
+      esl,
+      directory,
+      socket,
+      limited,
+      coordinator,
+      recover,
+      command,
+      clean,
+      recoveryTicket,
+      pass
+    });
+  } else if (mixed) {
+    await runSipRtpMixed({
+      f,
+      socket,
+      config: httpConfig,
+      app,
+      limited,
+      esl,
+      command,
+      recover,
+      runtime,
+      clean,
+      pass
+    });
+  } else if (i03) {
     await runSipRtpLoad({ app, f, config: httpConfig, command, startCall, recover, clean, runtime, pass });
   } else if (process.env.H01_MATRIX_ONLY !== "1") {
     const c = await startCall();
@@ -690,10 +747,12 @@ try {
       }
     });
   }
-  report.snapshot = await f.snapshot();
-  assert.equal(report.snapshot.call_capacity_reservations.filter((r) => r.state !== "released").length, 0);
-  assert.equal(report.snapshot.call_operations.filter((r) => !r.resolved_at).length, 0);
-  assert.equal(report.snapshot.agent_call_slots.filter((r) => r.state !== "free").length, 0);
+  if (!soak) {
+    report.snapshot = await f.snapshot();
+    assert.equal(report.snapshot.call_capacity_reservations.filter((r) => r.state !== "released").length, 0);
+    assert.equal(report.snapshot.call_operations.filter((r) => !r.resolved_at).length, 0);
+    assert.equal(report.snapshot.agent_call_slots.filter((r) => r.state !== "free").length, 0);
+  }
   // CHANNEL_DESTROY persistence can precede final removal from FS channel tables.
   // Require bounded observed convergence; never kill a channel to make this pass.
   await until(
@@ -713,7 +772,7 @@ try {
   await app?.close();
   if (timer) clearInterval(timer);
   while (draining) await delay(10);
-  if (f) report.finalSnapshot = await f.snapshot();
+  if (f && !soak) report.finalSnapshot = await f.snapshot();
   observer?.close();
   await phone?.close();
   if (agent) {
@@ -725,7 +784,7 @@ try {
   await limited?.close();
   if (f) {
     await f.cleanup();
-    if (i03) report.cleanup = "schema removed";
+    if (i03 || soak || mixed) report.cleanup = "schema removed";
   }
   await inflight?.catch(() => {});
   await log.close();

@@ -95,7 +95,16 @@ export async function openEsl({ port = 8021 } = {}) {
       ).headers["reply-text"],
       /^\+OK/
     );
-    return { events, eventFrames, logs, command, close: () => socket.destroy() };
+    return {
+      events,
+      eventFrames,
+      logs,
+      command,
+      get connected() {
+        return !socket.destroyed && !failure;
+      },
+      close: () => socket.destroy()
+    };
   } catch (error) {
     socket.destroy();
     throw error;
@@ -118,6 +127,7 @@ export async function invite({
   codec = "PCMU",
   timeoutMs = 5000,
   allowNoFinal = false,
+  maxRtpPort = 20040,
   frequency,
   control
 }) {
@@ -212,7 +222,7 @@ export async function invite({
             const host = body.match(/c=IN IP4 ([^\r\n]+)/)?.[1];
             const mediaPort = Number(body.match(/m=audio (\d+)/)?.[1]);
             assert.equal(host, "127.0.0.1");
-            assert.ok(mediaPort >= 20000 && mediaPort <= 20040);
+            assert.ok(mediaPort >= 20000 && mediaPort <= maxRtpPort);
             audioTarget = { host, port: mediaPort };
           }
         }

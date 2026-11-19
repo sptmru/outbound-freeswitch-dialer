@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { EventEmitter, once } from "node:events";
 import { mkdtemp, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -139,6 +140,58 @@ test("D03 U: Unix control socket is private; network capture cannot ACK and unkn
     await ingressRequest(socket, "/ack", { uuid: row.uuid, sequence: "1" });
     assert.equal(agent.journal.status().unacknowledged, 1);
   } finally {
+    await agent.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+test("D03 admits one pending capture behind terminal verification and rejects excess work", async () => {
+  const dir = await mkdtemp("/tmp/d03-agent-");
+  const socket = join(dir, "agent.sock");
+  const ended = capture();
+  const a = capture();
+  const b = capture();
+  const barrier = new EventEmitter();
+  const started = once(barrier, "started");
+  const finished = once(barrier, "finished");
+  const checks: string[] = [];
+  const agent = await startIngressAgent(
+    socket,
+    async (cmd) => {
+      checks.push(cmd);
+      if (cmd === `uuid_exists ${ended.uuid}`) {
+        barrier.emit("started");
+        await finished;
+        return "false";
+      }
+      const row = [a, b].find(({ uuid }) => cmd === `uuid_dump ${uuid}`);
+      assert.ok(row);
+      return dump(row);
+    },
+    4,
+    0
+  );
+  try {
+    agent.journal.capture(ended);
+    const terminal = ingressRequest(socket, "/terminal", { uuid: ended.uuid });
+    await started;
+    await ingressRequest(socket, "/ack", { uuid: ended.uuid, sequence: "1" });
+    const requests = [a, b].map(({ uuid }) =>
+      fetch(`http://127.0.0.1:${agent.capturePort}/capture`, {
+        method: "POST",
+        body: new URLSearchParams({ uuid })
+      })
+    );
+    assert.equal((await Promise.race(requests)).status, 503);
+    assert.deepEqual(checks, [`uuid_exists ${ended.uuid}`]);
+    barrier.emit("finished");
+    assert.equal(JSON.parse(await terminal).sequence, 2);
+    const responses = await Promise.all(requests);
+    assert.deepEqual(responses.map((r) => r.status).sort(), [200, 503]);
+    const captured = [a, b][responses.findIndex((r) => r.ok)];
+    assert.equal(await responses.find((r) => r.ok)?.text(), `stored:${captured.uuid}`);
+    assert.deepEqual(checks, [`uuid_exists ${ended.uuid}`, `uuid_dump ${captured.uuid}`]);
+  } finally {
+    barrier.emit("finished");
     await agent.close();
     await rm(dir, { recursive: true, force: true });
   }

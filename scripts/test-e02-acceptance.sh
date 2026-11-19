@@ -10,12 +10,31 @@ PG_CONTAINER="outbound-e02-pg-$(basename "$RUN_DIR")"
 NET_CONTAINER="outbound-e02-net-$(basename "$RUN_DIR")"
 NODE_BIN="$(command -v node)"
 mode=()
+rtp_end=20040
+timeout_seconds=600
+pg_memory=256m
 case "${1:-}" in
   "") ;;
-  --i03-load)
-    mode=("$1")
+  --i03-load|--i03-soak|--i03-mixed)
+    mode=("$@")
+    if [[ "$1" == --i03-soak ]]; then
+      case "${2:-}" in
+        check|history) timeout_seconds=150 ;;
+        normal) timeout_seconds=780 ;;
+        soak) timeout_seconds=1980 ;;
+        *) echo "Unknown I03 soak profile" >&2; exit 2 ;;
+      esac
+      rtp_end=20160
+      pg_memory=512m
+    fi
     unset H01_RECOVERY H01_MATRIX_ONLY H02_RECORDINGS G01_TRANSFERS G02_TRANSFERS G04_SUPERVISION
+    if [[ "$1" == --i03-mixed ]]; then
+      "${FFPROBE_PATH:-ffprobe}" -version >/dev/null
+      rtp_end=20160
+      export H02_RECORDINGS=1
+    fi
     sha256sum "$ROOT_DIR/scripts/i03-sip-rtp.mjs" "$ROOT_DIR/scripts/inbound-load-measurements.mjs" \
+      "$ROOT_DIR/scripts/i03-sip-soak.mjs" "$ROOT_DIR/scripts/i03-soak-worker.mjs" "$ROOT_DIR/scripts/i03-sip-mixed.mjs" \
       "$ROOT_DIR/scripts/a06-budgets.mjs" "$ROOT_DIR/tests/fixtures/inbound/load-desk.mjs" > "$RUN_DIR/i03-source-sha256.txt"
     ;;
   *) echo "Unknown E02 fixture mode" >&2; exit 2 ;;
@@ -51,7 +70,7 @@ docker image inspect "$IMAGE" "$PG_IMAGE" --format '{{.Id}} {{json .RepoDigests}
 docker run -d --name "$NET_CONTAINER" --network none --memory 32m --pids-limit 8 \
   --cap-drop ALL --entrypoint sleep "$IMAGE" 3600 > "$RUN_DIR/net-id.txt"
 pg_storage=(--tmpfs /var/lib/postgresql/data:rw,size=128m,mode=0700)
-if [[ "${H01_RECOVERY:-0}" == 1 ]]; then
+if [[ "${H01_RECOVERY:-0}" == 1 || "${1:-}" == --i03-soak ]]; then
   # H01 deliberately stops/restarts PostgreSQL. Docker clears tmpfs on stop;
   # use the image's disposable anonymous data volume and remove it in cleanup.
   pg_storage=()
@@ -59,7 +78,7 @@ if [[ "${H01_RECOVERY:-0}" == 1 ]]; then
 else
   echo tmpfs > "$RUN_DIR/storage.txt"
 fi
-docker run -d --name "$PG_CONTAINER" --network "container:$NET_CONTAINER" --memory 256m --pids-limit 128 \
+docker run -d --name "$PG_CONTAINER" --network "container:$NET_CONTAINER" --memory "$pg_memory" --pids-limit 128 \
   "${pg_storage[@]}" \
   --mount "type=bind,src=$RUN_DIR/socket,dst=/db-socket" \
   -e POSTGRES_HOST_AUTH_METHOD=trust -e POSTGRES_DB=e02 "$PG_IMAGE" \
@@ -74,7 +93,7 @@ docker run -d --name "$FS_CONTAINER" --network "container:$NET_CONTAINER" --memo
   -e TEMPLATE_DIR=/repo/templates -e FREESWITCH_CONFIG_DIR=/a02/conf \
   -e FREESWITCH_GENERATED_CONFIG_DIR=/a02/generated -e FREESWITCH_LOG_DIR=/a02/log -e FREESWITCH_DB_DIR=/a02/db \
   -e FREESWITCH_ESL_PASSWORD=a02-disposable-only -e FREESWITCH_ESL_ACL=loopback.auto \
-  -e FREESWITCH_DOMAIN=a04.invalid -e FREESWITCH_RTP_START_PORT=20000 -e FREESWITCH_RTP_END_PORT=20040 \
+  -e FREESWITCH_DOMAIN=a04.invalid -e FREESWITCH_RTP_START_PORT=20000 -e FREESWITCH_RTP_END_PORT="$rtp_end" \
   -e FREESWITCH_EXTERNAL_SIP_IP=127.0.0.1 -e FREESWITCH_EXTERNAL_RTP_IP=127.0.0.1 \
   -e FREESWITCH_INTERNAL_SIP_PORT=5080 -e FREESWITCH_EXTERNAL_PROFILE_SIP_PORT=5090 \
   -e FREESWITCH_EXTERNAL_PROFILE_TLS_PORT=5091 -e FREESWITCH_WEBRTC_WSS_PORT=7443 \
@@ -82,4 +101,4 @@ docker run -d --name "$FS_CONTAINER" --network "container:$NET_CONTAINER" --memo
   --entrypoint sh "$IMAGE" -c 'if [ ! -d /a02/conf ]; then cp -a /usr/share/freeswitch/conf/vanilla /a02/conf; fi; exec sh /repo/entrypoint.sh' > "$RUN_DIR/fs-id.txt"
 docker inspect "$FS_CONTAINER" "$PG_CONTAINER" "$NET_CONTAINER" --format '{{.Name}} {{json .HostConfig.NetworkMode}} {{json .HostConfig.PortBindings}}' > "$RUN_DIR/isolation.txt"
 PID="$(docker inspect "$NET_CONTAINER" --format '{{.State.Pid}}')"
-E02_PG_CONTAINER="$PG_CONTAINER" E02_FS_CONTAINER="$FS_CONTAINER" timeout 600 nsenter --net="/proc/$PID/ns/net" "$NODE_BIN" scripts/e02-acceptance-probe.mjs "$RUN_DIR" "${mode[@]}"
+E02_PG_CONTAINER="$PG_CONTAINER" E02_FS_CONTAINER="$FS_CONTAINER" timeout "$timeout_seconds" nsenter --net="/proc/$PID/ns/net" "$NODE_BIN" scripts/e02-acceptance-probe.mjs "$RUN_DIR" "${mode[@]}"

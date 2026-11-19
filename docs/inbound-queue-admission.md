@@ -62,14 +62,23 @@ The SQLite admission identity survives daemon restart, cannot change, and cannot
 attach to a terminal capture. Network `/admission` can only read
 `admitted:<operation UUID>`; network `/admit` is refused. A lost post-commit receipt
 is replayable. A capture/import ACK alone never authorizes answer or media.
+The staged coordinator exposes receipt reconciliation and waiting-command
+reconciliation independently. The I03 harness schedules them separately so
+a slow waiting command leaves new receipt publication able to progress.
 
-The original ingress Lua hook may park after seeing this receipt; its original
-three-second native pre-admission deadline remains armed. C03 alone sends one
-fixed `uuid_transfer` into the repo-owned `inbound-wait` context. Its continuation
+The original ingress Lua hook parks after seeing this receipt. The three-second
+native pre-admission deadline remains armed. The coordinator observes `park` on
+the exact inbound channel before C03 can send the first `uuid_transfer`. If the
+channel is still polling the receipt, the command stays pending for the next
+recovery pass. The fixed transfer goes to the repo-owned `inbound-wait` context. Its continuation
 checks the receipt against that exact operation and existing durable channel,
 releases the native pre-admission permit with `uuid_limit_release`, replaces the
 pre-admission scheduler task, answers and emits
 `outbound_dialer::inbound_waiting_started`, then plays bounded waiting audio.
+The waiting dialplan ends with the playback script. FreeSWITCH can interrupt
+playback during `uuid_bridge` before its bridge state is installed. The channel
+state machine handles the end of the extension while the scheduled guard
+continues to bound waiting.
 The trunk guard remains counted. The absolute native deadline rounds the original
 queue deadline down to whole seconds, so it never extends the queue budget.
 A missing worker/receipt, expired deadline or failed transfer cannot start media.

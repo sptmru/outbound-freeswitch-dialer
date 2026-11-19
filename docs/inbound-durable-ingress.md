@@ -44,8 +44,18 @@ The API reconciler starts from journal records, including identities without
 `calls` rows, and independently scans native `show channels as json` followed by
 fresh tagged-channel dumps. It rechecks disappearance during a dump race.
 Discovery cannot manufacture an old missing receipt outside its capture window.
-Terminal records are processed first. A live snapshot never revives terminal
-history. Initial tagged ingress events return before generic handlers that assume
+Terminal updates are processed before new captures. A private negotiated
+`GET /records` representation includes the SQLite ACK and admission identity.
+The reconciler reads the matching PostgreSQL checkpoints in one batch. Completed
+terminal receipts bypass further lifecycle writes, including retained receipts whose
+SQL history has been pruned. A disagreement in either store or pending D04 cleanup
+follows the original replay path. For a confirmed live receipt, reconciliation still checks for
+native absence when the channel is missing from the listing. D04 requires an
+exact durable queue operation and admission receipt before bypassing live import.
+Fresh captures precede these live probes. A terminal lock discovery conflict
+leaves that receipt pending and allows independent captures to progress.
+The original journal response remains available to older readers. A live snapshot
+never revives terminal history. Initial tagged ingress events return before generic handlers that assume
 a persisted product call; the periodic importer handles their durable evidence.
 The staged D04 adapter extends this boundary for admitted lifecycle events.
 
@@ -112,8 +122,10 @@ filesystem headroom; `max_page_count` bounds database pages, not the containing
 volume. Each record has a 4096-character route-data cap, the journal has at most
 128 identities and the control response is capped at 1 MiB. Capture requests
 are UUID-only with 256-byte bodies, at most eight sockets, finite HTTP limits and
-one concurrent verification/mutation. Overload explicitly refuses new capture;
-reads remain available while ESL verification waits. DB transactions never wait
+one concurrent native verification. One capture can wait behind a terminal or
+discovery check within the original capture deadline. Excess captures are refused.
+SQLite transactions still run serially. Reads and exact control writes can proceed
+while ESL verification waits. DB transactions never wait
 for journal/ESL and the importer coalesces work rather than allocating a worker
 or SQL connection per pending channel.
 

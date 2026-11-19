@@ -5,6 +5,8 @@ import { updateAgentCallSlot, type SlotToken } from "./agent-call-slots.js";
 import type { CallExecutor, DurableCommand } from "./call-executor.js";
 import { ingressUuid } from "./ingress-journal.js";
 
+export const commandReceiptAckIntervalMs = 1000;
+
 export async function commandJournalPath(command: (text: string) => Promise<string>) {
   const directory = (await command("global_getvar conf_dir")).trim();
   assert.match(directory, /^\/[A-Za-z0-9_/.-]+$/);
@@ -136,29 +138,61 @@ export async function recoverCommandReceipts(
         await recoverBridgeEffect(db, row, command, valid);
       }
     }
-    // Delete switch receipts only AFTER durable SQL resolution. ACK is replayable
-    // across a crash and matches both job and operation, including old FS boots.
-    const resolved = (
-      await db.query(
-        `select o.id,o.command_uuid,f.core_uuid from call_operations o join call_command_fences f on f.operation_id=o.id
+    await acknowledgeCallReceipts(db, signal, callId, command, script);
+  });
+}
+
+// Committed resolution authorizes exact, replayable ACK. The execution lock
+// excludes current senders. Incoming ESL events only invalidate observations.
+async function acknowledgeCallReceipts(
+  db: pg.PoolClient,
+  signal: AbortSignal,
+  callId: string,
+  command: (text: string) => Promise<string>,
+  script?: string
+) {
+  const resolved = (
+    await db.query(
+      `select o.id,o.command_uuid,f.core_uuid from call_operations o join call_command_fences f on f.operation_id=o.id
        where o.call_id=$1 and o.resolved_at is not null and not exists(select 1 from call_command_receipt_acks a where a.operation_id=o.id)
        order by o.created_at,o.id limit 16`,
-        [callId]
-      )
-    ).rows;
-    for (const row of resolved) {
-      if (!valid()) return;
-      script ??= await commandJournalPath(command);
-      if (
-        (await command(`lua ${script} ack ${row.core_uuid} ${row.command_uuid} ${row.id}`)).trim() !== "+OK"
-      )
-        throw new Error("Native command journal ACK failed");
-      await db.query(
-        "insert into call_command_receipt_acks(operation_id) values($1) on conflict do nothing",
-        [row.id]
+      [callId]
+    )
+  ).rows;
+  for (const row of resolved) {
+    if (signal.aborted) return;
+    script ??= await commandJournalPath(command);
+    if (signal.aborted) return;
+    if ((await command(`lua ${script} ack ${row.core_uuid} ${row.command_uuid} ${row.id}`)).trim() !== "+OK")
+      throw new Error("Native command journal ACK failed");
+    if (signal.aborted) return;
+    await db.query("insert into call_command_receipt_acks(operation_id) values($1) on conflict do nothing", [
+      row.id
+    ]);
+  }
+}
+
+export async function acknowledgeResolvedCommandReceipts(
+  pool: pg.Pool,
+  executor: Pick<CallExecutor, "inspectCall">,
+  command: (text: string) => Promise<string>
+) {
+  const pending = await pool.query<{ call_id: string }>(
+    `select o.call_id from call_command_fences f join call_operations o on o.id=f.operation_id
+     where o.resolved_at is not null and not exists(select 1 from call_command_receipt_acks a where a.operation_id=o.id)
+     group by o.call_id order by min(o.resolved_at),o.call_id limit 16`
+  );
+  const errors: Array<{ callId: string; error: unknown }> = [];
+  for (const { call_id: callId } of pending.rows) {
+    try {
+      await executor.inspectCall(callId, (db, signal) =>
+        acknowledgeCallReceipts(db, signal, callId, command)
       );
+    } catch (error) {
+      errors.push({ callId, error });
     }
-  });
+  }
+  return errors;
 }
 
 async function recoverBridgeEffect(
