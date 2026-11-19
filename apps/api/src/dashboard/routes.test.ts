@@ -1413,7 +1413,14 @@ describe("dashboard route helpers", () => {
     const endedAt = new Date("2026-07-10T08:01:00.000Z");
     const pool = createQueryPool((sql, params) => {
       assert.deepEqual(params, ["44444444-4444-4444-8444-444444444444"]);
-      if (sql.includes("from calls")) {
+      if (
+        sql.includes("from call_participants p left") ||
+        sql.includes("from call_offers o join") ||
+        sql.includes("from call_transfers t join") ||
+        sql.includes("request->>'step' as step")
+      )
+        return rows([]);
+      if (sql.includes("resolved_contact.display_name as lead_name")) {
         return rows([
           {
             id: "44444444-4444-4444-8444-444444444444",
@@ -1697,7 +1704,10 @@ describe("dashboard route helpers", () => {
         null,
         null,
         25,
-        0
+        0,
+        null,
+        null,
+        null
       ]);
       return rows([
         {
@@ -1753,7 +1763,10 @@ describe("dashboard route helpers", () => {
         cursorCreatedAt,
         cursorId,
         1_000,
-        0
+        0,
+        null,
+        null,
+        null
       ]);
       assert.equal(
         params.some((value) => (value as unknown) instanceof Date),

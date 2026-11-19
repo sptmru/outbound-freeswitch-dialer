@@ -39,5 +39,10 @@ export function formatCallLifecycleStatus(
   ) {
     return "In progress";
   }
+  if (state === "received" || state === "queued") return "Waiting";
+  if (state === "connecting") return "Connecting";
+  if (state === "agent_connected") return "In progress";
+  if (state === "fallback" || state === "audio_playing") return "No-answer flow";
+  if (state === "forwarding") return "Forwarding";
   return "Calling";
 }

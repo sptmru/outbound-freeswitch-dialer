@@ -203,6 +203,7 @@ describe("admin analytics", () => {
             }
           ]);
         }
+        if (sql.includes("as participation")) return rows([{ inbound: { calls: 0 }, participation: [] }]);
         throw new Error("Unexpected analytics query");
       }
     } as unknown as pg.Pool;
@@ -214,7 +215,7 @@ describe("admin analytics", () => {
       snapshotAt
     );
 
-    assert.equal(queries.length, 10);
+    assert.equal(queries.length, 11);
     assert.deepEqual(
       queries.map((query) => query.params),
       [
@@ -223,6 +224,7 @@ describe("admin analytics", () => {
         [from, to, campaignId, 3, 60, snapshotAt],
         [from, to, campaignId],
         [from, to, campaignId, 3, 60, snapshotAt],
+        [from, to, campaignId],
         [from, to, campaignId],
         [from, to, campaignId],
         [from, to, campaignId],

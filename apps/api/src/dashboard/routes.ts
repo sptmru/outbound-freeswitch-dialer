@@ -1,3 +1,4 @@
+import { getCallJourney } from "./call-history-context.js";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { createReadStream, createWriteStream } from "node:fs";
 import { mkdir, stat, unlink } from "node:fs/promises";
@@ -356,6 +357,9 @@ const recordingAudioQuerySchema = z.object({
 });
 
 const callHistoryQuerySchema = z.object({
+  direction: z.enum(["inbound", "outbound"]).optional(),
+  did: z.string().min(1).max(64).optional(),
+  queueId: z.guid().optional(),
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(25),
   q: z.string().max(160).optional(),
@@ -2523,7 +2527,25 @@ async function* streamCallHistoryCsv(
       "outcome",
       "duration_seconds",
       "voicemail_signal",
-      "recording_available"
+      "recording_available",
+      "call_id",
+      "direction",
+      "did",
+      "queue_id",
+      "queue_name",
+      "queue_wait_ms",
+      "queue_exit",
+      "flow_outcome",
+      "terminal_reason",
+      "agent_talk_ms",
+      "participant_count",
+      "transfer_count",
+      "manual_correction_at",
+      "participants",
+      "offers",
+      "transfers",
+      "flow_steps",
+      "journey_truncated"
     ]
   ]);
 
@@ -2532,20 +2554,42 @@ async function* streamCallHistoryCsv(
   let emittedRows = 0;
   while (current.items.length && emittedRows < rowBudget) {
     const items = current.items.slice(0, rowBudget - emittedRows);
-    yield callHistoryCsvRows(
-      items.map((item) => [
-        item.createdAt,
-        item.leadName,
-        item.phoneNumber,
-        item.campaignName,
-        item.agentName,
-        item.state,
-        item.outcome ?? "",
-        String(item.durationSeconds),
-        item.voicemailSignal ?? "",
-        String(item.recordingAvailable)
-      ])
-    );
+    // Bound database concurrency while streaming; each call remains one CSV row.
+    for (const item of items) {
+      const journey = item.context ? await getCallJourney(pool, item.id) : undefined;
+      yield callHistoryCsvRows([
+        [
+          item.createdAt,
+          item.leadName,
+          item.phoneNumber,
+          item.campaignName,
+          item.agentName,
+          item.state,
+          item.outcome ?? "",
+          String(item.durationSeconds),
+          item.voicemailSignal ?? "",
+          String(item.recordingAvailable),
+          item.id,
+          item.context?.direction ?? "outbound",
+          item.context?.did ?? "",
+          item.context?.queueId ?? "",
+          item.context?.queueName ?? "",
+          String(item.context?.queueWaitMs ?? ""),
+          item.context?.queueExit ?? "",
+          item.context?.flowOutcome ?? "",
+          item.context?.terminalReason ?? "",
+          String(item.context?.agentTalkMs ?? ""),
+          String(item.context?.participantCount ?? ""),
+          String(item.context?.transferCount ?? ""),
+          item.context?.manualCorrectionAt ?? "",
+          JSON.stringify(journey?.participants.items ?? []),
+          JSON.stringify(journey?.offers.items ?? []),
+          JSON.stringify(journey?.transfers.items ?? []),
+          JSON.stringify(journey?.steps.items ?? []),
+          String(journey ? Object.values(journey).some((p) => p.truncated) : false)
+        ]
+      ]);
+    }
     emittedRows += items.length;
     if (emittedRows >= rowBudget) break;
     if (current.items.length < first.pageSize) break;

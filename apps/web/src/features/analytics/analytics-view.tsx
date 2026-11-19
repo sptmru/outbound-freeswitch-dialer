@@ -200,7 +200,61 @@ export function AnalyticsView({
         </div>
       ) : analytics ? (
         <>
+          <p className="analytics-note">
+            Attempts, funnel and campaign performance cover outbound calls. Agent attempts belong to the
+            initiating agent; conversation averages describe those calls. Connected participation time below
+            belongs to each actual agent interval.
+          </p>
           <AnalyticsSummaryCards analytics={analytics} />
+          {analytics.inbound && (
+            <section className="panel" aria-label="Inbound summary">
+              <h3>Inbound calls</h3>
+              <p>
+                {analytics.inbound.calls} calls · {analytics.inbound.agentConnected} connected to an agent ·{" "}
+                {analytics.inbound.queueTimeouts} queue timeouts · {analytics.inbound.transfers} transfer
+                attempts
+              </p>
+              <p>
+                Average queue wait:{" "}
+                {analytics.inbound.averageWaitMs === null
+                  ? "Unknown"
+                  : formatAnalyticsDuration(analytics.inbound.averageWaitMs / 1000)}
+              </p>
+            </section>
+          )}
+          {analytics.participation && (
+            <section className="panel" aria-label="Agent participation">
+              <h3>Agent participation</h3>
+              <p>
+                Completed evidenced intervals; a call with multiple agents appears once per agent. Do not sum
+                these call counts into product totals.
+              </p>
+              <table>
+                <thead>
+                  <tr>
+                    <th>Agent</th>
+                    <th>Direction</th>
+                    <th>Calls</th>
+                    <th>Connected time</th>
+                    <th>Media legs / browser segments</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {analytics.participation.map((p) => (
+                    <tr key={`${p.agentId}-${p.direction}`}>
+                      <td>{p.agentName}</td>
+                      <td>{p.direction}</td>
+                      <td>{p.calls}</td>
+                      <td>{formatAnalyticsDuration(p.connectedMs / 1000)}</td>
+                      <td>
+                        {p.mediaLegs} / {p.browserSegments}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </section>
+          )}
 
           <div className="analytics-primary-grid">
             <section className="panel analytics-trend-panel">

@@ -503,9 +503,12 @@ add("GET", "/admin/users", "List users", "Returns a searchable, paginated user l
 const callHistoryQuery = object(
   {
     ...pagination(25),
-    q: optionalString("Search lead, phone, campaign, or agent", 160),
+    direction: { type: "string", enum: ["inbound", "outbound"], description: "Call direction" },
+    did: optionalString("Exact original inbound DID", 64),
+    queueId: optionalUuid("Fixed inbound queue"),
+    q: optionalString("Search lead, phone, DID, campaign, or current owner", 160),
     campaignId: optionalUuid("Campaign filter"),
-    agentId: optionalUuid("Agent filter"),
+    agentId: optionalUuid("Current owner or any historical participant user ID"),
     outcome: { $ref: "CallOutcome#", description: "Terminal outcome filter" },
     from: dateTime("Earliest call creation time"),
     to: dateTime("Latest call creation time"),

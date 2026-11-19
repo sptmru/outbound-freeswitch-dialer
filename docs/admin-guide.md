@@ -79,3 +79,5 @@
 - Follow the runbooks for deploy/rollback, backup/restore, incidents, and captures; preserve call ID, both leg UUIDs, UTC time, and deployed SHA.
 - Do not claim voicemail success from local playback alone. Verify the far-end mailbox when that is the user-visible requirement.
 - Firewall/host-port changes are outside this implementation scope; escalate exposure questions to the named deployment owner.
+
+Call History supports **Direction**, exact **DID** and (for inbound) **Queue** filters. Agent filtering includes previous participants. Expand a call for **Call journey**: offers and transfers have their own outcomes; **Queue exit** and **Flow outcome** describe separate stages. Participant talk time uses its connected interval. CSV adds context and bounded journey JSON; omitted journey rows are explicitly flagged. Analytics keeps outbound attempts separate from inbound counts and agent participation. See [reporting definitions](inbound-history-reporting.md).

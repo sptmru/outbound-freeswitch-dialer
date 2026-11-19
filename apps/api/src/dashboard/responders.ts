@@ -1,3 +1,4 @@
+import { historyContextSql, getCallJourney, type HistoryContextRow } from "./call-history-context.js";
 import type pg from "pg";
 import type {
   AdminOverviewResponse,
@@ -356,7 +357,7 @@ async function getAgentMetrics(pool: pg.Pool, userId: string): Promise<AgentDesk
         count(calls.id) filter (where calls.outcome = 'voicemail_dropped') as voicemails_dropped,
         (select count(*) from suppression_entries) as suppressed
       from agents
-      left join calls on calls.agent_id = agents.id
+      left join calls on calls.agent_id = agents.id and calls.direction='outbound'
       where agents.user_id = $1
     `,
     [userId]
@@ -508,11 +509,11 @@ async function getAdminStats(pool: pg.Pool): Promise<AdminOverviewResponse["stat
       (select count(*) from calls where created_at >= date_trunc('day', now())) as calls_today,
       (select count(*) from suppression_entries) as suppression_entries,
       (select count(*) from calls where ended_at is null and state not in ('completed', 'failed', 'canceled', 'agent_released')) as live_calls,
-      (select count(*) from calls where created_at >= date_trunc('day', now())) as attempted_calls_today,
-      (select count(*) from calls where created_at >= date_trunc('day', now()) and answered_at is not null) as answered_calls_today,
-      (select count(*) from calls where created_at >= date_trunc('day', now()) and outcome = 'voicemail_dropped') as voicemail_drops_today,
-      (select count(*) from calls where created_at >= date_trunc('day', now()) and voicemail_playback_completed_at is not null) as voicemail_drop_completed_today,
-      (select count(*) from calls where created_at >= date_trunc('day', now()) and outcome = 'failed') as failed_calls_today,
+      (select count(*) from calls where direction='outbound' and created_at >= date_trunc('day', now())) as attempted_calls_today,
+      (select count(*) from calls where direction='outbound' and created_at >= date_trunc('day', now()) and answered_at is not null) as answered_calls_today,
+      (select count(*) from calls where direction='outbound' and created_at >= date_trunc('day', now()) and outcome = 'voicemail_dropped') as voicemail_drops_today,
+      (select count(*) from calls where direction='outbound' and created_at >= date_trunc('day', now()) and voicemail_playback_completed_at is not null) as voicemail_drop_completed_today,
+      (select count(*) from calls where direction='outbound' and created_at >= date_trunc('day', now()) and outcome = 'failed') as failed_calls_today,
       greatest(extract(epoch from (now() - date_trunc('day', now()))) / 3600, 1) as elapsed_business_hours
   `),
     pool.query<{ outcome: string; count: string }>(`
@@ -574,6 +575,9 @@ export type CallHistoryFilters = {
   snapshot?: { createdAt: string; id: string };
   cursor?: { createdAt: string; id: string };
   includeTotal?: boolean;
+  direction?: "inbound" | "outbound";
+  did?: string;
+  queueId?: string;
 };
 
 export type CallHistoryPageBounds = {
@@ -593,6 +597,7 @@ export async function getCallHistoryPage(
 ): Promise<CallHistoryResponse> {
   const offset = (filters.page - 1) * filters.pageSize;
   const result = await pool.query<{
+    history_context: HistoryContextRow["history_context"];
     id: string;
     lead_name: string | null;
     agent_name: string | null;
@@ -615,9 +620,10 @@ export async function getCallHistoryPage(
     `
     select
       calls.id,
+      ${historyContextSql} as history_context,
       resolved_contact.display_name as lead_name,
       users.name as agent_name,
-      calls.destination_number as phone_number,
+      case when calls.direction='inbound' then calls.calling_number else calls.destination_number end as phone_number,
       campaigns.name as campaign_name,
       campaigns.id as campaign_id,
       users.id as agent_user_id,
@@ -662,9 +668,11 @@ export async function getCallHistoryPage(
         and call_events.event_type = 'voicemail_detection_started'
       limit 1
     ) avmd on true
-    where ($1::text is null or concat_ws(' ', resolved_contact.display_name, calls.destination_number, users.name, campaigns.name) ilike '%' || $1 || '%')
+    where ($1::text is null or concat_ws(' ', resolved_contact.display_name, calls.destination_number, calls.calling_number, calls.original_did, users.name, campaigns.name) ilike '%' || $1 || '%')
       and ($2::uuid is null or calls.campaign_id = $2)
-      and ($3::uuid is null or users.id = $3)
+      and ($3::uuid is null or users.id = $3 or exists (
+        select 1 from call_participants p join agents a on a.id=p.agent_id
+        where p.call_id=calls.id and a.user_id=$3))
       and ($4::text is null or calls.outcome = $4)
       and ($5::timestamptz is null or calls.created_at >= $5)
       and ($6::timestamptz is null or calls.created_at <= $6)
@@ -694,6 +702,9 @@ export async function getCallHistoryPage(
         or calls.created_at < $12
         or (calls.created_at = $12 and calls.id < $13::uuid)
       )
+      and ($16::text is null or calls.direction=$16)
+      and ($17::text is null or calls.original_did=$17)
+      and ($18::uuid is null or calls.inbound_queue_id=$18)
     order by calls.created_at desc, calls.id desc
     limit $14 offset $15
   `,
@@ -712,13 +723,18 @@ export async function getCallHistoryPage(
       filters.cursor?.createdAt ?? null,
       filters.cursor?.id ?? null,
       filters.pageSize,
-      offset
+      offset,
+      filters.direction ?? null,
+      filters.did ?? null,
+      filters.queueId ?? null
     ]
   );
 
   const items: CallHistoryItem[] = result.rows.map((row) => ({
+    context: row.history_context,
     id: row.id,
-    leadName: row.lead_name ?? "Manual dial",
+    leadName:
+      row.lead_name ?? (row.history_context?.direction === "inbound" ? "Inbound caller" : "Manual dial"),
     agentName: row.agent_name ?? "Unassigned",
     phoneNumber: row.phone_number,
     campaignName: row.campaign_name ?? "No campaign",
@@ -757,6 +773,7 @@ export async function getCallHistoryPage(
 
 export async function getCallDetail(pool: pg.Pool, callId: string): Promise<CallDetailResponse | null> {
   const result = await pool.query<{
+    history_context: HistoryContextRow["history_context"];
     id: string;
     lead_name: string | null;
     agent_name: string | null;
@@ -797,9 +814,10 @@ export async function getCallDetail(pool: pg.Pool, callId: string): Promise<Call
     `
       select
         calls.id,
+        ${historyContextSql} as history_context,
         resolved_contact.display_name as lead_name,
         users.name as agent_name,
-        calls.destination_number as phone_number,
+        case when calls.direction='inbound' then calls.calling_number else calls.destination_number end as phone_number,
         campaigns.name as campaign_name,
         campaigns.id as campaign_id,
         users.id as agent_user_id,
@@ -870,7 +888,7 @@ export async function getCallDetail(pool: pg.Pool, callId: string): Promise<Call
     return null;
   }
 
-  const [events, legs, reviews, mediaQuality, browserMedia] = await Promise.all([
+  const [events, legs, reviews, mediaQuality, browserMedia, journey] = await Promise.all([
     pool.query<CallDetailEventRow>(
       `
         select
@@ -907,7 +925,9 @@ export async function getCallDetail(pool: pg.Pool, callId: string): Promise<Call
       [callId]
     ),
     pool.query<{
-      type: "agent" | "customer";
+      id: string;
+      participant_id: string | null;
+      type: "agent" | "customer" | "external";
       state: string;
       freeswitch_uuid: string | null;
       sip_uri: string | null;
@@ -916,7 +936,7 @@ export async function getCallDetail(pool: pg.Pool, callId: string): Promise<Call
       ended_at: Date | null;
     }>(
       `
-        select type, state, freeswitch_uuid, sip_uri, started_at, answered_at, ended_at
+        select id, participant_id, type, state, freeswitch_uuid, sip_uri, started_at, answered_at, ended_at
         from call_legs
         where call_id = $1
         order by case type when 'agent' then 0 else 1 end
@@ -973,6 +993,8 @@ export async function getCallDetail(pool: pg.Pool, callId: string): Promise<Call
           inbound_quality_percentage
         from call_media_stats
         where call_id = $1
+          and not exists(select 1 from call_participants where call_id=$1 and origin='native')
+          and exists(select 1 from calls where id=$1 and direction='outbound')
         order by case leg_type when 'agent' then 0 else 1 end
       `,
       [callId]
@@ -1012,7 +1034,13 @@ export async function getCallDetail(pool: pg.Pool, callId: string): Promise<Call
       remote_candidate_type: string | null;
       transport_protocol: string | null;
       relay_protocol: string | null;
-    }>(`select * from call_browser_media_stats where call_id = $1`, [callId])
+    }>(
+      `select * from call_browser_media_stats where call_id = $1
+      and not exists(select 1 from call_participants where call_id=$1 and origin='native')
+      and exists(select 1 from calls where id=$1 and direction='outbound')`,
+      [callId]
+    ),
+    getCallJourney(pool, callId)
   ]);
 
   const lastReasonCode = [...events.rows].reverse().find((event) => event.reason_code)?.reason_code ?? null;
@@ -1023,9 +1051,12 @@ export async function getCallDetail(pool: pg.Pool, callId: string): Promise<Call
     : (row.call_recording_status ?? "pending");
 
   return {
+    journey,
     call: {
+      context: row.history_context,
       id: row.id,
-      leadName: row.lead_name ?? "Manual dial",
+      leadName:
+        row.lead_name ?? (row.history_context?.direction === "inbound" ? "Inbound caller" : "Manual dial"),
       agentName: row.agent_name ?? "Unassigned",
       phoneNumber: row.phone_number,
       campaignName: row.campaign_name ?? "No campaign",
@@ -1156,6 +1187,8 @@ export async function getCallDetail(pool: pg.Pool, callId: string): Promise<Call
     legs: legs.rows.map((leg) => {
       const legEvents = events.rows.filter((event) => eventBelongsToLeg(event, leg.freeswitch_uuid));
       return {
+        id: leg.id,
+        participantId: leg.participant_id,
         type: leg.type,
         state: leg.state,
         freeswitchUuid: leg.freeswitch_uuid,

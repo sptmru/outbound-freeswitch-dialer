@@ -181,3 +181,5 @@ The repository can prove implementation and automated behavior. The following re
 - off-host backup delivery and clean-host restore within approved RPO/RTO;
 - legal approval for calling windows, retries, recording consent, DNCR evidence, retention, and legal hold;
 - client training, runbook exercise, and formal sign-off.
+
+H03 adds [inbound/transfer history and participation reporting](inbound-history-reporting.md): direction/DID/queue filters, distinct queue/flow/customer outcomes and per-agent intervals, while outbound attempts remain separate.

@@ -1,3 +1,4 @@
+import { getParticipationAnalytics, talkSecondsSql } from "./participation-analytics.js";
 import type {
   AdminAnalyticsResponse,
   AgentAvailabilityStatus,
@@ -181,34 +182,49 @@ export async function getAdminAnalytics(
   const dailyParams = [...rangeParams, filters.timeZone];
   const snapshotParams = [...rangeParams, retryPolicy.maxAttempts, retryPolicy.retryDelaySeconds, snapshotAt];
 
-  const [overview, daily, campaigns, agents, quality, avmd, media, mediaLegs, browserMedia, telephony] =
-    await Promise.all([
-      pool.query<OverviewRow>(overviewSql, rangeParams),
-      pool.query<DailyRow>(dailySql, dailyParams),
-      pool.query<CampaignRow>(campaignSql, snapshotParams),
-      pool.query<AgentRow>(agentSql, rangeParams),
-      pool.query<DataQualityRow>(dataQualitySql, snapshotParams),
-      pool.query<AvmdQualityRow>(avmdQualitySql, rangeParams),
-      pool.query<MediaOverviewRow>(mediaOverviewSql, rangeParams),
-      pool.query<MediaLegRow>(mediaLegsSql, rangeParams),
-      pool.query<BrowserMediaRow>(browserMediaSql, rangeParams),
-      pool.query<TelephonyReliabilityRow>(telephonyReliabilitySql, rangeParams)
-    ]);
+  const [
+    overview,
+    daily,
+    campaigns,
+    agents,
+    quality,
+    avmd,
+    media,
+    mediaLegs,
+    browserMedia,
+    telephony,
+    participation
+  ] = await Promise.all([
+    pool.query<OverviewRow>(overviewSql, rangeParams),
+    pool.query<DailyRow>(dailySql, dailyParams),
+    pool.query<CampaignRow>(campaignSql, snapshotParams),
+    pool.query<AgentRow>(agentSql, rangeParams),
+    pool.query<DataQualityRow>(dataQualitySql, snapshotParams),
+    pool.query<AvmdQualityRow>(avmdQualitySql, rangeParams),
+    pool.query<MediaOverviewRow>(mediaOverviewSql, rangeParams),
+    pool.query<MediaLegRow>(mediaLegsSql, rangeParams),
+    pool.query<BrowserMediaRow>(browserMediaSql, rangeParams),
+    pool.query<TelephonyReliabilityRow>(telephonyReliabilitySql, rangeParams),
+    getParticipationAnalytics(pool, filters)
+  ]);
 
-  return buildAdminAnalyticsResponse(
-    filters,
-    snapshotAt,
-    overview.rows[0],
-    daily.rows,
-    campaigns.rows,
-    agents.rows,
-    quality.rows[0],
-    avmd.rows[0],
-    media.rows[0],
-    mediaLegs.rows,
-    browserMedia.rows[0],
-    telephony.rows[0]
-  );
+  return {
+    ...participation,
+    ...buildAdminAnalyticsResponse(
+      filters,
+      snapshotAt,
+      overview.rows[0],
+      daily.rows,
+      campaigns.rows,
+      agents.rows,
+      quality.rows[0],
+      avmd.rows[0],
+      media.rows[0],
+      mediaLegs.rows,
+      browserMedia.rows[0],
+      telephony.rows[0]
+    )
+  };
 }
 
 function buildAdminAnalyticsResponse(
@@ -432,7 +448,7 @@ const overviewSql = `
   with filtered_calls as (
     select calls.*
     from calls
-    where calls.created_at >= $1
+    where calls.direction='outbound' and calls.created_at >= $1
       and calls.created_at <= $2
       and ($3::uuid is null or calls.campaign_id = $3)
   )
@@ -441,7 +457,7 @@ const overviewSql = `
     count(distinct coalesce(contact_id::text, 'number:' || normalized_destination_number)) as unique_contacts,
     count(*) filter (where answered_at is not null) as answered,
     count(*) filter (where answered_at is not null and coalesce(outcome, '') not in ('voicemail_detected', 'voicemail_dropped')) as connected,
-    avg(greatest(0, extract(epoch from (ended_at - answered_at)))) filter (
+    avg(${talkSecondsSql}) filter (
       where answered_at is not null
         and ended_at is not null
         and coalesce(outcome, '') not in ('voicemail_detected', 'voicemail_dropped')
@@ -453,7 +469,7 @@ const overviewSql = `
     count(*) filter (where voicemail_playback_completed_at is not null) as voicemail_completed,
     count(*) filter (where exists (
       select 1 from call_events
-      where call_events.call_id = filtered_calls.id
+      where call_events.call_id = calls.id
         and call_events.event_type in ('voicemail_playback_failed', 'voicemail_playback_interrupted')
     )) as voicemail_failed_or_interrupted,
     avg(greatest(0, extract(epoch from (agent_released_at - voicemail_drop_requested_at)))) filter (
@@ -465,7 +481,7 @@ const overviewSql = `
         and outcome is not null
         and outcome not in ('voicemail_detected', 'voicemail_dropped', 'failed')
     ) as completed
-  from filtered_calls
+  from filtered_calls calls
 `;
 
 const dailySql = `
@@ -478,7 +494,7 @@ const dailySql = `
   ), filtered_calls as (
     select calls.*
     from calls
-    where calls.created_at >= $1
+    where calls.direction='outbound' and calls.created_at >= $1
       and calls.created_at <= $2
       and ($3::uuid is null or calls.campaign_id = $3)
   ), daily as (
@@ -489,7 +505,7 @@ const dailySql = `
       count(*) filter (where ${connectedPredicate}) as connected,
       count(*) filter (where calls.outcome = 'failed') as failed,
       count(*) filter (where calls.voicemail_playback_completed_at is not null) as voicemail_completed,
-      avg(greatest(0, extract(epoch from (calls.ended_at - calls.answered_at)))) filter (
+      avg(${talkSecondsSql}) filter (
         where ${connectedPredicate} and calls.ended_at is not null
       ) as average_talk_seconds
     from filtered_calls calls
@@ -512,7 +528,7 @@ const campaignSql = `
   with filtered_calls as (
     select calls.*
     from calls
-    where calls.created_at >= $1
+    where calls.direction='outbound' and calls.created_at >= $1
       and calls.created_at <= $2
       and ($3::uuid is null or calls.campaign_id = $3)
   ), call_stats as (
@@ -522,13 +538,13 @@ const campaignSql = `
       count(distinct contact_id) filter (where contact_id is not null) as attempted_contacts,
       count(*) filter (where answered_at is not null) as answered,
       count(*) filter (where answered_at is not null and coalesce(outcome, '') not in ('voicemail_detected', 'voicemail_dropped')) as connected,
-      avg(greatest(0, extract(epoch from (ended_at - answered_at)))) filter (
+      avg(${talkSecondsSql}) filter (
         where answered_at is not null
           and ended_at is not null
           and coalesce(outcome, '') not in ('voicemail_detected', 'voicemail_dropped')
       ) as average_talk_seconds,
       count(*) filter (where voicemail_playback_completed_at is not null) as voicemail_completed
-    from filtered_calls
+    from filtered_calls calls
     group by campaign_id
   ), repeated_contacts as (
     select
@@ -540,7 +556,7 @@ const campaignSql = `
         campaign_id,
         contact_id,
         bool_or(answered_at is not null and coalesce(outcome, '') not in ('voicemail_detected', 'voicemail_dropped')) as connected
-      from filtered_calls
+      from filtered_calls calls
       where contact_id is not null
       group by campaign_id, contact_id
       having count(*) > 1
@@ -588,26 +604,27 @@ const campaignSql = `
 
 const agentSql = `
   with filtered_calls as (
-    select calls.*
+    select calls.*,coalesce((select p.agent_id from call_participants p
+      where p.call_id=calls.id and p.role='agent' order by p.joined_at nulls last,p.created_at,p.id limit 1),calls.agent_id) as reporting_agent_id
     from calls
-    where calls.created_at >= $1
+    where calls.direction='outbound' and calls.created_at >= $1
       and calls.created_at <= $2
       and ($3::uuid is null or calls.campaign_id = $3)
   ), call_stats as (
     select
-      agent_id,
+      reporting_agent_id as agent_id,
       count(*) as attempts,
       count(*) filter (where answered_at is not null) as answered,
       count(*) filter (where answered_at is not null and coalesce(outcome, '') not in ('voicemail_detected', 'voicemail_dropped')) as connected,
-      avg(greatest(0, extract(epoch from (ended_at - answered_at)))) filter (
+      avg(${talkSecondsSql}) filter (
         where answered_at is not null
           and ended_at is not null
           and coalesce(outcome, '') not in ('voicemail_detected', 'voicemail_dropped')
       ) as average_talk_seconds,
       count(*) filter (where voicemail_playback_completed_at is not null) as voicemail_drops,
       count(*) filter (where outcome = 'failed') as failed
-    from filtered_calls
-    group by agent_id
+    from filtered_calls calls
+    group by reporting_agent_id
   )
   select
     agents.id,
@@ -680,7 +697,7 @@ const avmdQualitySql = `
       call_avmd_reviews.actual_party
     from calls
     left join call_avmd_reviews on call_avmd_reviews.call_id = calls.id
-    where calls.created_at >= $1
+    where calls.direction='outbound' and calls.created_at >= $1
       and calls.created_at <= $2
       and ($3::uuid is null or calls.campaign_id = $3)
       and calls.answered_at is not null
@@ -709,7 +726,7 @@ const mediaOverviewSql = `
       answered_at,
       greatest(0, extract(epoch from (ended_at - answered_at))) as duration_seconds
     from calls
-    where calls.created_at >= $1
+    where calls.direction='outbound' and not exists(select 1 from call_participants p where p.call_id=calls.id and p.origin='native') and calls.created_at >= $1
       and calls.created_at <= $2
       and ($3::uuid is null or calls.campaign_id = $3)
   ), observed as (
@@ -757,7 +774,7 @@ const mediaLegsSql = `
     select call_media_stats.*
     from call_media_stats
     join calls on calls.id = call_media_stats.call_id
-    where calls.created_at >= $1
+    where calls.direction='outbound' and not exists(select 1 from call_participants p where p.call_id=calls.id and p.origin='native') and calls.created_at >= $1
       and calls.created_at <= $2
       and ($3::uuid is null or calls.campaign_id = $3)
       and calls.answered_at is not null
@@ -795,7 +812,7 @@ const browserMediaSql = `
   with filtered_calls as (
     select id
     from calls
-    where calls.created_at >= $1
+    where calls.direction='outbound' and not exists(select 1 from call_participants p where p.call_id=calls.id and p.origin='native') and calls.created_at >= $1
       and calls.created_at <= $2
       and ($3::uuid is null or calls.campaign_id = $3)
       and calls.answered_at is not null
@@ -843,7 +860,7 @@ const telephonyReliabilitySql = `
   with filtered_calls as (
     select *
     from calls
-    where calls.created_at >= $1
+    where calls.direction='outbound' and calls.created_at >= $1
       and calls.created_at <= $2
       and ($3::uuid is null or calls.campaign_id = $3)
   ), reliability as (
@@ -857,11 +874,11 @@ const telephonyReliabilitySql = `
         where terminal_source = 'active_call_reconciliation'
           or exists (
             select 1 from call_events
-            where call_events.call_id = filtered_calls.id
+            where call_events.call_id = calls.id
               and call_events.event_type = 'freeswitch_reconciliation_closed_missing_call'
           )
       ) as reconciliation_closures
-    from filtered_calls
+    from filtered_calls calls
   )
   select reliability.*, observability.*
   from reliability

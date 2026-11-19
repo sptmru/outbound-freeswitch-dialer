@@ -1,3 +1,5 @@
+import type { CallHistoryContext } from "@outbound-dialer/shared";
+import { historyContextSql } from "./call-history-context.js";
 import { lstat } from "node:fs/promises";
 import { resolve } from "node:path";
 import { PassThrough, type Readable } from "node:stream";
@@ -8,6 +10,7 @@ const ZIP_ENTRY_DATE = new Date("1980-01-01T00:00:00.000Z");
 const FILE_CHECK_CONCURRENCY = 16;
 
 type RecordingRow = {
+  history_context?: CallHistoryContext;
   id: string;
   call_recording_path: string;
   created_at: Date;
@@ -17,6 +20,7 @@ type RecordingRow = {
 };
 
 type ExportableRecording = {
+  context?: CallHistoryContext;
   id: string;
   filePath: string;
   createdAt: Date;
@@ -79,6 +83,7 @@ export async function inspectCampaignRecordingExport(
     `
       select
         calls.id,
+        ${historyContextSql} as history_context,
         calls.call_recording_path,
         calls.created_at,
         calls.destination_number,
@@ -128,6 +133,7 @@ async function filterExportableRecordings(
         if (!row) continue;
 
         const metadata = {
+          context: row.history_context,
           id: row.id,
           createdAt: row.created_at,
           destinationNumber: row.destination_number,
@@ -234,7 +240,12 @@ function recordingManifest(recordings: ExportableRecording[], skipped: SkippedRe
       "outcome",
       "filename",
       "export_status",
-      "skip_reason"
+      "skip_reason",
+      "direction",
+      "did",
+      "queue_id",
+      "agent_talk_ms",
+      "transfer_count"
     ],
     ...recordings.map((recording) => [
       recording.id,
@@ -244,7 +255,8 @@ function recordingManifest(recordings: ExportableRecording[], skipped: SkippedRe
       recording.outcome ?? "",
       `${recording.id}.wav`,
       "included",
-      ""
+      "",
+      ...manifestContext(recording)
     ]),
     ...skipped.map((recording) => [
       recording.id,
@@ -254,10 +266,21 @@ function recordingManifest(recordings: ExportableRecording[], skipped: SkippedRe
       recording.outcome ?? "",
       "",
       "skipped",
-      recording.reason
+      recording.reason,
+      ...manifestContext(recording)
     ])
   ];
   return `${rows.map((row) => row.map(spreadsheetSafeCsvCell).join(",")).join("\n")}\n`;
+}
+
+function manifestContext(recording: Pick<ExportableRecording, "context">): string[] {
+  return [
+    recording.context?.direction ?? "outbound",
+    recording.context?.did ?? "",
+    recording.context?.queueId ?? "",
+    String(recording.context?.agentTalkMs ?? ""),
+    String(recording.context?.transferCount ?? "")
+  ];
 }
 
 function spreadsheetSafeCsvCell(value: string): string {

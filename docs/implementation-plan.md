@@ -227,3 +227,5 @@ retains one path across handovers/forwarding, and separates no-media calls from
 missing expected output. The criterion record in H02 #39 distinguishes automated
 DB/API/FreeSWITCH checks from the mandatory representative human listening check;
 H02 remains open while that check is unverified.
+
+H03 [inbound/transfer reporting](inbound-history-reporting.md) adds the native history/read models, filters, participant attribution and CSV/ZIP metadata. Local DB/API/browser and regression results are recorded with issue H03 #40; target enablement remains I05.

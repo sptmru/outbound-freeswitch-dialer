@@ -291,6 +291,9 @@ export async function getCallRecordingAudioUrl(callId: string): Promise<string> 
 }
 
 export type CallHistoryFilters = {
+  direction?: "inbound" | "outbound";
+  did?: string;
+  queueId?: string;
   page?: number;
   pageSize?: number;
   q?: string;

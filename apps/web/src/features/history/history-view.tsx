@@ -1,6 +1,9 @@
+import type { InboundQueuesResponse } from "@outbound-dialer/shared";
+import { CallJourneyView } from "./call-journey-view";
 import { useEffect, useRef, useState } from "react";
 import { Activity, Download, History } from "lucide-react";
 import {
+  apiFetch,
   checkCampaignRecordingsExport,
   downloadCallHistoryCsv,
   downloadCallPcap,
@@ -51,6 +54,10 @@ export function HistoryView({
     total: admin.callHistory.length,
     totalPages: admin.callHistory.length ? 1 : 0
   });
+  const [queues, setQueues] = useState<InboundQueuesResponse["items"]>([]);
+  const [queueId, setQueueId] = useState("");
+  const [direction, setDirection] = useState<"" | "inbound" | "outbound">("");
+  const [did, setDid] = useState("");
   const [query, setQuery] = useState("");
   const [campaignId, setCampaignId] = useState("");
   const [outcome, setOutcome] = useState("");
@@ -63,6 +70,21 @@ export function HistoryView({
   const [page, setPage] = useState(1);
   const [historyPending, setHistoryPending] = useState(false);
   const [pcapPendingId, setPcapPendingId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (direction !== "inbound") return;
+    let active = true;
+    void apiFetch<InboundQueuesResponse>("/admin/inbound-queues")
+      .then((response) => {
+        if (active) setQueues(response.items);
+      })
+      .catch(() => {
+        if (active) setError("Could not load queue filters");
+      });
+    return () => {
+      active = false;
+    };
+  }, [direction]);
 
   useEffect(
     () => () => {
@@ -79,6 +101,9 @@ export function HistoryView({
       void fetchCallHistory({
         page,
         pageSize: 25,
+        direction: direction || undefined,
+        queueId: queueId || undefined,
+        did: did || undefined,
         q: query || undefined,
         campaignId: campaignId || undefined,
         agentId: agentId || undefined,
@@ -104,6 +129,9 @@ export function HistoryView({
       window.clearTimeout(timeout);
     };
   }, [
+    direction,
+    did,
+    queueId,
     agentId,
     avmdReview,
     campaignId,
@@ -147,6 +175,9 @@ export function HistoryView({
     setError(null);
     try {
       const blob = await downloadCallHistoryCsv({
+        direction: direction || undefined,
+        queueId: queueId || undefined,
+        did: did || undefined,
         q: query || undefined,
         campaignId: campaignId || undefined,
         agentId: agentId || undefined,
@@ -394,6 +425,55 @@ export function HistoryView({
           {error}
         </p>
       )}
+      <div className="filter-bar">
+        <label>
+          Direction
+          <select
+            aria-label="Direction"
+            value={direction}
+            onChange={(event) => {
+              setDirection(event.target.value as typeof direction);
+              setQueueId("");
+              setPage(1);
+            }}
+          >
+            <option value="">All directions</option>
+            <option value="inbound">Inbound</option>
+            <option value="outbound">Outbound</option>
+          </select>
+        </label>
+        {direction === "inbound" && (
+          <label>
+            Queue
+            <select
+              aria-label="Queue"
+              value={queueId}
+              onChange={(event) => {
+                setQueueId(event.target.value);
+                setPage(1);
+              }}
+            >
+              <option value="">All queues</option>
+              {queues.map((q) => (
+                <option value={q.id} key={q.id}>
+                  {q.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        <label>
+          DID
+          <input
+            aria-label="DID"
+            value={did}
+            onChange={(event) => {
+              setDid(event.target.value);
+              setPage(1);
+            }}
+          />
+        </label>
+      </div>
       <div className="history-head" aria-hidden="true">
         <span>Lead</span>
         <span>Campaign</span>
@@ -413,6 +493,10 @@ export function HistoryView({
               <span className="history-lead">
                 <strong>{call.leadName}</strong>
                 <small>{call.phoneNumber}</small>
+                <small>
+                  {call.context?.direction ?? "outbound"}
+                  {call.context?.did ? ` · ${call.context.did}` : ""}
+                </small>
               </span>
               <span>{call.campaignName}</span>
               <span>{call.agentName}</span>
@@ -439,7 +523,11 @@ export function HistoryView({
                     <div className="call-detail-summary">
                       <span>
                         <strong>Type</strong>
-                        {detail.call.manualDial ? "Manual dial" : "Campaign lead"}
+                        {detail.call.context?.direction === "inbound"
+                          ? "Inbound"
+                          : detail.call.manualDial
+                            ? "Manual dial"
+                            : "Campaign lead"}
                       </span>
                       <span>
                         <strong>Answered</strong>
@@ -505,6 +593,7 @@ export function HistoryView({
                         {detail.call.hangupCause ?? detail.call.lastReasonCode ?? "Not reported"}
                       </span>
                     </div>
+                    <CallJourneyView detail={detail} />
                     {detail.call.recordingAvailable && (
                       <CallRecordingPlayer callId={detail.call.id} leadName={detail.call.leadName} />
                     )}
@@ -559,8 +648,14 @@ export function HistoryView({
                           <CallTechnicalEvidence detail={detail} />
                           <div className="call-leg-grid">
                             {detail.legs?.map((leg) => (
-                              <div className="call-leg-card" key={leg.type}>
-                                <strong>{leg.type === "agent" ? "Agent leg" : "Customer leg"}</strong>
+                              <div className="call-leg-card" key={leg.id ?? leg.freeswitchUuid ?? leg.type}>
+                                <strong>
+                                  {leg.type === "agent"
+                                    ? "Agent leg"
+                                    : leg.type === "external"
+                                      ? "External leg"
+                                      : "Customer leg"}
+                                </strong>
                                 <span>{leg.state}</span>
                                 <code>{leg.freeswitchUuid ?? "UUID not assigned"}</code>
                                 {leg.sipUri && <small>{leg.sipUri}</small>}

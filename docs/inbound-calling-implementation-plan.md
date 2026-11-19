@@ -816,6 +816,8 @@ Keep `.env`, Compose, and `scripts/deploy.sh`. Document/validate any new variabl
 
 ## 11. History, Recording, and Observability
 
+[H03 reporting contracts and evidence](inbound-history-reporting.md) define the implemented history, participation, analytics and export readers.
+
 - Show direction, DID, campaign/queue, wait, participants, offers, transfers, flow steps,
   and terminal reason. Agent ignore or offer expiry is not customer abandonment.
 - Separate queue exit from flow outcome, e.g. queue timeout plus successful audio.

@@ -368,6 +368,23 @@ export interface AdminOverviewResponse {
 }
 
 export interface AdminAnalyticsResponse {
+  inbound?: {
+    calls: number;
+    agentConnected: number;
+    queueTimeouts: number;
+    averageWaitMs: number | null;
+    transfers: number;
+  };
+  participation?: Array<{
+    agentId: string;
+    agentName: string;
+    direction: "inbound" | "outbound";
+    calls: number;
+    connectedMs: number;
+    mediaLegs: number;
+    browserSegments: number;
+  }>;
+
   filters: {
     from: string;
     to: string;
@@ -522,7 +539,95 @@ export type AdminRecordingListResponse = AdminLibraryPage<AdminOverviewResponse[
 
 export type AdminUserListResponse = AdminLibraryPage<AdminOverviewResponse["users"][number]>;
 
+export interface CallHistoryContext {
+  direction: "inbound" | "outbound";
+  did: string | null;
+  queueId: string | null;
+  queueName: string | null;
+  callingNumber: string | null;
+  calledNumber: string | null;
+  queueWaitMs: number | null;
+  queueExit: string | null;
+  terminalReason: string | null;
+  manualCorrectionAt: string | null;
+  agentTalkMs: number | null;
+  participantCount: number;
+  transferCount: number;
+  flowOutcome: string | null;
+}
+
+export interface JourneyPage<T> {
+  items: T[];
+  total: number;
+  truncated: boolean;
+}
+export interface CallJourney {
+  participants: JourneyPage<{
+    id: string;
+    role: string;
+    agentId: string | null;
+    agentName: string | null;
+    externalNumber: string | null;
+    joinedAt: string | null;
+    connectedAt: string | null;
+    leftAt: string | null;
+    endReason: string | null;
+    connectedMs: number | null;
+    legId: string | null;
+    legUuid: string | null;
+    media: {
+      capturedAt: string;
+      inboundPackets: number | null;
+      outboundPackets: number | null;
+      mos: number | null;
+    } | null;
+    browserMedia: {
+      capturedAt: string;
+      startedAt: string;
+      endedAt: string;
+      sampleCount: number;
+      packetsReceived: number | null;
+      packetsSent: number | null;
+    } | null;
+  }>;
+  offers: JourneyPage<{
+    id: string;
+    kind: string;
+    agentId: string;
+    agentName: string;
+    attempt: number;
+    state: string;
+    reason: string | null;
+    createdAt: string;
+    closedAt: string | null;
+  }>;
+  transfers: JourneyPage<{
+    id: string;
+    attempt: number;
+    sourceAgentId: string;
+    sourceName: string;
+    recipientAgentId: string;
+    recipientName: string;
+    state: string;
+    reason: string | null;
+    createdAt: string;
+    closedAt: string | null;
+  }>;
+  steps: JourneyPage<{
+    id: string;
+    step: string | null;
+    flowVersionId: string | null;
+    action: string;
+    state: string;
+    outcome: string | null;
+    reason: string | null;
+    createdAt: string;
+    resolvedAt: string | null;
+  }>;
+}
+
 export interface CallHistoryItem {
+  context?: CallHistoryContext;
   id: string;
   leadName: string;
   agentName: string;
@@ -530,7 +635,15 @@ export interface CallHistoryItem {
   campaignName: string;
   campaignId: string | null;
   agentId: string | null;
-  state: CallState;
+  state:
+    | CallState
+    | "received"
+    | "queued"
+    | "connecting"
+    | "agent_connected"
+    | "fallback"
+    | "audio_playing"
+    | "forwarding";
   outcome: CallOutcome | null;
   createdAt: string;
   durationSeconds: number;
@@ -550,6 +663,7 @@ export interface CallHistoryResponse {
 }
 
 export interface CallDetailResponse {
+  journey?: CallJourney;
   call: AdminOverviewResponse["callHistory"][number] & {
     startedAt: string | null;
     answeredAt: string | null;
@@ -581,7 +695,9 @@ export interface CallDetailResponse {
   mediaQuality: Array<CallMediaQuality>;
   browserMedia: BrowserMediaTelemetry | null;
   legs: Array<{
-    type: "agent" | "customer";
+    id?: string;
+    participantId?: string | null;
+    type: "agent" | "customer" | "external";
     state: string;
     freeswitchUuid: string | null;
     sipUri: string | null;

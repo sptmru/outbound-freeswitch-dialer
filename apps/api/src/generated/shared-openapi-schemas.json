@@ -1486,6 +1486,7 @@
     "$id": "CallHistoryItem",
     "type": "object",
     "properties": {
+      "context": { "$ref": "CallHistoryContext#" },
       "id": { "type": "string" },
       "leadName": { "type": "string" },
       "agentName": { "type": "string" },
@@ -1493,7 +1494,18 @@
       "campaignName": { "type": "string" },
       "campaignId": { "type": ["string", "null"] },
       "agentId": { "type": ["string", "null"] },
-      "state": { "$ref": "CallState#" },
+      "state": {
+        "anyOf": [
+          { "$ref": "CallState#" },
+          { "type": "string", "const": "received" },
+          { "type": "string", "const": "queued" },
+          { "type": "string", "const": "connecting" },
+          { "type": "string", "const": "agent_connected" },
+          { "type": "string", "const": "fallback" },
+          { "type": "string", "const": "audio_playing" },
+          { "type": "string", "const": "forwarding" }
+        ]
+      },
       "outcome": { "anyOf": [{ "$ref": "CallOutcome#" }, { "type": "null" }] },
       "createdAt": { "type": "string" },
       "durationSeconds": { "type": "number" },
@@ -1526,10 +1538,84 @@
     ],
     "additionalProperties": false
   },
+  "CallHistoryContext": {
+    "$id": "CallHistoryContext",
+    "type": "object",
+    "properties": {
+      "direction": { "type": "string", "enum": ["inbound", "outbound"] },
+      "did": { "type": ["string", "null"] },
+      "queueId": { "type": ["string", "null"] },
+      "queueName": { "type": ["string", "null"] },
+      "callingNumber": { "type": ["string", "null"] },
+      "calledNumber": { "type": ["string", "null"] },
+      "queueWaitMs": { "type": ["number", "null"] },
+      "queueExit": { "type": ["string", "null"] },
+      "terminalReason": { "type": ["string", "null"] },
+      "manualCorrectionAt": { "type": ["string", "null"] },
+      "agentTalkMs": { "type": ["number", "null"] },
+      "participantCount": { "type": "number" },
+      "transferCount": { "type": "number" },
+      "flowOutcome": { "type": ["string", "null"] }
+    },
+    "required": [
+      "direction",
+      "did",
+      "queueId",
+      "queueName",
+      "callingNumber",
+      "calledNumber",
+      "queueWaitMs",
+      "queueExit",
+      "terminalReason",
+      "manualCorrectionAt",
+      "agentTalkMs",
+      "participantCount",
+      "transferCount",
+      "flowOutcome"
+    ],
+    "additionalProperties": false
+  },
   "AdminAnalyticsResponse": {
     "$id": "AdminAnalyticsResponse",
     "type": "object",
     "properties": {
+      "inbound": {
+        "type": "object",
+        "properties": {
+          "calls": { "type": "number" },
+          "agentConnected": { "type": "number" },
+          "queueTimeouts": { "type": "number" },
+          "averageWaitMs": { "type": ["number", "null"] },
+          "transfers": { "type": "number" }
+        },
+        "required": ["calls", "agentConnected", "queueTimeouts", "averageWaitMs", "transfers"],
+        "additionalProperties": false
+      },
+      "participation": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "agentId": { "type": "string" },
+            "agentName": { "type": "string" },
+            "direction": { "type": "string", "enum": ["inbound", "outbound"] },
+            "calls": { "type": "number" },
+            "connectedMs": { "type": "number" },
+            "mediaLegs": { "type": "number" },
+            "browserSegments": { "type": "number" }
+          },
+          "required": [
+            "agentId",
+            "agentName",
+            "direction",
+            "calls",
+            "connectedMs",
+            "mediaLegs",
+            "browserSegments"
+          ],
+          "additionalProperties": false
+        }
+      },
       "filters": {
         "type": "object",
         "properties": {
@@ -2033,6 +2119,225 @@
     "required": ["items", "page", "pageSize", "total", "totalPages"],
     "additionalProperties": false
   },
+  "CallJourney": {
+    "$id": "CallJourney",
+    "type": "object",
+    "properties": {
+      "participants": { "$ref": "GeneratedSchema4#" },
+      "offers": { "$ref": "GeneratedSchema5#" },
+      "transfers": { "$ref": "GeneratedSchema6#" },
+      "steps": { "$ref": "GeneratedSchema7#" }
+    },
+    "required": ["participants", "offers", "transfers", "steps"],
+    "additionalProperties": false
+  },
+  "GeneratedSchema4": {
+    "$id": "GeneratedSchema4",
+    "type": "object",
+    "properties": {
+      "items": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": { "type": "string" },
+            "role": { "type": "string" },
+            "agentId": { "type": ["string", "null"] },
+            "agentName": { "type": ["string", "null"] },
+            "externalNumber": { "type": ["string", "null"] },
+            "joinedAt": { "type": ["string", "null"] },
+            "connectedAt": { "type": ["string", "null"] },
+            "leftAt": { "type": ["string", "null"] },
+            "endReason": { "type": ["string", "null"] },
+            "connectedMs": { "type": ["number", "null"] },
+            "legId": { "type": ["string", "null"] },
+            "legUuid": { "type": ["string", "null"] },
+            "media": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "capturedAt": { "type": "string" },
+                    "inboundPackets": { "type": ["number", "null"] },
+                    "outboundPackets": { "type": ["number", "null"] },
+                    "mos": { "type": ["number", "null"] }
+                  },
+                  "required": ["capturedAt", "inboundPackets", "outboundPackets", "mos"],
+                  "additionalProperties": false
+                },
+                { "type": "null" }
+              ]
+            },
+            "browserMedia": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "capturedAt": { "type": "string" },
+                    "startedAt": { "type": "string" },
+                    "endedAt": { "type": "string" },
+                    "sampleCount": { "type": "number" },
+                    "packetsReceived": { "type": ["number", "null"] },
+                    "packetsSent": { "type": ["number", "null"] }
+                  },
+                  "required": [
+                    "capturedAt",
+                    "startedAt",
+                    "endedAt",
+                    "sampleCount",
+                    "packetsReceived",
+                    "packetsSent"
+                  ],
+                  "additionalProperties": false
+                },
+                { "type": "null" }
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "role",
+            "agentId",
+            "agentName",
+            "externalNumber",
+            "joinedAt",
+            "connectedAt",
+            "leftAt",
+            "endReason",
+            "connectedMs",
+            "legId",
+            "legUuid",
+            "media",
+            "browserMedia"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "total": { "type": "number" },
+      "truncated": { "type": "boolean" }
+    },
+    "required": ["items", "total", "truncated"],
+    "additionalProperties": false
+  },
+  "GeneratedSchema5": {
+    "$id": "GeneratedSchema5",
+    "type": "object",
+    "properties": {
+      "items": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": { "type": "string" },
+            "kind": { "type": "string" },
+            "agentId": { "type": "string" },
+            "agentName": { "type": "string" },
+            "attempt": { "type": "number" },
+            "state": { "type": "string" },
+            "reason": { "type": ["string", "null"] },
+            "createdAt": { "type": "string" },
+            "closedAt": { "type": ["string", "null"] }
+          },
+          "required": [
+            "id",
+            "kind",
+            "agentId",
+            "agentName",
+            "attempt",
+            "state",
+            "reason",
+            "createdAt",
+            "closedAt"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "total": { "type": "number" },
+      "truncated": { "type": "boolean" }
+    },
+    "required": ["items", "total", "truncated"],
+    "additionalProperties": false
+  },
+  "GeneratedSchema6": {
+    "$id": "GeneratedSchema6",
+    "type": "object",
+    "properties": {
+      "items": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": { "type": "string" },
+            "attempt": { "type": "number" },
+            "sourceAgentId": { "type": "string" },
+            "sourceName": { "type": "string" },
+            "recipientAgentId": { "type": "string" },
+            "recipientName": { "type": "string" },
+            "state": { "type": "string" },
+            "reason": { "type": ["string", "null"] },
+            "createdAt": { "type": "string" },
+            "closedAt": { "type": ["string", "null"] }
+          },
+          "required": [
+            "id",
+            "attempt",
+            "sourceAgentId",
+            "sourceName",
+            "recipientAgentId",
+            "recipientName",
+            "state",
+            "reason",
+            "createdAt",
+            "closedAt"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "total": { "type": "number" },
+      "truncated": { "type": "boolean" }
+    },
+    "required": ["items", "total", "truncated"],
+    "additionalProperties": false
+  },
+  "GeneratedSchema7": {
+    "$id": "GeneratedSchema7",
+    "type": "object",
+    "properties": {
+      "items": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": { "type": "string" },
+            "step": { "type": ["string", "null"] },
+            "flowVersionId": { "type": ["string", "null"] },
+            "action": { "type": "string" },
+            "state": { "type": "string" },
+            "outcome": { "type": ["string", "null"] },
+            "reason": { "type": ["string", "null"] },
+            "createdAt": { "type": "string" },
+            "resolvedAt": { "type": ["string", "null"] }
+          },
+          "required": [
+            "id",
+            "step",
+            "flowVersionId",
+            "action",
+            "state",
+            "outcome",
+            "reason",
+            "createdAt",
+            "resolvedAt"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "total": { "type": "number" },
+      "truncated": { "type": "boolean" }
+    },
+    "required": ["items", "total", "truncated"],
+    "additionalProperties": false
+  },
   "CallHistoryResponse": {
     "$id": "CallHistoryResponse",
     "type": "object",
@@ -2050,6 +2355,7 @@
     "$id": "CallDetailResponse",
     "type": "object",
     "properties": {
+      "journey": { "$ref": "CallJourney#" },
       "call": {
         "type": "object",
         "additionalProperties": false,
@@ -2079,6 +2385,7 @@
           "terminalSource": { "type": ["string", "null"] },
           "terminalEventName": { "type": ["string", "null"] },
           "finalizationLatencyMs": { "type": ["number", "null"] },
+          "context": { "$ref": "CallHistoryContext#" },
           "id": { "type": "string" },
           "leadName": { "type": "string" },
           "agentName": { "type": "string" },
@@ -2086,7 +2393,18 @@
           "campaignName": { "type": "string" },
           "campaignId": { "type": ["string", "null"] },
           "agentId": { "type": ["string", "null"] },
-          "state": { "$ref": "CallState#" },
+          "state": {
+            "anyOf": [
+              { "$ref": "CallState#" },
+              { "type": "string", "const": "received" },
+              { "type": "string", "const": "queued" },
+              { "type": "string", "const": "connecting" },
+              { "type": "string", "const": "agent_connected" },
+              { "type": "string", "const": "fallback" },
+              { "type": "string", "const": "audio_playing" },
+              { "type": "string", "const": "forwarding" }
+            ]
+          },
           "outcome": { "anyOf": [{ "$ref": "CallOutcome#" }, { "type": "null" }] },
           "createdAt": { "type": "string" },
           "durationSeconds": { "type": "number" },
@@ -2145,7 +2463,9 @@
         "items": {
           "type": "object",
           "properties": {
-            "type": { "type": "string", "enum": ["agent", "customer"] },
+            "id": { "type": "string" },
+            "participantId": { "type": ["string", "null"] },
+            "type": { "type": "string", "enum": ["agent", "customer", "external"] },
             "state": { "type": "string" },
             "freeswitchUuid": { "type": ["string", "null"] },
             "sipUri": { "type": ["string", "null"] },

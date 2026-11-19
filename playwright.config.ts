@@ -3,7 +3,12 @@ import { defineConfig, devices } from "@playwright/test";
 export default defineConfig({
   testDir: "./tests/e2e",
   // This fixture needs its own Vite entry; it is outside the built preview.
-  testIgnore: ["**/agent-desk-offers.spec.ts", "**/agent-desk-transfers.spec.ts", "**/inbound-admin.spec.ts"],
+  testIgnore: [
+    "**/agent-desk-offers.spec.ts",
+    "**/agent-desk-transfers.spec.ts",
+    "**/inbound-admin.spec.ts",
+    "**/inbound-history.spec.ts"
+  ],
   fullyParallel: true,
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 2 : 0,

@@ -264,3 +264,5 @@ Transfers and external legs reuse that recorder; ambiguous startup retains its
 claim to prevent truncation on replay. Terminal finalization waits for customer
 cleanup and distinguishes absent eligible media from missing expected output.
 See [H02 recording policy and evidence](inbound-recording-continuity.md).
+
+H03 [history and analytics readers](inbound-history-reporting.md) preserve one call row, expose concrete participant/leg evidence, separate inbound context from outbound attempts and stream bounded CSV projections. No native lifecycle bootstrap is enabled.
