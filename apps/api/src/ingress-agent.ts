@@ -39,6 +39,13 @@ export async function startIngressAgent(
           res.end(JSON.stringify(journal.records()));
         } else if (control && req.method === "GET" && req.url === "/status") {
           res.end(JSON.stringify({ ...journal.status(), failures }));
+        } else if (control && req.method === "GET" && req.url?.startsWith("/terminal-import?")) {
+          const query = new URL(req.url, "http://localhost").searchParams;
+          const uuid = query.get("uuid") ?? "";
+          const sequence = Number(query.get("sequence"));
+          assert.match(uuid, ingressUuid);
+          assert.ok(Number.isSafeInteger(sequence) && sequence > 0);
+          res.end(journal.needsTerminalImport(uuid, sequence) ? "pending" : "settled");
         } else {
           assert.equal(req.method, "POST");
           const p = new URLSearchParams(body),

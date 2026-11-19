@@ -185,6 +185,15 @@ export class IngressJournal {
       .prepare("UPDATE evidence SET ack=max(ack,?) WHERE uuid=? AND sequence=?")
       .run(sequence, uuid, sequence);
   }
+  needsTerminalImport(uuid: string, sequence: number) {
+    const row = this.db.prepare("SELECT ack,sequence,record FROM evidence WHERE uuid=?").get(uuid);
+    return Boolean(
+      row &&
+      row.sequence === sequence &&
+      Number(row.ack) < sequence &&
+      JSON.parse(String(row.record)).terminalUs !== null
+    );
+  }
   status() {
     const all = this.db.prepare("SELECT record,ack,sequence FROM evidence").all();
     const pending = all.filter((r) => Number(r.ack) < Number(r.sequence));

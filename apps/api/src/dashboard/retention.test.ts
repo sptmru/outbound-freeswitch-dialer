@@ -47,6 +47,7 @@ describe("retention", () => {
             ]),
       (sql, params) => {
         clientQueries.push({ sql, params });
+        if (sql.includes("select id from calls where")) return rows([{ id: successfulId }]);
         return sql.includes("delete from calls") ? result([], 1) : rows([]);
       }
     );
@@ -67,7 +68,7 @@ describe("retention", () => {
     assert.match(metadataUpdate?.sql ?? "", /call_recording_status = 'expired'/);
     assert.deepEqual(failures, [failedId]);
     assert.match(
-      clientQueries.find((query) => query.sql.includes("delete from calls"))?.sql ?? "",
+      clientQueries.find((query) => query.sql.includes("select id from calls where"))?.sql ?? "",
       /call_recording_path is null/
     );
     assert.equal(retention.recordingFiles, 1);

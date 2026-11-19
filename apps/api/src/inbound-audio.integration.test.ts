@@ -486,6 +486,18 @@ test(
         "update call_operations set state='canceled',resolved_at=now(),resolution_evidence='F02 synthetic terminal fixture' where id=$1",
         [operation.id]
       );
+      assert.equal((await deleteRecording(f.pool, a.id)).status, "in_use");
+      await f.pool.query(
+        "update inbound_ingress_evidence set imported_sequence=evidence_sequence,acknowledged_sequence=evidence_sequence where call_id=$1",
+        [row.uuid]
+      );
+      assert.equal((await deleteRecording(f.pool, a.id)).status, "in_use");
+      await f.pool.query("update call_legs set state='ended',ended_at=now() where call_id=$1", [row.uuid]);
+      await f.pool.query("update call_participants set left_at=now() where call_id=$1", [row.uuid]);
+      await f.pool.query(
+        "update call_capacity_reservations set state='released',released_at=now() where call_id=$1",
+        [row.uuid]
+      );
       assert.equal((await deleteRecording(f.pool, a.id)).status, "deleted");
     } finally {
       await f.cleanup();

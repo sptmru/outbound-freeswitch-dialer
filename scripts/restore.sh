@@ -11,6 +11,8 @@ STATE_FILE="${ROOT_DIR}/logs/deployment-state.env"
 source "${ROOT_DIR}/scripts/deployment-state.sh"
 # shellcheck disable=SC1091
 source "${ROOT_DIR}/scripts/host-operation-lock.sh"
+# shellcheck disable=SC1091
+source "${ROOT_DIR}/scripts/backup-ingress-journal.sh"
 acquire_host_operation_lock "${ROOT_DIR}" "restore"
 
 [[ -n "${BACKUP_FILE}" && -f "${BACKUP_FILE}" ]] || { echo "Usage: RESTORE_CONFIRM=restore-<database> $0 <backup.tar.gz.enc>" >&2; exit 1; }
@@ -92,6 +94,18 @@ if ! node "${ROOT_DIR}/scripts/backup-envelope.mjs" decrypt "${BACKUP_FILE}" "${
 fi
 tar -xzf "${work_dir}/bundle.tar.gz" -C "${work_dir}"
 tar -tzf "${work_dir}/recordings.tar.gz" >/dev/null
+validate_ingress_journal_bundle "${work_dir}"
+journal_input=/dev/null
+if [[ -f "${work_dir}/ingress.sqlite" ]]; then
+  [[ "${backup_is_authenticated}" == "true" ]] || {
+    echo "Ingress journal restore requires an authenticated backup" >&2
+    exit 1
+  }
+  journal_input="${work_dir}/ingress.sqlite"
+elif [[ "${FREESWITCH_INGRESS_ENABLED:-false}" == "true" ]]; then
+  echo "Refusing to restore an ingress-enabled installation without a journal snapshot" >&2
+  exit 1
+fi
 backup_source_commit=""
 backup_source_database=""
 if [[ -f "${work_dir}/metadata.txt" ]]; then
@@ -176,7 +190,21 @@ mark_restore_failed() {
 }
 trap mark_restore_failed ERR
 
-compose stop api freeswitch pcap-capture
+compose stop api freeswitch pcap-capture ingress-journal
+journal_restore=false
+if ingress_journal_volume_exists; then
+  journal_restore=true
+elif [[ "$?" != "1" ]]; then
+  echo "Could not inspect the ingress journal volume" >&2
+  false
+elif [[ "${journal_input}" != "/dev/null" ]]; then
+  journal_restore=true
+fi
+if [[ "${journal_restore}" == "true" ]]; then
+  # Refuse before removing the SQL database if the target holds another
+  # generation or newer receipts. Leave the current volume intact.
+  run_ingress_journal_tool guard < "${journal_input}"
+fi
 if [[ "${RESTORE_RECORDINGS:-true}" == "true" ]]; then
   recordings_parent="$(cd "$(dirname "${RECORDINGS_DIR}")" && pwd)"
   recordings_name="$(basename "${RECORDINGS_DIR}")"
@@ -216,6 +244,9 @@ compose exec -T postgres pg_restore \
   --username "${POSTGRES_USER}" \
   --dbname "${POSTGRES_DB}" \
   --no-owner --no-privileges --exit-on-error --single-transaction < "${work_dir}/database.dump"
+if [[ "${journal_restore}" == "true" && "${journal_input}" != "/dev/null" ]]; then
+  run_ingress_journal_tool install < "${journal_input}"
+fi
 ENV_FILE="${ENV_FILE}" "${ROOT_DIR}/scripts/configure-monitoring-db-role.sh"
 
 if [[ "${RESTORE_RECORDINGS:-true}" == "true" ]]; then

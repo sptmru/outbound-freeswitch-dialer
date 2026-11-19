@@ -233,6 +233,8 @@ Campaign bulk export uses a separate admin-only GET. Call History first checks t
 - Any other unlink error leaves metadata and the call row intact and emits an error/retention-failure signal for retry.
 - Manual admin execution uses the same policy and supports dry-run counts.
 
+Drained inbound history and durable work follow the [inbound retention and recovery contract](inbound-retention.md).
+
 Retention does not implement legal hold. Audit retention and legal-hold rules require an external policy before production acceptance.
 
 ## Backup, Restore, And Rollback
@@ -240,7 +242,7 @@ Retention does not implement legal hold. Audit retention and legal-hold rules re
 - Backup refuses active calls and briefly quiesces the API/FreeSWITCH writers while capturing the PostgreSQL dump and recordings archive. It packages those with metadata into an `ODBACKUP2` AES-256-GCM envelope. A scrypt-derived key, random salt/IV, authenticated header, and GCM tag detect wrong secrets and tampering. The local archive is self-verified before upload or success-metric publication.
 - Verification authenticates/decrypts first, validates archives, and checks `pg_restore --list`.
 - Deploy, restore, and rollback atomically record a pending target before changing the runtime; only a successful health/smoke sequence promotes it to `CURRENT_VERSION`.
-- Restore stops API/FreeSWITCH, uses `pg_restore --clean --if-exists --single-transaction`, snapshots recordings before replacement, restarts with health waits, runs the web smoke test, records the restored SHA, and reinstalls backup/certificate cron jobs.
+- Restore stops the API, media services and ingress sidecar, validates the paired ingress journal, stages recordings, and restores into an empty application database with `pg_restore --single-transaction`. It installs the verified journal before restarting the stack, waits for health, runs the smoke test and records the restored SHA.
 - Application rollback reuses retained SHA-tagged images. It does not reverse forward-only migrations.
 - SIP secrets remain dual-readable. First deploy with `v1` writes and the independent key present; only a later deploy enables `v2` writes/migration after confirming the previous image is a safe dual-read rollback target.
 

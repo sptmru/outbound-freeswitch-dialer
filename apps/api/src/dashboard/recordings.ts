@@ -5,6 +5,7 @@ import { stat } from "node:fs/promises";
 import { promisify } from "node:util";
 import type pg from "pg";
 import type { AdminOverviewResponse, AdminRecordingListResponse } from "@outbound-dialer/shared";
+import { drainedCallPredicate } from "./retention.js";
 
 export type RecordingExtension = ".mp3" | ".wav";
 
@@ -401,22 +402,19 @@ export async function deleteRecording(pool: pg.Pool, recordingId: string): Promi
       return { status: "assigned" };
     }
     const activeReference = await client.query(
-      `select 1 from calls c where recording_id = $1 and
-       ((ended_at is null and state not in ('completed', 'failed', 'canceled')) or exists(
-         select 1 from call_operations o where o.call_id=c.id and o.resolved_at is null)) limit 1`,
+      `select 1 from calls where recording_id = $1 and not (${drainedCallPredicate}) limit 1`,
       [recordingId]
     );
     const inboundReference = await client.query(
       `select 1 from inbound_flow_versions where first_audio_id = $1 or second_audio_id = $1
        union all select 1 from inbound_queues where waiting_audio_id = $1
        union all select 1 from inbound_ingress_route_snapshots where waiting_audio_id = $1
-       union all select 1 from inbound_ingress_evidence e left join calls c on c.id=e.call_id
+       union all select 1 from inbound_ingress_evidence e left join calls on calls.id=e.call_id
          where e.route_snapshot #>> '{configuration,waiting_audio_id}'=$1::text
-           and (e.terminal_at is null or c.ended_at is null or exists(
-             select 1 from call_operations o where o.call_id=c.id and o.resolved_at is null))
-       union all select 1 from inbound_queue_admissions a join calls c on c.id=a.call_id
-         where a.waiting_audio_id=$1 and (c.ended_at is null or exists(
-           select 1 from call_operations o where o.call_id=c.id and o.resolved_at is null)) limit 1`,
+           and (e.terminal_at is null or e.acknowledged_sequence <> e.evidence_sequence
+             or (calls.id is not null and not (${drainedCallPredicate})))
+       union all select 1 from inbound_queue_admissions a join calls on calls.id=a.call_id
+         where a.waiting_audio_id=$1 and not (${drainedCallPredicate}) limit 1`,
       [recordingId]
     );
     if (activeReference.rowCount || inboundReference.rowCount) {

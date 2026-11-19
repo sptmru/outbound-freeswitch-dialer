@@ -7,7 +7,8 @@ suite=db
 case "${1:-}" in
   "") ;;
   --browser) suite=browser; shift ;;
-  *) echo 'Usage: test-inbound-db.sh [--browser [Playwright arguments]]' >&2; exit 1 ;;
+  --restore) suite=restore; shift ;;
+  *) echo 'Usage: test-inbound-db.sh [--browser [Playwright arguments] | --restore]' >&2; exit 1 ;;
 esac
 PG_STORAGE="${INBOUND_PG_STORAGE:-volume}"
 storage_args=()
@@ -36,6 +37,9 @@ chmod 777 "$RUN_DIR/socket"
 git rev-parse HEAD > "$RUN_DIR/base-revision.txt"
 printf '%s\n' "$PG_STORAGE" > "$RUN_DIR/storage.txt"
 sha256sum apps/api/src/call-history*.ts apps/api/src/dashboard/call-history-context.ts apps/api/src/dashboard/participation-analytics.ts apps/api/src/dashboard/analytics*.ts apps/api/src/dashboard/responders*.ts apps/api/src/call-recording*.ts apps/api/src/dashboard/campaign-recording-export.ts scripts/h02-recording-probe.mjs apps/api/src/command-recovery*.ts apps/api/src/recovery-cleanup.ts apps/api/src/lifecycle-recovery-runtime.ts scripts/h01-*.mjs apps/api/src/recovery-persistence-fence*.ts apps/api/src/post-transfer.integration.test.ts apps/api/src/transfer-connection*.ts apps/api/src/transfer-offers*.ts apps/api/src/dashboard/transfers.ts apps/api/src/esl.ts apps/api/src/service-invite*.ts apps/api/src/dashboard/service-invites.ts apps/api/src/freeswitch/*.ts infra/freeswitch/templates/inbound/* apps/api/src/desk-sessions*.ts apps/api/src/dashboard/desk-sessions.ts apps/api/src/supervisor-coordination*.ts apps/api/src/eligibility*.ts apps/api/src/dashboard/supervisor*.ts apps/api/src/agent-registrations*.ts apps/api/src/auth/routes.ts tests/fixtures/inbound/* apps/api/src/inbound*.ts apps/api/src/agent-call-slots*.ts apps/api/src/call-offer-expiry.ts apps/api/src/dashboard/call-offers.ts apps/api/src/call-admission*.ts apps/api/src/native-call-control*.ts apps/api/src/call-cleanup*.ts apps/api/src/call-finalization*.ts apps/api/src/call-outcomes.ts apps/api/src/agent-availability*.ts apps/api/src/esl-events*.ts apps/api/src/call-capacity*.ts apps/api/src/call-control-pools*.ts apps/api/src/manual-outbound*.ts apps/api/src/auto-next*.ts apps/api/src/call-executor*.ts apps/api/src/call-command-transport*.ts apps/api/src/desk-slots-schema.integration.test.ts apps/api/src/call-participation*.ts apps/api/src/durable-call-work*.ts apps/api/src/call-coordination*.ts apps/api/src/dashboard/calls.ts apps/api/src/dashboard/routes.ts apps/api/src/dashboard/inbound-admin.ts packages/shared/src/*.ts apps/api/src/call-observability.ts apps/api/src/dashboard/browser-media.ts apps/api/src/dashboard/recordings.ts apps/api/src/dashboard/media-tickets.ts apps/api/src/dashboard/phone.ts apps/api/db/migrations/*.sql scripts/*inbound-db* > "$RUN_DIR/source-sha256.txt"
+sha256sum apps/api/src/dashboard/retention*.ts scripts/backup*.sh scripts/backup-ingress-journal.mjs \
+  scripts/restore.sh scripts/verify-backup.sh scripts/test-h04-restore.mjs tests/backup-ingress-journal.test.mjs \
+  >> "$RUN_DIR/source-sha256.txt"
 docker image inspect "$PG_IMAGE" --format '{{.Id}} {{json .RepoDigests}}' > "$RUN_DIR/image.txt"
 docker run -d --name "$PG_CONTAINER" --network none --memory 512m --cpus 2 --pids-limit 128 \
   "${storage_args[@]}" \
@@ -64,6 +68,13 @@ if [[ "$suite" == browser ]]; then
     npm exec --workspace @outbound-dialer/api -- tsc -p tsconfig.test.json
     exec npm exec -- playwright test --config playwright.i01.config.ts "$@"
   ' bash "$@" > "$RUN_DIR/result.txt" 2>&1 || { cat "$RUN_DIR/result.txt"; exit 1; }
+elif [[ "$suite" == restore ]]; then
+  timeout 90 bash -c '
+    set -e
+    npm --workspace @outbound-dialer/shared run build
+    npm exec --workspace @outbound-dialer/api -- tsc -p tsconfig.test.json
+    exec node scripts/test-h04-restore.mjs "$1" "$2"
+  ' bash "$PG_CONTAINER" "$RUN_DIR" > "$RUN_DIR/result.txt" 2>&1 || { cat "$RUN_DIR/result.txt"; exit 1; }
 else
   timeout 600 npm run test:inbound:db > "$RUN_DIR/result.txt" 2>&1 || { cat "$RUN_DIR/result.txt"; exit 1; }
 fi

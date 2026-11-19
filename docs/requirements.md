@@ -142,7 +142,7 @@ This document is the current product and operational contract. Items described a
 - Automatic retention is enabled by default and runs at API startup and then every `RETENTION_RUN_INTERVAL_SECONDS` (86,400 seconds by default). Its enabled flag and retention windows can change without restarting the API.
 - PostgreSQL advisory locking prevents two API instances from performing the same retention run concurrently.
 - Default call-log retention is seven days; default call-recording retention is 30 days.
-- Only terminal `completed`, `failed`, and `canceled` calls are eligible.
+- Only drained terminal `completed`, `failed`, and `canceled` calls are eligible. Retention preserves unresolved work, pending ingress and participant history still within the call window.
 - A call with recording metadata is retained until the recording reaches its own retention age.
 - Recording metadata is cleared only after unlink succeeds or the file is confirmed absent. Any other unlink failure preserves metadata and the call row for retry.
 - Admins can run the same policy as a dry run or immediate execution through `POST /admin/retention/run`.
@@ -150,10 +150,10 @@ This document is the current product and operational contract. Items described a
 
 ## Backup, Restore, And Deployment
 
-- Backups contain a PostgreSQL custom-format dump, voicemail/call recordings, UTC/source metadata, and use an authenticated `ODBACKUP2` AES-256-GCM envelope derived with scrypt.
+- Backups contain a PostgreSQL custom-format dump, voicemail and call recordings, inbound audio, the SQLite ingress journal when present, and UTC/source metadata. The bundle uses an authenticated `ODBACKUP2` AES-256-GCM envelope derived with scrypt.
 - The passphrase must be at least 32 characters and stored outside the host.
 - Production preflight requires `BACKUP_S3_URI` unless `ALLOW_LOCAL_ONLY_BACKUPS=true` explicitly accepts the risk.
-- Verification must authenticate/decrypt the envelope, validate both tar archives, and run `pg_restore --list`.
+- Verification must authenticate and decrypt the envelope, validate both tar archives and any required SQLite snapshot, and run `pg_restore --list`.
 - Restore requires `RESTORE_CONFIRM=restore-<database>`, restores PostgreSQL with `--single-transaction`, snapshots current recordings before replacement, restarts the stack, and runs a web smoke test.
 - Legacy unauthenticated AES-CBC archives are rejected unless `ALLOW_LEGACY_UNAUTHENTICATED_BACKUP=true` is set for a specifically trusted archive.
 - Deployments are SHA-tagged, preflighted, quality-gated, blocked when active calls exist by default, backed up before migration, health-waited, smoke-tested, and recorded in `logs/deployment-state.env`.

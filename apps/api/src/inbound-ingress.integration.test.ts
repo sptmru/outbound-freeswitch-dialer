@@ -139,7 +139,8 @@ for (const terminalFirst of [false, true])
       const gate = new Promise<void>((r) => (resume = r));
       let reached!: () => void;
       const ready = new Promise<void>((r) => (reached = r));
-      let a: Promise<void> | undefined, b: Promise<void> | undefined;
+      let a: ReturnType<typeof importIngressRecord> | undefined;
+      let b: ReturnType<typeof importIngressRecord> | undefined;
       try {
         const pidA = (await first.query("select pg_backend_pid() as pid")).rows[0].pid;
         const pidB = (await second.query("select pg_backend_pid() as pid")).rows[0].pid;

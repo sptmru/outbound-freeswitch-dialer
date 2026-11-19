@@ -19,13 +19,15 @@ export function ingressSnapshot(row: IngressRecord) {
     configuration: JSON.parse(Buffer.from(row.routeData, "base64url").toString("utf8"))
   };
 }
-// No ESL, journal I/O, offers, capacity or media side effects inside this transaction.
+// The only external observation inside this transaction is the bounded read of
+// an exact terminal receipt when its SQL identity is absent.
 // D03 owns only the pre-queue received/history state. D04 must integrate admission
 // and terminal cleanup before it can advance this state or acknowledge admission.
 export async function importIngressRecord(
   pool: pg.Pool,
   row: IngressRecord,
-  checkpoint?: (point: "before-insert" | "after-commit", uuid?: string) => Promise<void>
+  checkpoint?: (point: "before-insert" | "after-commit", uuid?: string) => Promise<void>,
+  needsTerminalImport?: () => Promise<boolean>
 ) {
   validateIngress(row);
   assert.match(row.journalId, ingressUuid);
@@ -48,6 +50,12 @@ export async function importIngressRecord(
       await client.query("select * from inbound_ingress_evidence where ingress_id=$1 for update", [row.uuid])
     ).rows[0];
     const snapshot = ingressSnapshot(row);
+    // A retained SQLite receipt or an earlier batch can outlive purged SQL
+    // history. A first import still requires an exact unacknowledged receipt.
+    if (!existing && row.terminalUs !== null && needsTerminalImport && !(await needsTerminalImport())) {
+      await client.query("rollback");
+      return false;
+    }
     if (existing) {
       assert.equal(existing.journal_id, row.journalId, "Journal identity changed");
       assert.equal(existing.validated_did, row.did, "DID changed");
@@ -117,6 +125,7 @@ export async function importIngressRecord(
     );
     await client.query("commit");
     await checkpoint?.("after-commit", row.uuid);
+    return true;
   } catch (error) {
     await client.query("rollback");
     throw error;
@@ -163,7 +172,15 @@ export async function reconcileIngress(
       }
     }
     await queue?.beforeImport(row);
-    await importIngressRecord(pool, row, checkpoint);
+    const imported = await importIngressRecord(pool, row, checkpoint, async () => {
+      const result = await ingressRequest(
+        socket,
+        `/terminal-import?uuid=${row.uuid}&sequence=${row.sequence}`
+      );
+      assert.ok(result === "pending" || result === "settled", "Unknown journal receipt state");
+      return result === "pending";
+    });
+    if (!imported) continue;
     await queue?.afterImport(row);
     // A delayed live ACK cannot acknowledge a newer terminal sequence (journal CAS).
     await ingressRequest(socket, "/ack", { uuid: row.uuid, sequence: String(row.sequence) });

@@ -834,8 +834,8 @@ Keep `.env`, Compose, and `scripts/deploy.sh`. Document/validate any new variabl
   the outstanding representative human listening gate.
 - Attribute duration/statistics per participation, not entirely to the final owner.
 - Authorize former-agent telemetry only for their own segment.
-- Update analytics, exports, media authorization, retention, backup/restore, and cleanup;
-  keep outbound metrics separate.
+- Update analytics, exports, media authorization, retention, backup/restore, and cleanup.
+  Keep outbound metrics separate. [Retention and recovery contract](inbound-retention.md)
 - Measure queue/wait, offers, connection failures, admission conflicts, auto deferrals,
   manual dismissals, transfers, flow outcomes, uncertain slots, configuration errors,
   admission/lock time. Avoid unbounded phone/call/agent Prometheus labels. Correlate by

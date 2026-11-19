@@ -8,6 +8,10 @@ RECORDINGS_DIR="${RECORDINGS_DIR:-${ROOT_DIR}/infra/freeswitch/recordings}"
 TEXTFILE_DIR="${ROOT_DIR}/monitoring/textfile"
 # shellcheck disable=SC1091
 source "${ROOT_DIR}/scripts/host-operation-lock.sh"
+# shellcheck disable=SC1091
+source "${ROOT_DIR}/scripts/backup-ingress-journal.sh"
+# shellcheck disable=SC1091
+source "${ROOT_DIR}/scripts/deployment-state.sh"
 acquire_host_operation_lock "${ROOT_DIR}" "backup"
 
 [[ -f "${ENV_FILE}" ]] || { echo "Missing ${ENV_FILE}" >&2; exit 1; }
@@ -81,6 +85,46 @@ elif [[ "${ALLOW_NON_QUIESCED_BACKUP:-false}" != "true" ]]; then
   exit 1
 fi
 
+if [[ "${BACKUP_QUIESCE_SERVICES:-true}" == "true" && "${active_calls:-}" == "0" ]]; then
+  active_calls="$(compose exec -T postgres psql --username "${POSTGRES_USER}" --dbname "${POSTGRES_DB}" --tuples-only --no-align --command "select count(*) from calls where state not in ('completed', 'failed', 'canceled')")"
+  [[ "${active_calls}" == "0" ]] || {
+    echo "Call admission raced backup quiescing; retry after calls drain" >&2
+    exit 1
+  }
+fi
+
+ingress_journal=absent
+if ingress_journal_volume_exists; then
+  # The Compose default image tag may differ from the deployed sidecar image.
+  journal_container="$(compose ps --all -q ingress-journal)"
+  if [[ -n "${journal_container}" ]]; then
+    journal_image="$(docker inspect --format '{{.Config.Image}}' "${journal_container}")"
+    export APP_VERSION="${journal_image##*:}"
+    FREESWITCH_INGRESS_SOCKET="$(docker inspect --format '{{range .Config.Env}}{{if eq (index (split . "=") 0) "FREESWITCH_INGRESS_SOCKET"}}{{.}}{{end}}{{end}}' "${journal_container}")"
+    export FREESWITCH_INGRESS_SOCKET="${FREESWITCH_INGRESS_SOCKET#*=}"
+  elif [[ -z "${APP_VERSION:-}" ]]; then
+    deployment_state_load "${ROOT_DIR}/logs/deployment-state.env"
+    export APP_VERSION="${CURRENT_VERSION}"
+  fi
+  run_ingress_journal_tool snapshot > "${work_dir}/ingress.sqlite"
+  if [[ -s "${work_dir}/ingress.sqlite" ]]; then
+    [[ "${BACKUP_QUIESCE_SERVICES:-true}" == "true" ]] || {
+      echo "Quiesce API and FreeSWITCH to back up ingress with PostgreSQL" >&2
+      exit 1
+    }
+    ingress_journal=present
+  else
+    rm "${work_dir}/ingress.sqlite"
+  fi
+elif [[ "$?" != "1" ]]; then
+  echo "Could not inspect the ingress journal volume" >&2
+  exit 1
+fi
+if [[ "${FREESWITCH_INGRESS_ENABLED:-false}" == "true" && "${ingress_journal}" != "present" ]]; then
+  echo "Enabled ingress has no journal snapshot; check the sidecar and its volume" >&2
+  exit 1
+fi
+
 compose exec -T postgres pg_dump --username "${POSTGRES_USER}" --dbname "${POSTGRES_DB}" --format custom > "${work_dir}/database.dump"
 tar -czf "${work_dir}/recordings.tar.gz" -C "${RECORDINGS_DIR}" .
 if ! resume_quiesced_services; then
@@ -93,9 +137,14 @@ created_at=${timestamp}
 source_commit=$(git -C "${ROOT_DIR}" rev-parse HEAD 2>/dev/null || echo unknown)
 postgres_database=${POSTGRES_DB}
 recordings_directory=${RECORDINGS_DIR}
+ingress_journal=${ingress_journal}
 EOF
 
-tar -czf "${work_dir}/bundle.tar.gz" -C "${work_dir}" database.dump recordings.tar.gz metadata.txt
+bundle_members=(database.dump recordings.tar.gz metadata.txt)
+if [[ "${ingress_journal}" == "present" ]]; then
+  bundle_members+=(ingress.sqlite)
+fi
+tar -czf "${work_dir}/bundle.tar.gz" -C "${work_dir}" "${bundle_members[@]}"
 node "${ROOT_DIR}/scripts/backup-envelope.mjs" encrypt "${work_dir}/bundle.tar.gz" "${archive_path}"
 chmod 600 "${archive_path}"
 

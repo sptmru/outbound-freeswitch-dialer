@@ -56,7 +56,7 @@ test("D03 U: authoritative dump rejects UUID, direction and caller-header author
   ])
     assert.throws(() => captureFromDump(row.uuid, invalid));
 });
-test("D03.3 U: journal restart, exact terminal ACK, stale ACK and exhaustion preserve captured work", async () => {
+test("D03.3/H04.3 U: journal restart, exact terminal ACK, stale ACK and exhaustion preserve captured work", async () => {
   const dir = await mkdtemp("/tmp/d03-journal-");
   let journal: IngressJournal | undefined;
   try {
@@ -67,6 +67,7 @@ test("D03.3 U: journal restart, exact terminal ACK, stale ACK and exhaustion pre
     assert.throws(() => journal!.capture(capture()), /exhausted/);
     const terminal = journal.terminal(row.uuid);
     assert.equal(terminal.sequence, 2);
+    assert.equal(journal.needsTerminalImport(row.uuid, 2), true);
     journal.acknowledge(row.uuid, 1);
     assert.throws(() => journal!.capture(capture()), /exhausted/);
     journal.close();
@@ -76,8 +77,10 @@ test("D03.3 U: journal restart, exact terminal ACK, stale ACK and exhaustion pre
     assert.equal(journal.capture(row).terminalUs, terminal.terminalUs);
     assert.throws(() => journal!.capture({ ...row, did: "+12025550101" }), /identity/);
     journal.acknowledge(row.uuid, 2);
+    assert.equal(journal.needsTerminalImport(row.uuid, 2), false);
     journal.capture(capture());
     assert.equal(journal.records().length, 1);
+    assert.equal(journal.needsTerminalImport(row.uuid, 2), false);
   } finally {
     journal?.close();
     await rm(dir, { recursive: true, force: true });

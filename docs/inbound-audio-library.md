@@ -62,9 +62,9 @@ unreferenced flow does not release historical media references. `DELETE
 - A current queue waiting assignment or **any retained immutable flow version**.
 - A published ingress route snapshot, including an old or unsuccessfully applied
   revision that may still have an unimported FS-local journal capture.
-- Captured ingress without imported terminal evidence, or a queue admission with
-  a live call/unresolved operation. A native terminal event alone does not release
-  an unimported terminal journal sequence.
+- Captured ingress without an acknowledged terminal sequence, or a queue
+  admission with a live leg or unresolved work. A native terminal event alone
+  leaves the asset pinned until the journal and call are drained.
 
 An unreferenced asset follows the existing soft-deactivate, commit, unlink policy.
 An unlink error other than ENOENT restores only asset activity, never a campaign

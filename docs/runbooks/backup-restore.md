@@ -5,7 +5,8 @@
 `scripts/backup.sh` captures:
 
 - a PostgreSQL custom-format dump;
-- the configured voicemail/call recordings directory;
+- the configured voicemail, inbound audio and call recordings directory;
+- a consistent SQLite snapshot from the private `ingress_journal` volume when it contains `ingress.sqlite`, including its journal ID, sequence, admission receipts and exact acknowledgements;
 - UTC creation time, source Git commit, database name, and source recordings path.
 
 The bundle is written as an authenticated `ODBACKUP2` envelope by `scripts/backup-envelope.mjs`: AES-256-GCM with a scrypt-derived key, random 16-byte salt, random 12-byte IV, authenticated header, and 16-byte authentication tag. A wrong passphrase, truncated file, or modified ciphertext fails authentication before restore.
@@ -46,7 +47,7 @@ Create a backup:
 ./scripts/backup.sh
 ```
 
-The script refuses to run while a call/background voicemail is active. It also takes the same non-blocking host-operation `flock` used by deploy, restore, rollback, and certificate maintenance, so these workflows cannot overlap. Nested backup verification inherits that lock. With the production default `BACKUP_QUIESCE_SERVICES=true`, it briefly pauses the running API and FreeSWITCH containers while `pg_dump` and the recordings archive are captured, then resumes them before encryption and verification. A failed resume is retried during cleanup and fails the backup before encryption, upload, success metrics, or success output; remaining paused services require immediate operator recovery. This prevents application/media writes from splitting the database and filesystem snapshot. `BACKUP_QUIESCE_SERVICES=false` requires the explicit `ALLOW_NON_QUIESCED_BACKUP=true` break-glass acknowledgement and is not an accepted recovery point.
+The script refuses to run while a call/background voicemail is active. It also takes the same non-blocking host-operation `flock` used by deploy, restore, rollback, and certificate maintenance, so these workflows cannot overlap. Nested backup verification inherits that lock. With the production default `BACKUP_QUIESCE_SERVICES=true`, it briefly pauses the running API and FreeSWITCH containers while `pg_dump` and the recordings archive are captured, then resumes them before encryption and verification. A failed resume is retried during cleanup and fails the backup before encryption, upload, success metrics, or success output; remaining paused services require immediate operator recovery. The script rechecks active calls after pausing the services. It takes a SQLite snapshot before the PostgreSQL dump, while API and FreeSWITCH are paused. A SQLite acknowledgement follows its PostgreSQL history commit, so every acknowledgement in the archive has the corresponding commit in the dump. Captured evidence awaiting import travels in the same authenticated bundle. The snapshot includes neither the control socket nor the owner lock. `BACKUP_QUIESCE_SERVICES=false` is refused when the volume contains a journal. For an installation without a journal it requires the explicit `ALLOW_NON_QUIESCED_BACKUP=true` break-glass acknowledgement and is not an accepted recovery point.
 
 The local file is mode `0600`. Before any S3 upload or success-metric publication, `backup.sh` calls `verify-backup.sh` to authenticate/decrypt the envelope, validate both archives, and inspect the PostgreSQL restore list. Only a verified local archive is uploaded and allowed to update `monitoring/textfile/outbound_dialer_backup.prom`; alerts treat a missing or stale marker as a problem.
 
@@ -57,7 +58,7 @@ latest_backup="$(find backups -maxdepth 1 -name 'outbound-dialer-*.tar.gz.enc' -
 ./scripts/verify-backup.sh "${latest_backup}"
 ```
 
-Verification must print `Backup verification passed`. It authenticates/decrypts the `ODBACKUP2` envelope, validates the bundle/recordings tar archives, starts PostgreSQL with a bounded Compose health wait if needed, and runs `pg_restore --list` on the database dump. It does not modify the target database.
+Verification must print `Backup verification passed`. It authenticates/decrypts the `ODBACKUP2` envelope, validates the bundle/recordings tar archives and checks the SQLite integrity and receipt inventory when present, starts PostgreSQL with a bounded Compose health wait if needed, and runs `pg_restore --list` on the database dump. It does not modify the target database.
 
 Also verify the object exists in the off-host destination and record its object version/checksum/timestamp. Local verification alone does not prove off-host delivery.
 
@@ -69,10 +70,11 @@ Use an isolated host for drills. For a real recovery, establish incident ownersh
 2. Place the archive on the isolated/recovery host through an approved secure channel.
 3. Load the correct passphrase from the external secret manager.
 4. Configure `.env` for the target, including database, domains, and non-production provider isolation for a drill. Current authenticated archives must identify the same `postgres_database` as the target `POSTGRES_DB`.
-5. Confirm sufficient disk space for the decrypted bundle plus the pre-restore recordings snapshot.
-6. Run `scripts/verify-backup.sh` first.
-7. Record pre-restore database/file counts and the target's current recordings path.
-8. If `logs/deployment-state.env` exists, require `DEPLOYMENT_STATUS=stable`; resolve an interrupted deploy/rollback/restore before starting another restore.
+5. Confirm sufficient space for the decrypted bundle, the new database, the pre-restore recordings snapshot and the SQLite staging copy.
+6. For a journal-bearing archive, use a fresh `ingress_journal` volume or one with the same journal ID and exact receipt inventory. Preserve any divergent volume for recovery of its newer or pending work, and select a fresh Compose project or recovery host for the archive.
+7. Run `scripts/verify-backup.sh` first.
+8. Record pre-restore database/file counts and the target's current recordings path.
+9. If `logs/deployment-state.env` exists, require `DEPLOYMENT_STATUS=stable`; resolve an interrupted deploy/rollback/restore before starting another restore.
 
 ## Guarded Restore
 
@@ -86,16 +88,26 @@ The script:
 1. authenticates/decrypts the envelope, validates the recordings archive, compares source/runtime SHA metadata, and requires authenticated `postgres_database` metadata to match the restore target before any destructive work;
 2. resolves the release version from `APP_VERSION`, stable deployment state, or the checked-out Git SHA; requires a clean controller checkout; builds missing release images only when that checkout exactly matches the selected SHA; renders monitoring configuration; and validates every monitoring config with its runtime binary;
 3. atomically records `DEPLOYMENT_STATUS=pending_restore` before stopping or changing runtime services;
-4. stops API and FreeSWITCH so application writes/calls cannot race restore;
+4. stops API, FreeSWITCH, PCAP capture and the ingress sidecar, then refuses any journal mismatch before removing the target database;
 5. when `RESTORE_RECORDINGS` is not `false`, extracts media into same-filesystem staging and finishes a timestamped current-recordings snapshot before deleting the database;
 6. starts PostgreSQL with a health wait, verifies `pg_isready`, validates `pg_restore --list`, refuses PostgreSQL system databases, force-disconnects and drops the selected application database, recreates it with the configured owner, then runs `pg_restore --no-owner --no-privileges --exit-on-error --single-transaction` into that empty database and creates/rotates the dedicated read-only `outbound_dialer_exporter` monitoring role;
-7. activates the already staged recordings with same-filesystem renames only after the database restore succeeds, restoring the previous directory if activation itself fails;
+7. installs the verified journal into an empty volume or reuses the matching journal, then activates the already staged recordings with same-filesystem renames only after the database restore succeeds, restoring the previous directory if activation itself fails;
 8. starts the full stack with health waits, bootstraps or refreshes TLS, verifies every in-scope non-firewall mandatory Compose service is running and every configured container health check is healthy, and runs the published readiness smoke test;
 9. reinstalls certificate-renewal and backup cron jobs using the selected `ENV_FILE`, then promotes the restored SHA to a stable deployment state. An interrupted/failed restore retains its pending/failed target for explicit recovery.
 
 The old application database is deliberately removed before restore so objects omitted from the archive cannot survive. The custom-format dump is validated first, and `--single-transaction` prevents a failed `pg_restore` from leaving a partially populated replacement database; after a restore failure the replacement can be empty and must not be promoted. Recordings replacement is filesystem work and is not part of the PostgreSQL transaction, but extraction and snapshot creation now fail before database deletion, and activation uses prepared same-filesystem directories with rollback. The `.pre-restore-*` snapshot remains the recovery point; keep it until formal acceptance.
 
+Backups that predate journal support can be restored with ingress disabled and no existing journal database. Ingress-enabled restore requires an authenticated bundle with a journal snapshot. A mismatch or failed install leaves recovery pending or failed. Preserve the existing journal, keep the route disabled, and recover or archive that evidence with its matching PostgreSQL history before giving the volume a new owner.
+
 Set `RESTORE_RECORDINGS=false` only for an intentional database-only recovery and record the resulting database/filesystem consistency decision.
+
+## Isolated H04 Drill
+
+```bash
+INBOUND_PG_STORAGE=tmpfs npm run test:inbound:db:isolated -- --restore
+```
+
+The drill uses two disposable databases on a PostgreSQL container without any network or published port. It exercises the authenticating envelope, real `pg_dump` and `pg_restore`, the SQLite snapshot and install helpers, media checksums, configuration versions, participant history and H01 import with scripted channel observations. It writes SHA-256 checksums to the test artifact directory. The full host controller, FreeSWITCH and provider are outside this drill.
 
 ## Legacy Archive Exception
 
@@ -115,7 +127,8 @@ The first bypass accepts the legacy format's missing integrity proof. The second
 ## Post-Restore Acceptance
 
 - [ ] Smoke test completed and `/api/health/ready` is healthy.
-- [ ] Users/auth, campaign/contact/import, suppression, call, call-event, audit, and media-ticket table counts are plausible.
+- [ ] Users/auth, campaign/contact/import, suppression, call, call-event, audit, and media-ticket table counts are plausible. Check inbound flow versions and queue asset references, participants, and ingress evidence sequences against the archive.
+- [ ] Verify the original journal ID and pending receipt count before H01 reconciliation. Confirm pending evidence imports once with the original arrival time and that ended calls do not schedule work. Keep the route disabled until the applicable enablement gates pass.
 - [ ] Voicemail assets preview and call recordings stream/seek where expected.
 - [ ] The restored recordings path and permissions match the runtime container mapping.
 - [ ] `logs/deployment-state.env` reports `DEPLOYMENT_STATUS=stable` with the restored SHA, and both backup/certificate cron jobs reference the intended `ENV_FILE`.
