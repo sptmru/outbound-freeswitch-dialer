@@ -1,3 +1,4 @@
+import { runSipRtpLoad } from "./i03-sip-rtp.mjs";
 import { proveTransferExecution, proveOutboundTransferExecution } from "./g02-transfer-execution.mjs";
 import { proveQuiescentRecovery } from "./h01-quiescent-recovery.mjs";
 import { proveLifecycleRecovery } from "./h01-recovery-matrix.mjs";
@@ -33,6 +34,7 @@ import {
 } from "../apps/api/dist-test/inbound-connection.js";
 import { reconcileCoordinatedCallCleanup } from "../apps/api/dist-test/call-cleanup.js";
 const directory = process.argv[2];
+const i03 = process.argv[3] === "--i03-load";
 assert.match(directory ?? "", /^\/tmp\/outbound-e02\.[A-Za-z0-9]+$/);
 const socket = join(directory, "agent.sock");
 const config = {
@@ -74,6 +76,7 @@ async function pass(name, evidence = {}) {
   console.log(`PASS ${name}`);
 }
 let f,
+  app,
   agent,
   observer,
   limited,
@@ -234,7 +237,7 @@ try {
     [f.input.deskSessionId, username, `sofia/internal-webrtc/sip:${username}@${phone.address}`]
   );
   const runtime = inboundConnectionExecutor(f.pool, limited.executor, esl);
-  const app = Fastify();
+  app = Fastify();
   const httpConfig = {
     ...config,
     JWT_SECRET: "e02-disposable-signing-secret-32-characters",
@@ -281,7 +284,9 @@ try {
     assert.equal((await call(c.row.uuid)).agent_connected_at, null);
     return { offer, payload, url, result };
   }
-  if (process.env.H01_MATRIX_ONLY !== "1") {
+  if (i03) {
+    await runSipRtpLoad({ app, f, config: httpConfig, command, startCall, recover, clean, runtime, pass });
+  } else if (process.env.H01_MATRIX_ONLY !== "1") {
     const c = await startCall();
     const accepted = await accept(c);
     const before = phone.invites.length;
@@ -685,7 +690,6 @@ try {
       }
     });
   }
-  await app.close();
   report.snapshot = await f.snapshot();
   assert.equal(report.snapshot.call_capacity_reservations.filter((r) => r.state !== "released").length, 0);
   assert.equal(report.snapshot.call_operations.filter((r) => !r.resolved_at).length, 0);
@@ -706,6 +710,7 @@ try {
   if (process.env.G02_TRANSFERS === "1") await command("hupall NORMAL_CLEARING");
   throw error;
 } finally {
+  await app?.close();
   if (timer) clearInterval(timer);
   while (draining) await delay(10);
   if (f) report.finalSnapshot = await f.snapshot();
@@ -718,7 +723,10 @@ try {
     await rm(join(directory, "journal-agent.pid"), { force: true });
   }
   await limited?.close();
-  if (f) report.cleanup = await f.cleanup();
+  if (f) {
+    await f.cleanup();
+    if (i03) report.cleanup = "schema removed";
+  }
   await inflight?.catch(() => {});
   await log.close();
   await save();

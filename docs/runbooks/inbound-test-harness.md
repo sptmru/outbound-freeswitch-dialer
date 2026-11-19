@@ -32,11 +32,10 @@ the product API routes, an isolated database, and simulated telephony.
 Run `npm run test:inbound:freeswitch` for the [I02 pinned FreeSWITCH matrix](../inbound-freeswitch-acceptance.md).
 It aggregates real local SIP/RTP, Chromium WebRTC and durable recovery probes.
 
-`test:load:inbound` is reserved for I03 and remains unimplemented. Existing
-`test:load:desk` and `test:load:sip-rtp` require their own configured test environment;
-they are not substitutes for inbound/transfer workloads. No new A07 command accepts
-an external dial target. Real-provider tests/load require separate authorization
-under I04/I05; this runbook gives none.
+Run `npm run test:load:inbound` for the [I03 isolated load runner](inbound-load-testing.md).
+It provides control-plane workloads and a separate SIP/RTP probe. The runbook
+lists the remaining I03 workload and evidence requirements. Existing
+`test:load:desk` and `test:load:sip-rtp` require their own configured test environment.
 
 The isolated DB runner pins
 `postgres@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73`.

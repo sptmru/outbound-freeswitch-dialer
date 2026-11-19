@@ -1071,8 +1071,9 @@ A07 adds `npm run test:inbound:db` (required explicit test DB) and
 process checkpoints, simulated ESL ledger/event replay and local SIP fixture reuse.
 See [the A07 harness runbook](runbooks/inbound-test-harness.md) for dependencies,
 discovery, cleanup, CI evidence and proof boundaries. These self-checks exercise test
-infrastructure, not product admission. `test:load:inbound` remains proposed for I03,
-**not an existing script**.
+infrastructure. `npm run test:load:inbound` runs the initial I03 control-plane
+workload. See the [I03 runbook](runbooks/inbound-load-testing.md) for the separate
+SIP/RTP mode and remaining acceptance requirements.
 
 Integrate unit/contract tests into quality; real PostgreSQL integration/bounded races
 into a CI job with PostgreSQL; browser/FS into appropriate jobs. Run heavier load/soak

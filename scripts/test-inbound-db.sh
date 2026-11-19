@@ -8,7 +8,12 @@ case "${1:-}" in
   "") ;;
   --browser) suite=browser; shift ;;
   --restore) suite=restore; shift ;;
-  *) echo 'Usage: test-inbound-db.sh [--browser [Playwright arguments] | --restore]' >&2; exit 1 ;;
+  --load)
+    suite=load; shift
+    if [[ $# != 1 || ( "$1" != smoke && "$1" != reference ) ]]; then
+      echo "Expected --load smoke or --load reference" >&2; exit 2
+    fi ;;
+  *) echo 'Usage: test-inbound-db.sh [--browser [Playwright arguments] | --restore | --load {smoke|reference}]' >&2; exit 1 ;;
 esac
 PG_STORAGE="${INBOUND_PG_STORAGE:-volume}"
 storage_args=()
@@ -41,7 +46,9 @@ sha256sum apps/api/src/dashboard/retention*.ts scripts/backup*.sh scripts/backup
   scripts/restore.sh scripts/verify-backup.sh scripts/test-h04-restore.mjs tests/backup-ingress-journal.test.mjs \
   >> "$RUN_DIR/source-sha256.txt"
 docker image inspect "$PG_IMAGE" --format '{{.Id}} {{json .RepoDigests}}' > "$RUN_DIR/image.txt"
-docker run -d --name "$PG_CONTAINER" --network none --memory 512m --cpus 2 --pids-limit 128 \
+PG_MEMORY=512m
+if [[ "$suite" == load && "$1" == reference ]]; then PG_MEMORY=2g; fi
+docker run -d --name "$PG_CONTAINER" --network none --memory "$PG_MEMORY" --cpus 2 --pids-limit 128 \
   "${storage_args[@]}" \
   --mount "type=bind,src=$RUN_DIR/socket,dst=/db-socket" \
   -e POSTGRES_HOST_AUTH_METHOD=trust -e POSTGRES_DB=inbound_test "$PG_IMAGE" \
@@ -54,7 +61,7 @@ for ((i=0;i<100;i++)); do
   sleep 0.1
 done
 if [[ "$ready" != true ]]; then echo 'Isolated inbound PostgreSQL not ready' >&2; exit 1; fi
-docker inspect "$PG_CONTAINER" --format '{{.HostConfig.NetworkMode}} {{json .HostConfig.PortBindings}}' > "$RUN_DIR/isolation.txt"
+docker inspect "$PG_CONTAINER" --format '{{.HostConfig.NetworkMode}} {{json .HostConfig.PortBindings}} {{.HostConfig.Memory}} {{.HostConfig.NanoCpus}}' > "$RUN_DIR/isolation.txt"
 export TEST_DATABASE_URL="postgresql://postgres@localhost/inbound_test?host=$RUN_DIR/socket"
 unset DATABASE_URL
 export INBOUND_TEST_ARTIFACTS="$RUN_DIR"
@@ -68,6 +75,14 @@ if [[ "$suite" == browser ]]; then
     npm exec --workspace @outbound-dialer/api -- tsc -p tsconfig.test.json
     exec npm exec -- playwright test --config playwright.i01.config.ts "$@"
   ' bash "$@" > "$RUN_DIR/result.txt" 2>&1 || { cat "$RUN_DIR/result.txt"; exit 1; }
+elif [[ "$suite" == load ]]; then
+  sha256sum scripts/test-i03-control-plane.mjs scripts/inbound-load-measurements.mjs scripts/a06-budgets.mjs >> "$RUN_DIR/source-sha256.txt"
+  timeout 180 bash -c '
+    set -e
+    npm --workspace @outbound-dialer/shared run build
+    npm exec --workspace @outbound-dialer/api -- tsc -p tsconfig.test.json
+    exec node scripts/test-i03-control-plane.mjs "$1" "$2"
+  ' bash "$1" "$RUN_DIR" > "$RUN_DIR/result.txt" 2>&1 || { cat "$RUN_DIR/result.txt"; exit 1; }
 elif [[ "$suite" == restore ]]; then
   timeout 90 bash -c '
     set -e

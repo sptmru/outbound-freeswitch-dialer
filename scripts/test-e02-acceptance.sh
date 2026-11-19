@@ -9,6 +9,17 @@ FS_CONTAINER="outbound-e02-fs-$(basename "$RUN_DIR")"
 PG_CONTAINER="outbound-e02-pg-$(basename "$RUN_DIR")"
 NET_CONTAINER="outbound-e02-net-$(basename "$RUN_DIR")"
 NODE_BIN="$(command -v node)"
+mode=()
+case "${1:-}" in
+  "") ;;
+  --i03-load)
+    mode=("$1")
+    unset H01_RECOVERY H01_MATRIX_ONLY H02_RECORDINGS G01_TRANSFERS G02_TRANSFERS G04_SUPERVISION
+    sha256sum "$ROOT_DIR/scripts/i03-sip-rtp.mjs" "$ROOT_DIR/scripts/inbound-load-measurements.mjs" \
+      "$ROOT_DIR/scripts/a06-budgets.mjs" "$ROOT_DIR/tests/fixtures/inbound/load-desk.mjs" > "$RUN_DIR/i03-source-sha256.txt"
+    ;;
+  *) echo "Unknown E02 fixture mode" >&2; exit 2 ;;
+esac
 cleanup() {
   result=$?
   trap - EXIT
@@ -71,4 +82,4 @@ docker run -d --name "$FS_CONTAINER" --network "container:$NET_CONTAINER" --memo
   --entrypoint sh "$IMAGE" -c 'if [ ! -d /a02/conf ]; then cp -a /usr/share/freeswitch/conf/vanilla /a02/conf; fi; exec sh /repo/entrypoint.sh' > "$RUN_DIR/fs-id.txt"
 docker inspect "$FS_CONTAINER" "$PG_CONTAINER" "$NET_CONTAINER" --format '{{.Name}} {{json .HostConfig.NetworkMode}} {{json .HostConfig.PortBindings}}' > "$RUN_DIR/isolation.txt"
 PID="$(docker inspect "$NET_CONTAINER" --format '{{.State.Pid}}')"
-E02_PG_CONTAINER="$PG_CONTAINER" E02_FS_CONTAINER="$FS_CONTAINER" timeout 600 nsenter --net="/proc/$PID/ns/net" "$NODE_BIN" scripts/e02-acceptance-probe.mjs "$RUN_DIR"
+E02_PG_CONTAINER="$PG_CONTAINER" E02_FS_CONTAINER="$FS_CONTAINER" timeout 600 nsenter --net="/proc/$PID/ns/net" "$NODE_BIN" scripts/e02-acceptance-probe.mjs "$RUN_DIR" "${mode[@]}"

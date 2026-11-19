@@ -21,6 +21,7 @@
     "test:freeswitch": "bash scripts/test-freeswitch-scenarios.sh",
     "test:inbound:freeswitch": "node scripts/test-i02-freeswitch.mjs",
     "test:prototype:ingress": "bash scripts/test-a02-ingress.sh",
+    "test:load:inbound": "bash scripts/test-inbound-load.sh",
     "test:load:desk": "node scripts/load-agent-desk.mjs",
     "test:load:sip-rtp": "node scripts/load-sip-rtp.mjs",
     "test:load:suite": "bash scripts/run-load-suite.sh",
