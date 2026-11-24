@@ -20,7 +20,9 @@ jobs:
           POSTGRES_PASSWORD: integration-test-password
         ports:
           - 5432:5432
+        # Isolate the C03.3 latency check from runner disk I/O.
         options: >-
+          --tmpfs /var/lib/postgresql/data:rw,size=2g,mode=0700
           --health-cmd "pg_isready -U outbound_dialer -d outbound_dialer_test"
           --health-interval 5s
           --health-timeout 5s

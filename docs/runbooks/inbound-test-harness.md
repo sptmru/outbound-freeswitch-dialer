@@ -129,7 +129,13 @@ Use these clients only inside the existing A04/A05 network-none namespace runner
   Anonymous Playwright tests share `tests/e2e/fixtures.ts`, which supplies explicit
   `401` bootstrap responses and blocks other API requests. Login rendering cannot
   accidentally depend on a reachable API or the local Vite proxy configuration.
-- `.github/workflows/ci.yml` supplies its disposable PostgreSQL service, runs the
+- `.github/workflows/ci.yml` supplies its disposable PostgreSQL 16 service with
+  PGDATA on a bounded 2 GiB tmpfs with room for WAL across the full matrix. This
+  limits the effect of runner disk I/O on the C03.3 latency check. PostgreSQL
+  retains its default `fsync` and `synchronous_commit` settings, and the
+  100/250 ms p95/p99 limits still apply.
+  C03.3 writes `c03-process-load.json` before checking the latency limits so the
+  workflow can retain measurements when a limit is exceeded. The workflow runs the
   strict DB command and quality, and uploads `test-results/inbound-db/` on success
   or failure. The serial DB suite has a 20-minute watchdog and retains its
   individual test and SQL timeouts. Browser CI builds the web app, installs

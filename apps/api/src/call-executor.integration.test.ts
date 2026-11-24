@@ -342,8 +342,6 @@ test(
           assert.equal(values.length, 120);
           const p95 = values[Math.ceil(values.length * 0.95) - 1],
             p99 = values[Math.ceil(values.length * 0.99) - 1];
-          assert.ok(p95 <= 100, `${lane} p95 ${p95}`);
-          assert.ok(p99 <= 250, `${lane} p99 ${p99}`);
           assert.equal(results[replica].stats[lane].waiters, 0);
           percentiles.push({ replica, lane, p95, p99 });
         }
@@ -369,6 +367,10 @@ test(
       ).rows;
       for (const row of persisted) assert.equal(row.pid, row.backend_pid);
       await f.report("process-load", { ready, holding, held, percentiles, results, completed, persisted });
+      for (const { replica, lane, p95, p99 } of percentiles) {
+        assert.ok(p95 <= 100, `replica ${replica} ${lane} p95 ${p95} ms exceeds 100 ms`);
+        assert.ok(p99 <= 250, `replica ${replica} ${lane} p99 ${p99} ms exceeds 250 ms`);
+      }
     } finally {
       await f.cleanup();
     }
