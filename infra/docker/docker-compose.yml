@@ -329,6 +329,8 @@ services:
 
   ingress-journal:
     image: outbound-dialer-api:${APP_VERSION:-local}
+    # Use the image built locally for the api service.
+    pull_policy: never
     restart: unless-stopped
     init: true
     pids_limit: 32

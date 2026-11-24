@@ -49,7 +49,7 @@ The script performs these steps:
 4. installs exact lockfile dependencies with `npm ci`, then runs the complete `npm run quality` gate unless explicitly skipped;
 5. reads the local API active-call metric and refuses a live deployment by default;
 6. creates and self-verifies an authenticated database/recordings backup unless explicitly skipped;
-7. pulls external images, builds API/FreeSWITCH/packet-capture/web/proxy with the SHA tag, renders monitoring configuration, and validates Prometheus, Alertmanager, Blackbox Exporter, Loki, and Alloy configuration with their pinned runtime binaries;
+7. pulls external images, builds API/FreeSWITCH/packet-capture/web/proxy with the SHA tag, renders monitoring configuration, and validates Prometheus, Alertmanager, Blackbox Exporter, Loki, and Alloy configuration with their pinned runtime binaries. `ingress-journal` uses the locally built API image with the same SHA tag and sets `pull_policy: never`;
 8. reloads the validated Alertmanager configuration and sends a `DeploymentStarting` warning with an expected downtime of up to five minutes; this happens inside `scripts/deploy.sh` and does not depend on GitHub Actions. An upgrade fails before downtime if the running Alertmanager cannot accept the alert; an initial install without an existing Alertmanager skips it;
 9. atomically records `PENDING_VERSION` before changing runtime services or running migrations;
 10. starts PostgreSQL/FreeSWITCH, runs migrations once with the new API image, creates/rotates the least-privilege PostgreSQL exporter role, then starts the stack with health waits;

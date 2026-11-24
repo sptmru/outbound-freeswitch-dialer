@@ -15,6 +15,7 @@ RUN npm ci
 
 COPY packages/shared packages/shared
 COPY apps/web apps/web
+COPY tests/fixtures/inbound/controls.mjs tests/fixtures/inbound/controls.d.mts tests/fixtures/inbound/
 
 RUN npm run build --workspace @outbound-dialer/shared
 RUN npm run build --workspace @outbound-dialer/web

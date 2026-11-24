@@ -182,6 +182,14 @@ test("CI deploy settings prefer unprefixed names with legacy CLIENT_ fallbacks",
   }
 });
 
+test("Compose uses the locally built API image for ingress-journal", async () => {
+  const compose = await readFile(join(rootDirectory, "infra", "docker", "docker-compose.yml"), "utf8");
+  const journal = compose.match(/^ {2}ingress-journal:\n(?: {4}[^\n]*\n|\n)*/m)?.[0] ?? "";
+
+  assert.match(journal, /^ {4}image: outbound-dialer-api:\$\{APP_VERSION:-local\}$/m);
+  assert.match(journal, /^ {4}pull_policy: never$/m);
+});
+
 test("backup fails before success publication when a quiesced service cannot resume", async () => {
   const backup = await readFile(join(rootDirectory, "scripts", "backup.sh"), "utf8");
 
