@@ -86,6 +86,15 @@ test("A07.3 CI discovers bounded DB fixture and retains failure evidence", async
   assert.ok(packageJson.scripts["test:inbound:db:isolated"]);
 });
 
+test("A05 CI uploads only current-run staged evidence even when the fixture fails", async () => {
+  const workflow = await readFile(".github/workflows/inbound-fixtures.yml", "utf8");
+  assert.match(workflow, /mktemp -d "\$RUNNER_TEMP\/outbound-a05-evidence\./);
+  assert.match(workflow, /"A05_ARTIFACT_DIR=\$artifact_dir"/);
+  assert.match(workflow, /if: \$\{\{ always\(\) && steps\.a05\.outputs\.artifact_dir != '' \}\}/);
+  assert.match(workflow, /path: \$\{\{ steps\.a05\.outputs\.artifact_dir \}\}/);
+  assert.doesNotMatch(workflow, /\/tmp\/outbound-a05\./);
+});
+
 test("A07.4 SIP fixture refuses external sources before opening sockets", () => {
   assert.throws(() => localSipClient({ source: "198.51.100.1" }), /loopback source/);
 });

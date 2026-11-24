@@ -148,6 +148,9 @@ containers in it. No ports are published, PG uses only a private Unix socket, an
 the process never reads `.env`, `DATABASE_URL` or `TEST_DATABASE_URL`. A 300-second
 probe limit and EXIT trap remove those containers and the temporary PG volume.
 Private `/tmp/outbound-a05.*` artifacts remain on success or failure.
+The `local-sip-rtp` CI job sets `A05_ARTIFACT_DIR` to a private directory under
+`$RUNNER_TEMP`. On exit the shell runner stages the current report, logs, WAVs,
+and provenance files there with ownership assigned to the GitHub Actions runner.
 
 `report.json` records scenario outcomes, actual ESL sends/responses, stable UUID/job
 IDs, DB snapshots before/after uncertainty, worker IPC and exit evidence, channel

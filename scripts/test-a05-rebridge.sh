@@ -14,6 +14,14 @@ cleanup() {
   docker logs "$PG_CONTAINER" > "$RUN_DIR/postgres.log" 2>&1 || true
   docker rm -fv "$FS_CONTAINER" "$PG_CONTAINER" "$NET_CONTAINER" >/dev/null 2>&1 || true
   echo "A05 artifacts: $RUN_DIR"
+  if [[ -n "${A05_ARTIFACT_DIR:-}" ]]; then
+    # Stage only the allowed evidence for the runner that invoked sudo.
+    find "$RUN_DIR" -maxdepth 1 -type f \( \
+      -name report.json -o -name '*.log' -o -name '*.wav' -o -name images.txt -o \
+      -name source-sha256.txt -o -name base-revision.txt -o -name isolation.txt \) \
+      -exec install -m 0600 -o "${SUDO_UID:-$(id -u)}" -g "${SUDO_GID:-$(id -g)}" \
+        -t "$A05_ARTIFACT_DIR" -- {} +
+  fi
 }
 trap cleanup EXIT
 command -v nsenter >/dev/null

@@ -24,19 +24,16 @@ jobs:
           docker pull safarov/freeswitch@sha256:b31c743f4c911a19687c61e3214968f2a24f93f9d3d667cc26284192e158ffc6
           docker pull postgres@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73
       - name: Local UDP SIP/RTP and executor failure fixtures (no browser/provider)
-        run: sudo env "PATH=$PATH" timeout 600 npm run test:prototype:rebridge
+        id: a05
+        run: |
+          artifact_dir="$(mktemp -d "$RUNNER_TEMP/outbound-a05-evidence.XXXXXXXX")"
+          echo "artifact_dir=$artifact_dir" >> "$GITHUB_OUTPUT"
+          sudo env "PATH=$PATH" "A05_ARTIFACT_DIR=$artifact_dir" timeout 600 npm run test:prototype:rebridge
       - uses: actions/upload-artifact@v4
-        if: always()
+        if: ${{ always() && steps.a05.outputs.artifact_dir != '' }}
         with:
           name: local-sip-rtp-evidence
-          path: |
-            /tmp/outbound-a05.*/report.json
-            /tmp/outbound-a05.*/*.log
-            /tmp/outbound-a05.*/images.txt
-            /tmp/outbound-a05.*/source-sha256.txt
-            /tmp/outbound-a05.*/base-revision.txt
-            /tmp/outbound-a05.*/isolation.txt
-            /tmp/outbound-a05.*/*.wav
+          path: ${{ steps.a05.outputs.artifact_dir }}
           if-no-files-found: warn
 
   db-saturation:
