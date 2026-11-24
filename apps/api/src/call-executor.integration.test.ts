@@ -508,9 +508,11 @@ test(
         release.release();
       }
       w.child.kill("SIGCONT");
+      const returned = await w.wait("execution-returned");
+      assert.equal(returned.result.status, "uncertain");
       w.send("complete");
-      await w.wait("done");
-      await w.finished;
+      assert.deepEqual((await w.wait("done")).result, returned.result);
+      assert.deepEqual(await w.finished, [0, null]);
       assert.equal(
         (await f.pool.query("select state from call_operations where id=$1", [i.id])).rows[0].state,
         "uncertain"

@@ -54,9 +54,7 @@ try {
           reconcile: async () => null
         })
       : {
-          async send(o, signal) {
-            await checkpoint("sending", { id: o.id, commandUuid: o.command_uuid, aborted: signal.aborted });
-            if (signal.aborted) return null;
+          async send() {
             return {
               state: "succeeded",
               result: { simulated: true },
@@ -68,19 +66,27 @@ try {
             return null;
           }
         };
-    if (config.esl) {
-      const send = driver.send.bind(driver);
-      driver.send = async (o, signal) => {
-        await checkpoint("sending", { id: o.id });
-        if (signal.aborted) return null;
-        return send(o, signal);
-      };
-    }
+    const send = driver.send.bind(driver);
+    let sendCheckpoint;
+    driver.send = async (o, signal, client) => {
+      sendCheckpoint = checkpoint("sending", {
+        id: o.id,
+        commandUuid: o.command_uuid,
+        aborted: signal.aborted
+      });
+      await sendCheckpoint;
+      sendCheckpoint = undefined;
+      if (signal.aborted) return null;
+      return send(o, signal, client);
+    };
     await checkpoint("ready");
-    process.send({
-      type: "done",
-      result: await executor.run(config.operationId, config.priority ?? "normal", driver)
-    });
+    const result = await executor.run(config.operationId, config.priority ?? "normal", driver);
+    // Lock loss can return from run() while the driver still waits for the parent.
+    if (sendCheckpoint) {
+      process.send({ type: "execution-returned", result });
+      await sendCheckpoint;
+    }
+    process.send({ type: "done", result });
   }
 } catch (error) {
   process.send?.({ type: "failure", message: error.message, code: error.code });
