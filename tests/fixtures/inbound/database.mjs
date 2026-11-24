@@ -56,6 +56,25 @@ export function databaseConfig(value, schema) {
   };
 }
 
+export async function createFixtureLogin(admin, config, role, connectionLimit) {
+  const password = randomBytes(24).toString("hex");
+  assert.ok(Number.isSafeInteger(connectionLimit) && connectionLimit > 0);
+  await admin.query(
+    `create role ${pg.escapeIdentifier(role)} login password ${pg.escapeLiteral(password)} connection limit ${connectionLimit}`
+  );
+  if (config.connectionString) {
+    const url = new URL(config.connectionString);
+    url.username = role;
+    url.password = password;
+    return { ...config, connectionString: url.href };
+  }
+  return { ...config, user: role, password };
+}
+
+export async function prepareInboundArtifacts(env = process.env) {
+  if (env.INBOUND_TEST_ARTIFACTS) await mkdir(env.INBOUND_TEST_ARTIFACTS, { recursive: true });
+}
+
 export async function createDatabaseFixture(env = process.env) {
   const value = testDatabaseUrl(env);
   const schema = `inbound_fixture_${randomBytes(8).toString("hex")}`;

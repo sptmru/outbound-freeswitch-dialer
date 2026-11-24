@@ -1,7 +1,7 @@
 import { CallExecutor } from "../../../apps/api/dist-test/call-executor.js";
 import { createCallControlPools } from "../../../apps/api/dist-test/call-control-pools.js";
 import { withCallAdmission } from "../../../apps/api/dist-test/call-admission.js";
-const config = JSON.parse(process.argv[2]);
+const config = JSON.parse(process.env.INBOUND_FIXTURE_WORKER_CONFIG);
 let resume;
 process.on("message", () => resume?.());
 const wait = () =>

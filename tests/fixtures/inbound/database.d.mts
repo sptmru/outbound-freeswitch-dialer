@@ -6,6 +6,13 @@ export function harnessSelfCheck(env?: Record<string, string | undefined>): Prom
 }>;
 import type { Pool, PoolConfig } from "pg";
 export function databaseConfig(value: string, schema?: string): PoolConfig;
+export function createFixtureLogin(
+  admin: Pool,
+  config: PoolConfig,
+  role: string,
+  connectionLimit: number
+): Promise<PoolConfig>;
+export function prepareInboundArtifacts(env?: Record<string, string | undefined>): Promise<void>;
 import type { ChildProcess } from "node:child_process";
 export interface FixtureWorker {
   child: ChildProcess;

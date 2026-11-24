@@ -44,7 +44,10 @@ The local FS fixtures pin
 They never attach to the product Compose stack. The DB runner removes its owned
 container/volume on success and failure; artifacts remain until explicitly removed.
 
-For a separately provisioned disposable CI database:
+For a separately provisioned disposable CI database, use a login that can create
+schemas and test login roles. The fixtures generate temporary passwords for these
+roles, so the CI service can keep SCRAM authentication enabled over TCP. The DB
+runner creates `INBOUND_TEST_ARTIFACTS` when set, before starting the tests.
 
 ```bash
 # Example has disposable fixture credentials only; never copy a populated app .env.
@@ -128,8 +131,10 @@ Use these clients only inside the existing A04/A05 network-none namespace runner
   accidentally depend on a reachable API or the local Vite proxy configuration.
 - `.github/workflows/ci.yml` supplies its disposable PostgreSQL service, runs the
   strict DB command and quality, and uploads `test-results/inbound-db/` on success
-  or failure. Browser CI builds the web app, installs Chromium, runs Playwright,
-  retains traces/screenshots on failure and uploads its HTML report/test results.
+  or failure. The serial DB suite has a 20-minute watchdog and retains its
+  individual test and SQL timeouts. Browser CI builds the web app, installs
+  Chromium, runs Playwright, retains traces/screenshots on failure and uploads
+  its HTML report/test results.
 - `.github/workflows/inbound-fixtures.yml` runs on pull requests and supports manual
   dispatch once available on the default branch. Its local-SIP/RTP job
   installs Node/npm dependencies, fetches pinned FS/PG images and runs A05 in

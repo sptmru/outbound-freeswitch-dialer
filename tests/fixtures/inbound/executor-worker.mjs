@@ -3,7 +3,7 @@ import { CallExecutor } from "../../../apps/api/dist-test/call-executor.js";
 import { createCommandDriver } from "../../../apps/api/dist-test/call-command-transport.js";
 import { withCallAdmission } from "../../../apps/api/dist-test/call-admission.js";
 import { enqueueCallCommand } from "../../../apps/api/dist-test/call-executor.js";
-const config = JSON.parse(process.argv[2]);
+const config = JSON.parse(process.env.INBOUND_FIXTURE_WORKER_CONFIG ?? process.argv[2]);
 const messages = [];
 let wake;
 process.on("message", (m) => {

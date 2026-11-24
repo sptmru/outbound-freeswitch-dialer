@@ -3,6 +3,7 @@ import { resolve, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { spawn } from "node:child_process";
 import assert from "node:assert/strict";
+import { prepareInboundArtifacts } from "../tests/fixtures/inbound/database.mjs";
 
 export async function apiTestArgs(directory, env = process.env) {
   const files = [];
@@ -23,6 +24,7 @@ export async function apiTestArgs(directory, env = process.env) {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const args = await apiTestArgs(process.argv[2] ?? "dist-test");
+  if (process.env.TEST_DATABASE_URL) await prepareInboundArtifacts();
   const child = spawn(process.execPath, args, { stdio: "inherit" });
   child.once("error", (error) => {
     console.error(error.message);

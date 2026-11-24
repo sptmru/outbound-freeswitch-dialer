@@ -5,7 +5,11 @@ import { once } from "node:events";
 import { test } from "node:test";
 import pg from "pg";
 import { cleanupFixture } from "../../../tests/fixtures/inbound/cleanup.mjs";
-import { databaseConfig, testDatabaseUrl } from "../../../tests/fixtures/inbound/database.mjs";
+import {
+  createFixtureLogin,
+  databaseConfig,
+  testDatabaseUrl
+} from "../../../tests/fixtures/inbound/database.mjs";
 import { CallExecutor, EXECUTION_LOCK_NAMESPACE, enqueueCallCommand } from "./call-executor.js";
 import { persistCoordinatedCallEvent } from "./call-cleanup.js";
 import {
@@ -19,18 +23,15 @@ async function fixture() {
   const f = await cleanupFixture(databaseConfig(testDatabaseUrl()));
   const role = `h01_${randomUUID().replaceAll("-", "")}`;
   const admin = new pg.Pool(databaseConfig(testDatabaseUrl()));
-  await admin.query(`create role ${role} login connection limit 8`);
+  const database = await createFixtureLogin(
+    admin,
+    { connectionString: testDatabaseUrl(), options: `-c search_path=${f.schema}` },
+    role,
+    8
+  );
   await f.pool.query(
     `grant usage on schema ${f.schema} to ${role}; grant all on all tables in schema ${f.schema} to ${role}; grant usage,select on all sequences in schema ${f.schema} to ${role}`
   );
-  const url = new URL(testDatabaseUrl());
-  const database = {
-    host: url.searchParams.get("host") ?? url.hostname,
-    port: Number(url.port || 5432),
-    database: url.pathname.slice(1),
-    user: role,
-    options: `-c search_path=${f.schema}`
-  };
   const executor = await CallExecutor.create(database, 0);
   return {
     ...f,
@@ -85,11 +86,13 @@ test("H01.2 separate recovery processes serialize concrete observation and repla
   let child: ReturnType<typeof fork> | undefined;
   try {
     const s = await f.seed();
-    child = fork(
-      new URL("../../../tests/fixtures/inbound/recovery-worker.mjs", import.meta.url),
-      [JSON.stringify({ database: f.database, callId: s.callId })],
-      { stdio: ["ignore", "pipe", "pipe", "ipc"] }
-    );
+    child = fork(new URL("../../../tests/fixtures/inbound/recovery-worker.mjs", import.meta.url), [], {
+      env: {
+        ...process.env,
+        INBOUND_FIXTURE_WORKER_CONFIG: JSON.stringify({ database: f.database, callId: s.callId })
+      },
+      stdio: ["ignore", "pipe", "pipe", "ipc"]
+    });
     const exited = once(child, "exit");
     assert.equal((await once(child, "message"))[0].type, "ready");
     const probing = once(child, "message");

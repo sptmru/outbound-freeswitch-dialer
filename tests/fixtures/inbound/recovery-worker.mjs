@@ -3,7 +3,7 @@ import { once } from "node:events";
 import { CallExecutor } from "../../../apps/api/dist-test/call-executor.js";
 import { recoverQuiescentCall } from "../../../apps/api/dist-test/inbound-recovery.js";
 import pg from "pg";
-const input = JSON.parse(process.argv[2]);
+const input = JSON.parse(process.env.INBOUND_FIXTURE_WORKER_CONFIG);
 const pool = new pg.Pool(input.database);
 const executor = await CallExecutor.create(input.database, 1);
 const guard = setTimeout(() => process.exit(1), 15000);

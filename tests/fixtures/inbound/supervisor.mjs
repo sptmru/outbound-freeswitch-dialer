@@ -7,6 +7,7 @@ import Fastify from "fastify";
 import cookie from "@fastify/cookie";
 import { ZodError } from "zod";
 import { cleanupFixture } from "./cleanup.mjs";
+import { createFixtureLogin } from "./database.mjs";
 import { CallExecutor } from "../../../apps/api/dist-test/call-executor.js";
 import { registerDashboardRoutes } from "../../../apps/api/dist-test/dashboard/routes.js";
 import { signAuthToken } from "../../../apps/api/dist-test/auth/tokens.js";
@@ -59,20 +60,19 @@ export async function supervisorFixture(config) {
 export async function limitedExecutor(f, config) {
   const role = `c07exec_${randomUUID().replaceAll("-", "")}`,
     admin = new pg.Pool(config);
-  await admin.query(`create role ${role} login connection limit 8`);
+  const database = await createFixtureLogin(
+    admin,
+    { ...config, options: `-c search_path=${f.schema}` },
+    role,
+    8
+  );
   await f.pool.query(
     `grant usage on schema ${f.schema} to ${role};grant all on all tables in schema ${f.schema} to ${role};grant usage,select on all sequences in schema ${f.schema} to ${role}`
   );
-  const login = { ...config, user: role };
-  if (login.connectionString) {
-    const url = new URL(login.connectionString);
-    url.username = role;
-    login.connectionString = url.href;
-  }
-  const executor = await CallExecutor.create({ ...login, options: `-c search_path=${f.schema}` }, 0);
+  const executor = await CallExecutor.create(database, 0);
   return {
     executor,
-    database: { ...login, options: `-c search_path=${f.schema}` },
+    database,
     async close() {
       await executor.close();
       await admin.query(`drop owned by ${role}`);

@@ -91,6 +91,6 @@ elif [[ "$suite" == restore ]]; then
     exec node scripts/test-h04-restore.mjs "$1" "$2"
   ' bash "$PG_CONTAINER" "$RUN_DIR" > "$RUN_DIR/result.txt" 2>&1 || { cat "$RUN_DIR/result.txt"; exit 1; }
 else
-  timeout 600 npm run test:inbound:db > "$RUN_DIR/result.txt" 2>&1 || { cat "$RUN_DIR/result.txt"; exit 1; }
+  timeout 1260 npm run test:inbound:db > "$RUN_DIR/result.txt" 2>&1 || { cat "$RUN_DIR/result.txt"; exit 1; }
 fi
 cat "$RUN_DIR/result.txt"

@@ -7,7 +7,11 @@ import pg from "pg";
 import type { AppConfig } from "./config.js";
 import { cleanupFixture } from "../../../tests/fixtures/inbound/cleanup.mjs";
 import { cleanupHttp, cleanupRecording } from "../../../tests/fixtures/inbound/cleanup-http.mjs";
-import { databaseConfig, testDatabaseUrl } from "../../../tests/fixtures/inbound/database.mjs";
+import {
+  createFixtureLogin,
+  databaseConfig,
+  testDatabaseUrl
+} from "../../../tests/fixtures/inbound/database.mjs";
 import { CallExecutor } from "./call-executor.js";
 import { nativeCallControlExecutor } from "./native-call-control.js";
 import { __testing as events } from "./esl-events.js";
@@ -189,20 +193,16 @@ async function mockEsl(onCommand: (command: string, job: string) => Promise<stri
 async function testExecutor(f: Awaited<ReturnType<typeof fixture>>) {
   const role = `c06exec_${randomUUID().replaceAll("-", "")}`,
     admin = new pg.Pool(databaseConfig(testDatabaseUrl()));
-  await admin.query(`create role ${role} login connection limit 8`);
+  const database = await createFixtureLogin(
+    admin,
+    { connectionString: testDatabaseUrl(), options: `-c search_path=${f.schema}` },
+    role,
+    8
+  );
   await f.pool.query(
     `grant usage on schema ${f.schema} to ${role};grant all on all tables in schema ${f.schema} to ${role};grant usage,select on all sequences in schema ${f.schema} to ${role}`
   );
-  const url = new URL(testDatabaseUrl());
-  const executor = await CallExecutor.create(
-    {
-      host: url.searchParams.get("host") ?? url.hostname,
-      database: url.pathname.slice(1),
-      user: role,
-      options: `-c search_path=${f.schema}`
-    },
-    0
-  );
+  const executor = await CallExecutor.create(database, 0);
   return {
     executor,
     async close() {

@@ -1,9 +1,10 @@
 import { spawn } from "node:child_process";
-import { testDatabaseUrl } from "../tests/fixtures/inbound/database.mjs";
+import { prepareInboundArtifacts, testDatabaseUrl } from "../tests/fixtures/inbound/database.mjs";
 
 // Check before compiling or spawning: dedicated execution must never silently skip.
 try {
   testDatabaseUrl();
+  await prepareInboundArtifacts();
 } catch (error) {
   console.error(error.message);
   process.exit(1);
@@ -57,9 +58,13 @@ const commands = [
 for (const [command, args] of commands) {
   const code = await new Promise((resolve, reject) => {
     const child = spawn(command, args, { stdio: "inherit" });
-    // The expanded real-PG matrix includes G01 process/rollback schedules.
-    // This suite watchdog is separate from unchanged admission/ESL budgets.
-    const timer = setTimeout(() => child.kill("SIGKILL"), 480000);
+    // CI runs this growing PostgreSQL matrix serially. Keep a separate suite
+    // deadline so the individual test and transaction budgets still apply.
+    const timeoutMs = args[0] === "--test" ? 1_200_000 : 480_000;
+    const timer = setTimeout(() => {
+      console.error(`Inbound DB command timed out after ${timeoutMs / 1000}s: ${command} ${args[0]}`);
+      child.kill("SIGKILL");
+    }, timeoutMs);
     child.once("error", (error) => {
       clearTimeout(timer);
       reject(error);

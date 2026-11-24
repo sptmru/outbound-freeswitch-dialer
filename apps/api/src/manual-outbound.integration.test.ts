@@ -8,7 +8,12 @@ import Fastify from "fastify";
 import cookie from "@fastify/cookie";
 import { ZodError } from "zod";
 import pg from "pg";
-import { databaseConfig, testDatabaseUrl, assertBlocked } from "../../../tests/fixtures/inbound/database.mjs";
+import {
+  assertBlocked,
+  createFixtureLogin,
+  databaseConfig,
+  testDatabaseUrl
+} from "../../../tests/fixtures/inbound/database.mjs";
 import { runMigrations } from "./db.js";
 import type { AppConfig } from "./config.js";
 import { type ManualOutboundRequest, type ManualOutboundRoute } from "./manual-outbound.js";
@@ -293,13 +298,11 @@ async function fixture() {
       const { CallExecutor } = await import("./call-executor.js");
       const role = `c04_exec_${randomUUID().replaceAll("-", "")}`;
       roles.push(role);
-      await admin.query(`create role ${role} login connection limit 8`);
+      const database = await createFixtureLogin(admin, databaseConfig(testDatabaseUrl(), schema), role, 8);
       await pool.query(
         `grant usage on schema ${schema} to ${role};grant all on all tables in schema ${schema} to ${role};grant usage,select on all sequences in schema ${schema} to ${role}`
       );
-      const url = new URL(testDatabaseUrl());
-      url.username = role;
-      const executor = await CallExecutor.create(databaseConfig(url.toString(), schema), 0);
+      const executor = await CallExecutor.create(database, 0);
       executorCleanup.push(() => executor.close());
       return executor;
     },

@@ -6,7 +6,12 @@ import { once } from "node:events";
 import { mkdir, writeFile, readFile } from "node:fs/promises";
 import { test } from "node:test";
 import pg from "pg";
-import { databaseConfig, testDatabaseUrl, assertBlocked } from "../../../tests/fixtures/inbound/database.mjs";
+import {
+  assertBlocked,
+  createFixtureLogin,
+  databaseConfig,
+  testDatabaseUrl
+} from "../../../tests/fixtures/inbound/database.mjs";
 import { runMigrations } from "./db.js";
 import { withCallAdmission } from "./call-admission.js";
 import { CallExecutor, enqueueCallCommand, type CommandIntent, type CommandDriver } from "./call-executor.js";
@@ -28,14 +33,15 @@ async function fixture() {
   const roles = [role];
   const admin = new pg.Pool(databaseConfig(testDatabaseUrl()));
   await admin.query(`create schema ${schema}`);
-  const pool = new pg.Pool({ ...databaseConfig(testDatabaseUrl(), schema), max: 8 });
+  const adminDatabase = databaseConfig(testDatabaseUrl(), schema);
+  const pool = new pg.Pool({ ...adminDatabase, max: 8 });
   const children: ReturnType<typeof fork>[] = [];
   const executors: CallExecutor[] = [];
   await runMigrations(pool);
   await pool.query(
     "update call_admission_migration set reconciliation_required=false,reconciled_at=clock_timestamp()"
   );
-  await admin.query(`create role ${role} login connection limit 8`);
+  const database = await createFixtureLogin(admin, adminDatabase, role, 8);
   await pool.query(
     `grant usage on schema ${schema} to ${role};grant all on all tables in schema ${schema} to ${role};grant usage,select on all sequences in schema ${schema} to ${role}`
   );
@@ -47,19 +53,6 @@ async function fixture() {
   const campaign = (
     await pool.query("insert into campaigns(name,status) values('C03','active') returning id")
   ).rows[0].id;
-  const database = {
-    ...databaseConfig(testDatabaseUrl(), schema),
-    connectionString: undefined,
-    ...(() => {
-      const url = new URL(testDatabaseUrl());
-      return {
-        host: url.searchParams.get("host") ?? url.hostname,
-        port: Number(url.port || 5432),
-        database: url.pathname.slice(1),
-        user: role
-      };
-    })()
-  };
   async function executor(replica = 0) {
     const e = await CallExecutor.create(database, replica);
     executors.push(e);
@@ -102,8 +95,11 @@ async function fixture() {
           : "../../../tests/fixtures/inbound/executor-worker.mjs",
         import.meta.url
       ),
-      [JSON.stringify({ database, ...config })],
-      { stdio: ["ignore", "pipe", "pipe", "ipc"] }
+      [],
+      {
+        env: { ...process.env, INBOUND_FIXTURE_WORKER_CONFIG: JSON.stringify({ database, ...config }) },
+        stdio: ["ignore", "pipe", "pipe", "ipc"]
+      }
     );
     children.push(child);
     const events: any[] = [];
@@ -177,6 +173,7 @@ async function fixture() {
   return {
     pool,
     admin,
+    adminDatabase,
     database,
     role,
     schema,
@@ -191,11 +188,10 @@ async function fixture() {
       for (const [lane, cap] of Object.entries({ admission: 8, heartbeat: 2, events: 4, recovery: 2 })) {
         const name = `${role}_${lane}`;
         roles.push(name);
-        await admin.query(`create role ${name} login connection limit ${cap}`);
+        configs[lane] = await createFixtureLogin(admin, adminDatabase, name, cap);
         await pool.query(
           `grant usage on schema ${schema} to ${name};grant all on all tables in schema ${schema} to ${name};grant usage,select on all sequences in schema ${schema} to ${name}`
         );
-        configs[lane] = { ...database, user: name };
       }
       return configs;
     },
@@ -228,7 +224,7 @@ test(
     const f = await fixture();
     try {
       await assert.rejects(
-        CallExecutor.create({ ...f.database, user: "postgres" }, 0),
+        CallExecutor.create(f.adminDatabase, 0),
         /executor_role_requires_connection_limit/
       );
       const e = await f.executor();
@@ -390,9 +386,7 @@ test(
         [0, true]
       ] as const) {
         const i = await f.intent();
-        const workers = [0, 1].map(() =>
-          f.worker({ enqueue: i, database: { ...f.database, user: "postgres" } })
-        );
+        const workers = [0, 1].map(() => f.worker({ enqueue: i, database: f.adminDatabase }));
         const ready = await Promise.all(workers.map((w) => w.wait("ready")));
         workers[first].send("go");
         await workers[first].wait("enqueued");
