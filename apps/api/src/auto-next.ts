@@ -1,5 +1,7 @@
 import type { AutomaticStartIntent, DeferredAutoNextIntentSnapshot } from "@outbound-dialer/shared";
+import { randomUUID } from "node:crypto";
 import type { CallAdmission } from "./call-admission.js";
+import { requestFingerprint } from "./call-coordination-contracts.js";
 import { ManualOutboundError, type ManualOutboundAdmission } from "./manual-outbound.js";
 
 export type AutoNextWaiting =
@@ -10,6 +12,57 @@ export type AutoNextWaiting =
       intent: DeferredAutoNextIntentSnapshot;
     }
   | { status: "canceled"; revision: string; reason: string };
+
+/** Publish an automatic continuation only after the exact source slot released. */
+export async function prepareReleasedOutboundSource(a: CallAdmission, callId: string, agentId: string) {
+  const {
+    rows: [source]
+  } = await a.client.query(
+    `select c.campaign_id,d.id,d.revision,d.binding_generation
+    from calls c join campaigns p on p.id=c.campaign_id
+    join agents g on g.id=c.agent_id join users u on u.id=g.user_id
+    join agent_desk_sessions d on d.agent_id=g.id and d.campaign_id=c.campaign_id
+    where c.id=$1 and c.agent_id=$2 and c.direction='outbound' and not c.manual_dial and c.contact_id is not null
+      and (c.ended_at is not null or c.agent_released_at is not null)
+      and p.status='active' and p.auto_advance_to_next_lead_enabled
+      and d.revoked_at is null and d.actor_auth_version=u.auth_version and u.is_active
+      and g.availability_status='available'
+      and not exists(select 1 from call_transfers t where t.call_id=c.id and t.state='completed')
+      and not exists(select 1 from system_settings where key='ops.call_start_paused' and value_json='true')`,
+    [callId, agentId]
+  );
+  if (!source) return;
+  const intent: AutomaticStartIntent = {
+    startReason: "automatic",
+    sourceCallId: callId,
+    deskSessionId: source.id,
+    expectedRevision: source.revision,
+    bindingGeneration: source.binding_generation,
+    idempotencyKey: randomUUID()
+  };
+  const fingerprint = requestFingerprint("POST", "/agent/call-next", null, {
+    campaignId: source.campaign_id,
+    phoneNumber: null,
+    confirmCompletedLead: false,
+    confirmRetryWait: false,
+    intent
+  });
+  await a.client.query(
+    `insert into agent_auto_next_intents(agent_id,source_call_id,campaign_id,desk_session_id,
+      desk_revision,idempotency_key,request_fingerprint,binding_generation)
+    values($1,$2,$3,$4,$5,$6,$7,$8) on conflict(agent_id,source_call_id) do nothing`,
+    [
+      agentId,
+      callId,
+      source.campaign_id,
+      intent.deskSessionId,
+      intent.expectedRevision,
+      intent.idempotencyKey,
+      fingerprint,
+      intent.bindingGeneration
+    ]
+  );
+}
 
 /** Called only inside ordered admission with source, agent, user and campaign
  * locked. A source identity outlives tabs, retry keys and the resulting call.
@@ -116,8 +169,6 @@ export async function prepareAutoNext(
     bindingGeneration: intent.bindingGeneration
   });
   if (!decision.eligible) return cancel(decision.reason!);
-  if (!(await c.query("select 1 from agents where id=$1 and registered", [agentId])).rowCount)
-    return cancel("endpoint_unavailable");
   if (a.startPaused) throw new ManualOutboundError("maintenance");
   // A deferred callback cannot survive another admitted call even when that call
   // has already ended. Native acceptance/manual paths cancel eagerly as well.

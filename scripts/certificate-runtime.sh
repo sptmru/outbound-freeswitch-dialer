@@ -27,7 +27,7 @@ certificate_set_call_start_paused() {
     --username "${POSTGRES_USER}" \
     --dbname "${POSTGRES_DB}" \
     --set ON_ERROR_STOP=1 \
-    --command "insert into system_settings (key, value_json, updated_at) values ('ops.call_start_paused', '${paused}'::jsonb, now()) on conflict (key) do update set value_json = excluded.value_json, updated_at = now()"
+    --command "insert into system_settings (key, value_json, updated_at) values ('ops.call_start_paused', '${paused}'::jsonb, now()) on conflict (key) do update set value_json = excluded.value_json, updated_at = now() where excluded.value_json='true'::jsonb or not exists(select 1 from system_settings where key='ops.call_coordination_drain' and value_json='true'::jsonb)"
 }
 
 certificate_served_proxy_fingerprint() {

@@ -71,7 +71,24 @@ export async function recoverQuiescentCall(
       const call = (await db.query("select * from calls where id=$1", [callId])).rows[0];
       // Pending operations can be canceled only when the customer is known gone
       // or already terminal. A missing pending recipient is normal before SIP.
-      const closing = call.ended_at || customer.ended_at || absent.has(customer.id);
+      const awaitingOutbound =
+        call.direction === "outbound" &&
+        ["created", "agent_ringing", "agent_answered", "customer_dialing", "customer_ringing"].includes(
+          call.state
+        ) &&
+        !customer.ended_at &&
+        ((Date.now() - call.created_at.getTime() < 50_000 &&
+          fresh.some((leg) => leg.type === "agent" && !leg.ended_at && !absent.has(leg.id))) ||
+          Boolean(
+            (
+              await db.query(
+                `select 1 from call_operations where call_id=$1 and command_kind='originate'
+            and request ? 'admission' and state='pending' and deadline_at>clock_timestamp() limit 1`,
+                [callId]
+              )
+            ).rowCount
+          ));
+      const closing = call.ended_at || customer.ended_at || (absent.has(customer.id) && !awaitingOutbound);
       if (
         !closing &&
         (
@@ -179,6 +196,8 @@ export interface LifecycleRecoveryWorkers {
   fallback: { tick(callId: string): Promise<unknown> };
   control: { wakeExecutor(id: string): Promise<unknown> };
   cleanup?: { reconcile(callId: string): Promise<unknown> };
+  outbound?: { wakeExecutor(id: string): Promise<unknown> };
+  supervisor?: { wakeExecutor(id: string): Promise<unknown> };
 }
 export function createLifecycleRecovery(
   pool: pg.Pool,
@@ -224,6 +243,15 @@ export function createLifecycleRecovery(
           try {
             await recoverCommandReceipts(pool, executor, row.id, command, current);
             if (!current()) break;
+            if (workers.outbound) {
+              const outbound = await pool.query<{ id: string }>(
+                `select id from call_operations where call_id=$1 and command_kind='originate'
+                and request ? 'admission' and resolved_at is null order by created_at limit 1`,
+                [row.id]
+              );
+              if (outbound.rows[0] && current()) await workers.outbound.wakeExecutor(outbound.rows[0].id);
+            }
+            if (!current()) break;
             await recoverQuiescentCall(pool, executor, row.id, command, current);
             const roots = (
               await pool.query(
@@ -241,6 +269,18 @@ export function createLifecycleRecovery(
             for (const root of roots) {
               if (!current()) break;
               await workers[root.kind as "connection" | "transfer" | "control"].wakeExecutor(root.id);
+            }
+            if (workers.supervisor && current()) {
+              const supervisors = await pool.query<{ id: string }>(
+                `select distinct coalesce(request->>'rootOperationId',id::text) as id
+                from call_operations where call_id=$1 and request ? 'supervisorSessionId'
+                and resolved_at is null order by id limit 8`,
+                [row.id]
+              );
+              for (const root of supervisors.rows) {
+                if (!current()) break;
+                await workers.supervisor.wakeExecutor(root.id);
+              }
             }
             if (!current()) break;
             if (

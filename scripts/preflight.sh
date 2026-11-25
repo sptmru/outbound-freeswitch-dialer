@@ -70,6 +70,16 @@ if [[ -n "$(git -C "${ROOT_DIR}" status --porcelain --untracked-files=normal)" ]
 fi
 
 required DATABASE_URL
+case "${CALL_COORDINATION_ENABLED:-false}" in
+  true)
+    required CALL_EXECUTOR_DATABASE_URL
+    [[ "${FREESWITCH_ESL_ENABLED:-true}" == true && "${FREESWITCH_INGRESS_ENABLED:-false}" == true &&
+       "${FREESWITCH_INBOUND_CONFIG_ENABLED:-false}" == true ]] ||
+      fail "CALL_COORDINATION_ENABLED requires FreeSWITCH ESL, ingress and inbound configuration"
+    ;;
+  false) ;;
+  *) fail "CALL_COORDINATION_ENABLED must be true or false" ;;
+esac
 required POSTGRES_DB
 required POSTGRES_USER
 required NODE_ENV

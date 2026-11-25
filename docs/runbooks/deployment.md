@@ -202,9 +202,92 @@ Local verification: `npm run test:voicemail:db` creates and removes a dedicated 
 
 ## Inbound monitoring and staged rollout
 
-Keep inbound capture and publishing feature-off until I05 prerequisites and
-deployment scope are satisfied. Validate generated monitoring configuration
-from repository sources and check the private scrape, freshness signals and
-named alert receiver. Compare desired and applied revisions against loaded
-XML. See [Inbound Observability and Recovery](inbound-observability.md) for
-drain, replay and evidence needed before rollback.
+Deploy the I05 release through `scripts/deploy.sh` with
+`CALL_COORDINATION_ENABLED=false`, `FREESWITCH_INGRESS_ENABLED=false` and
+`FREESWITCH_INBOUND_CONFIG_ENABLED=false`. Verify an outbound call, including
+terminal history, on the feature-off release. In **Inbound routing** at
+`/inbound`, assign the I04-verified DID to its campaign queue and leave the
+number disabled. Retain the acceptance evidence for the actual provider,
+trusted SIP peer and DID from I04.
+
+Provision the executor on the same PostgreSQL database as the API. As the
+application schema owner, create the login and grant it access to the application
+tables used by the executor and recovery transactions. Set its password
+interactively in `psql` and put the percent-encoded connection URI in the
+protected server environment file. Keep this role separate from the application
+owner and the monitoring role. The Compose deployment runs one API replica and
+reserves four executor connections, including one for critical recovery.
+
+```sql
+CREATE ROLE outbound_dialer_executor LOGIN CONNECTION LIMIT 8;
+\password outbound_dialer_executor
+GRANT USAGE ON SCHEMA public TO outbound_dialer_executor;
+GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA public TO outbound_dialer_executor;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO outbound_dialer_executor;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+  GRANT SELECT, INSERT, UPDATE ON TABLES TO outbound_dialer_executor;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+  GRANT USAGE, SELECT ON SEQUENCES TO outbound_dialer_executor;
+```
+
+Grant `CONNECT` to that role if the database revokes the default access. Review
+the configured `calls.capacity_limits` against the FreeSWITCH session, trunk
+and pre-admission limits. Verify recording, backup and alert delivery in the
+test deployment before scheduling the target cutover.
+
+1. From the stable release checkout, run `bash scripts/call-coordination.sh pause`.
+   Leave all DIDs disabled. Drain calls, including background voicemail,
+   transfers and supervisor sessions. The maintenance gate persists through
+   certificate renewal. The cutover refuses open calls, legs, offers, transfers,
+   unresolved operations and unacknowledged receipts.
+2. In the protected environment file set `CALL_EXECUTOR_DATABASE_URL` and
+   set `CALL_COORDINATION_ENABLED`, `FREESWITCH_INGRESS_ENABLED` and
+   `FREESWITCH_INBOUND_CONFIG_ENABLED` to `true`. Keep
+   `FREESWITCH_ESL_ENABLED=true` and set `FREESWITCH_INBOUND_TRUSTED_CIDRS`
+   to the transport peer CIDRs confirmed in I04.
+3. Run `bash scripts/call-coordination.sh activate`. It verifies the disabled
+   dialplan, stops the old API, checks the empty FreeSWITCH channel inventory
+   again and starts a new FreeSWITCH incarnation. The journal sidecar opens
+   `ingress.sqlite` in the existing private volume. The cutover checks the
+   journal, executor role and switch limits before reconciling the empty
+   legacy baseline and starting the coordinated API. Run `./scripts/backup.sh`
+   now and verify its completion and off-host copy before opening traffic.
+   The first activation uses the installed release because `deploy.sh` takes
+   its backup before replacing containers and an ingress-enabled backup
+   requires a journal snapshot.
+4. Confirm that FreeSWITCH loaded the applied configuration revision, sign
+   agents into the selected campaign and verify that the Desk bindings are
+   ready. Run `bash scripts/call-coordination.sh resume`, enable the single
+   pilot DID and verify the applied revision again. Place an authorized external
+   call and check ID correlation, queue offer, acceptance, both audio
+   directions, terminal history and released slot/capacity. Run an outbound
+   regression and record the release SHA, operator, time and results.
+
+For an update while coordination is active, disable every DID, wait for the
+disabled configuration to apply, run `bash scripts/call-coordination.sh pause`
+and use `bash scripts/call-coordination.sh check-drained` before
+`scripts/deploy.sh`. The deploy repeats the drain check. Resume and re-enable
+the pilot after checking the target release.
+
+For feature-off recovery or rollback, disable all DIDs and verify the loaded
+configuration, pause new work and leave the API, FreeSWITCH and journal running
+through the drain. Run `bash scripts/call-coordination.sh check-drained` and
+`bash scripts/call-coordination.sh deactivate`. If either reports remaining
+work, preserve the current runtime and resolve the recorded ownership first.
+After deactivation set the three feature flags back to `false`. The first
+supported feature-off target is the I05 release deployed in step 1, which reads
+the same schema and retained histories. Record its exact SHA during the drill.
+Run `bash scripts/call-coordination.sh start-feature-off` to restart the same
+release, or use the verified previous-image rollback procedure with its
+recorded SHA. If the first activation stops before committing the cutover
+marker, the same feature-off command can restart the paused release after
+the flags are reset. Preserve the
+PostgreSQL schema, SQLite ingress volume and FreeSWITCH command journal.
+Use `bash scripts/call-coordination.sh resume` after checking the outbound path
+and readiness. Restore drills use a matching PostgreSQL and journal backup.
+See [Inbound Observability and Recovery](inbound-observability.md).
+
+`npm run test:rollout:freeswitch` exercises the API coordination runtime with a
+disposable PostgreSQL database, ingress journal, pinned FreeSWITCH and local
+UDP SIP/RTP endpoints. The smoke uses a fixture Desk session. I05 target
+acceptance records the actual browser, provider and deployment evidence.

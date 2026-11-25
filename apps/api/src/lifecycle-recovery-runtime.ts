@@ -10,6 +10,7 @@ import { nativeCallControlExecutor } from "./native-call-control.js";
 import { recoveryCleanupExecutor } from "./recovery-cleanup.js";
 import { sendFreeSwitchApiCommand } from "./esl.js";
 import type { ForwardingConfig } from "./inbound-forwarding.js";
+import type { LifecycleRecoveryWorkers } from "./inbound-recovery.js";
 
 /** Explicit staged composition. No pool, role, timer or feature flag is created.
  * I05 must supply the reserved executor and compatible FS scripts before wiring
@@ -20,7 +21,8 @@ export function lifecycleRecoveryRuntime(
   executor: CallExecutor,
   socket: string,
   endpoint: { host: string; port: number; password: string },
-  forwarding?: ForwardingConfig
+  forwarding?: ForwardingConfig,
+  additionalWorkers?: Pick<LifecycleRecoveryWorkers, "outbound" | "supervisor">
 ) {
   const esl = { ...endpoint, fenced: true };
   const config = {
@@ -33,6 +35,7 @@ export function lifecycleRecoveryRuntime(
     pool,
     executor,
     {
+      ...additionalWorkers,
       ingress: createInboundQueueCoordinator(pool, socket, command, executor, esl),
       connection: inboundConnectionExecutor(pool, executor, esl),
       transfer: transferConnectionExecutor(pool, executor, esl),

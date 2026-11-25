@@ -17,6 +17,10 @@ import { until, endpoint, decodeUlaw, assertTone } from "./a05-media.mjs";
 import { cleanupFixture } from "../tests/fixtures/inbound/cleanup.mjs";
 import { limitedExecutor } from "../tests/fixtures/inbound/supervisor.mjs";
 import { InboundConfigurationPublisher } from "../apps/api/dist-test/freeswitch/inbound-config.js";
+import {
+  provisionAgentDirectory,
+  reloadAgentDirectories
+} from "../apps/api/dist-test/freeswitch/provisioning.js";
 import { sendFreeSwitchApiCommand } from "../apps/api/dist-test/esl.js";
 import { createInboundQueueCoordinator } from "../apps/api/dist-test/inbound-queue.js";
 import { ingressRequest, readIngressRecords } from "../apps/api/dist-test/ingress-agent.js";
@@ -35,10 +39,21 @@ import {
   inboundConnectionExecutor
 } from "../apps/api/dist-test/inbound-connection.js";
 import { reconcileCoordinatedCallCleanup } from "../apps/api/dist-test/call-cleanup.js";
+import { createCallCoordinationRuntime } from "../apps/api/dist-test/call-coordination-runtime.js";
+import { registerDashboardRoutes } from "../apps/api/dist-test/dashboard/routes.js";
+import { startFreeSwitchEventListener } from "../apps/api/dist-test/esl-events.js";
+import { isFreeSwitchEventListenerSubscribed } from "../apps/api/dist-test/esl-listener-state.js";
+import {
+  checkCutoverDatabase,
+  checkCutoverJournal,
+  checkCutoverSwitch,
+  finishCallCoordinationCutover
+} from "../apps/api/dist-test/coordination-cutover.js";
 const directory = process.argv[2];
 const i03 = process.argv[3] === "--i03-load";
 const mixed = process.argv[3] === "--i03-mixed";
 const soak = process.argv[3] === "--i03-soak" ? process.argv[4] : undefined;
+const i05 = process.env.I05_RUNTIME === "1";
 assert.match(directory ?? "", /^\/tmp\/outbound-e02\.[A-Za-z0-9]+$/);
 const socket = join(directory, "agent.sock");
 const config = {
@@ -50,8 +65,8 @@ const config = {
   FREESWITCH_ESL_PASSWORD: "a02-disposable-only",
   FREESWITCH_GENERATED_CONFIG_DIR: join(directory, "generated"),
   FREESWITCH_INBOUND_TRUSTED_CIDRS: "127.0.0.2/32",
-  FREESWITCH_INBOUND_PRE_ADMISSION_LIMIT: soak || mixed ? 8 : 2,
-  FREESWITCH_TRUNK_CHANNEL_LIMIT: soak || mixed ? 40 : 4,
+  FREESWITCH_INBOUND_PRE_ADMISSION_LIMIT: soak || mixed || i05 ? 8 : 2,
+  FREESWITCH_TRUNK_CHANNEL_LIMIT: soak || mixed || i05 ? 40 : 4,
   FREESWITCH_INBOUND_WAIT_SECONDS: 3
 };
 const esl = {
@@ -92,6 +107,7 @@ let f,
   limited,
   timer,
   phone,
+  outboundTarget,
   eventError,
   draining = false,
   cursor = 0,
@@ -99,6 +115,7 @@ let f,
   transferRuntime;
 const log = await open(join(directory, "agent.log"), "a");
 let inflight;
+let coordinated, stopDispatcher, stopListener;
 let productRecoveryOwnsEvents = false;
 const omittedRecoveryCalls = new Set();
 async function drain() {
@@ -272,11 +289,68 @@ try {
     PUBLIC_APP_URL: "https://e02.example.test",
     corsOrigins: []
   };
-  registerCallOfferRoutes(app, httpConfig, f.pool, {
-    async wakeExecutor() {
-      /* controlled wake: HTTP must finish before native work */
-    }
-  });
+  if (i05) {
+    productRecoveryOwnsEvents = true;
+    outboundTarget = await endpoint({ username: "12025550142", source: "127.0.0.4", frequency: 770 });
+    const uri = new URL("postgresql://postgres@localhost/e02");
+    uri.searchParams.set("host", database.host);
+    uri.searchParams.set("options", `-c search_path=${f.schema}`);
+    const executorUri = new URL(uri);
+    executorUri.username = limited.database.user;
+    executorUri.password = limited.database.password;
+    Object.assign(httpConfig, {
+      DATABASE_URL: uri.href,
+      CALL_EXECUTOR_DATABASE_URL: executorUri.href,
+      CALL_COORDINATION_ENABLED: true,
+      FREESWITCH_INGRESS_ENABLED: true,
+      FREESWITCH_INGRESS_SOCKET: socket,
+      FREESWITCH_DOMAIN: "a04.invalid",
+      FREESWITCH_MAX_SESSIONS: 80,
+      FREESWITCH_TRUNK_JITTER_BUFFER_MSEC: "off",
+      SIP_TRUNK_MODE: "ip_auth",
+      SIP_TRUNK_PROXY: outboundTarget.address,
+      SIP_TRUNK_CALLER_ID: "+12025550199",
+      DEFAULT_PHONE_COUNTRY_CODE: "US",
+      CONTACT_MAX_ATTEMPTS: 3,
+      CONTACT_RETRY_DELAY_SECONDS: 900,
+      FREESWITCH_ESL_EVENT_QUEUE_MAX_SIZE: 1024,
+      FREESWITCH_ESL_EVENT_RETRY_INITIAL_MS: 25,
+      FREESWITCH_ESL_EVENT_RETRY_MAX_MS: 500,
+      FREESWITCH_ESL_RECONCILE_INTERVAL_SECONDS: 60
+    });
+    coordinated = await createCallCoordinationRuntime(f.pool, httpConfig);
+    registerDashboardRoutes(
+      app,
+      httpConfig,
+      f.pool,
+      undefined,
+      coordinated.outbound,
+      coordinated.controls,
+      coordinated.supervisor,
+      coordinated.connection,
+      coordinated.transfer
+    );
+    const logger = {
+      info() {},
+      warn(_details, message) {
+        console.warn(message);
+      },
+      error(details, message) {
+        console.error(message, details?.code ?? "");
+      }
+    };
+    stopListener = startFreeSwitchEventListener(httpConfig, f.pool, logger, coordinated.recovery);
+    stopDispatcher = coordinated.startDispatcher((error) => console.warn(error.message));
+    await until(isFreeSwitchEventListenerSubscribed, "production ESL listener subscription");
+    report.boundary =
+      "Production coordination bootstrap and HTTP routes with isolated real PostgreSQL, FreeSWITCH, ingress journal and UDP SIP/RTP. Desk endpoint is fixture-bound.";
+  } else {
+    registerCallOfferRoutes(app, httpConfig, f.pool, {
+      async wakeExecutor() {
+        /* controlled wake: HTTP must finish before native work */
+      }
+    });
+  }
   const token = signAuthToken(httpConfig, {
     sub: f.userId,
     email: "e02@example.test",
@@ -311,7 +385,135 @@ try {
     assert.equal((await call(c.row.uuid)).agent_connected_at, null);
     return { offer, payload, url, result };
   }
-  if (soak) {
+  if (i05) {
+    const c = await startCall();
+    const deskURL = `/agent/desk?campaignId=${f.campaignId}`;
+    const pending = await until(async () => {
+      const response = await app.inject({ method: "GET", url: deskURL, headers });
+      assert.equal(response.statusCode, 200, response.body);
+      const { offer } = response.json().coordination;
+      return offer?.callId === c.row.uuid && offer;
+    }, "production dispatcher publishes the inbound offer");
+    const response = await app.inject({
+      method: "POST",
+      url: `/agent/call-offers/${pending.id}/accept`,
+      headers,
+      payload: intent()
+    });
+    assert.equal(response.statusCode, 200, response.body);
+    assert.equal(response.json().status, "connecting");
+    await until(
+      async () => (await call(c.row.uuid))?.state === "agent_connected",
+      "production executor bridge"
+    );
+    const active = (await app.inject({ method: "GET", url: deskURL, headers })).json();
+    assert.equal(active.coordination.slot.callId, c.row.uuid);
+    assert.equal(active.activeCall.id, c.row.uuid);
+    assert.equal(phone.invites.length, 1);
+    await until(() => phone.received.length >= 2400, "agent receives customer RTP");
+    const reverseTone = assertTone(phone.received.slice(-2400), 880);
+    c.control.hangup();
+    const media = await c.result;
+    const forwardTone = assertTone(
+      media.rtp.slice(-15).flatMap((p) => p.payload.map(decodeUlaw)),
+      660
+    );
+    await until(async () => {
+      const row = await call(c.row.uuid);
+      return (
+        row?.ended_at &&
+        (
+          await f.pool.query(
+            `select 1 from agent_call_slots where agent_id=$1 and state='free'
+        and not exists(select 1 from call_operations where call_id=$2 and resolved_at is null)
+        and not exists(select 1 from call_capacity_reservations where call_id=$2 and state<>'released')`,
+            [f.agentId, c.row.uuid]
+          )
+        ).rowCount === 1
+      );
+    }, "production listener completes terminal and releases capacity");
+    await pass("I05 coordinated bootstrap admits, offers, bridges and releases a real inbound call", {
+      callId: c.row.uuid,
+      operationId: response.json().operationId,
+      forwardTone,
+      reverseTone
+    });
+    await provisionAgentDirectory(httpConfig, {
+      sipUsername: username,
+      sipPassword: "fixture",
+      displayName: "I05"
+    });
+    await reloadAgentDirectories(httpConfig);
+    await phone.register();
+    const pinned = await command(`sofia_contact internal-webrtc/${username}@a04.invalid`);
+    await f.pool.query(
+      "update agent_desk_sessions set verified_endpoint=$2,endpoint_pin=$2,verified_at=clock_timestamp() where id=$1",
+      [f.input.deskSessionId, pinned]
+    );
+    await f.pool.query("update agents set registered=false where id=$1", [f.agentId]);
+    phone.received.length = 0;
+    const outbound = await app.inject({
+      method: "POST",
+      url: "/agent/manual-dial/start",
+      headers,
+      payload: {
+        campaignId: f.campaignId,
+        phoneNumber: "+12025550142",
+        intent: { ...intent(), startReason: "manual" }
+      }
+    });
+    assert.equal(outbound.statusCode, 200, outbound.body);
+    const outboundId = outbound.json().callId;
+    await until(async () => (await call(outboundId))?.state === "bridged", "coordinated outbound bridge");
+    await until(
+      () => phone.received.length >= 2400 && outboundTarget.received.length >= 2400,
+      "outbound RTP"
+    );
+    const outboundAgentTone = assertTone(phone.received.slice(-2400), 770);
+    const outboundCustomerTone = assertTone(outboundTarget.received.slice(-2400), 660);
+    const ended = await app.inject({
+      method: "POST",
+      url: `/agent/calls/${outboundId}/end`,
+      headers,
+      payload: { intent: intent() }
+    });
+    assert.equal(ended.statusCode, 200, ended.body);
+    await until(async () => (await call(outboundId))?.ended_at, "terminal coordinated outbound");
+    await pass("I05 coordinated outbound uses the verified Desk binding, carries audio and hangs up", {
+      callId: outboundId,
+      operationId: outbound.json().operationId,
+      outboundAgentTone,
+      outboundCustomerTone
+    });
+    await f.pool.query("update inbound_numbers set enabled=false where id=$1", [number.id]);
+    await f.pool.query(
+      "insert into system_settings(key,value_json) values('ops.call_start_paused','true') on conflict(key) do update set value_json='true'"
+    );
+    assert.equal(await new InboundConfigurationPublisher(f.pool, httpConfig).reconcile(), "applied");
+    await until(async () => {
+      try {
+        await checkCutoverDatabase(f.pool);
+        await checkCutoverJournal(httpConfig);
+        return true;
+      } catch {
+        return false;
+      }
+    }, "production drain, native receipt ACK and ingress journal ACK");
+    await checkCutoverSwitch(httpConfig);
+    stopDispatcher();
+    stopListener();
+    await coordinated.close();
+    coordinated = undefined;
+    await finishCallCoordinationCutover(f.pool, false);
+    assert.equal(
+      await createCallCoordinationRuntime(f.pool, { ...httpConfig, CALL_COORDINATION_ENABLED: false }),
+      null
+    );
+    assert.equal((await call(c.row.uuid)).outcome, "customer_hung_up");
+    await pass("I05 deactivation preserves completed history and admits the feature-off API mode", {
+      callId: c.row.uuid
+    });
+  } else if (soak) {
     await runSipRtpSoak({
       profile: soak,
       f,
@@ -770,11 +972,15 @@ try {
   throw error;
 } finally {
   await app?.close();
+  stopDispatcher?.();
+  stopListener?.();
+  await coordinated?.close();
   if (timer) clearInterval(timer);
   while (draining) await delay(10);
   if (f && !soak) report.finalSnapshot = await f.snapshot();
   observer?.close();
   await phone?.close();
+  await outboundTarget?.close();
   if (agent) {
     const exit = once(agent, "exit");
     agent.kill("SIGTERM");

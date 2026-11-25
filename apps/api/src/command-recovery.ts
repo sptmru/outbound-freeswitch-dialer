@@ -88,7 +88,9 @@ export async function recoverCommandReceipts(
                     ? "native_command_job"
                     : r.supervisorSessionId
                       ? "supervisor_command_job"
-                      : null;
+                      : r.admission && row.command_kind === "originate"
+                        ? "coordinated_outbound_job"
+                        : null;
         if (eventType)
           await db.query(
             `insert into call_events(call_id,event_type,freeswitch_event_name,raw_json)

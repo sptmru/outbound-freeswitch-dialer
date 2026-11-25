@@ -194,6 +194,11 @@ D02 adds an opt-in configuration publisher and physical ingress guards; it does 
 
 ### Durable ingress (D03)
 
+`CALL_COORDINATION_ENABLED=false` keeps the I05 runtime in legacy mode.
+`CALL_EXECUTOR_DATABASE_URL` supplies the bounded executor login on the API
+database when coordination is active. Initialize and drain this mode through
+the [I05 deployment procedure](runbooks/deployment.md#inbound-monitoring-and-staged-rollout).
+
 `FREESWITCH_INGRESS_ENABLED=false` keeps FS-local capture/import off. Setting it
 true alone does not admit, answer or enqueue calls. The [D04 coordinator](inbound-queue-admission.md)
 requires an explicitly supplied native C03 executor; I05 owns bootstrap/activation.

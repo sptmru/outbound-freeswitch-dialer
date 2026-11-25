@@ -268,6 +268,7 @@ describe("App Agent Desk empty states", () => {
     });
     render(<App />);
     await screen.findByLabelText("Manual call");
+    await waitFor(() => expect(apiMocks.subscribeAgentEvents).toHaveBeenCalled());
     act(() => hints.onRefresh({ source: "call_offers", occurredAt: "" }));
     await waitFor(() => expect(apiMocks.fetchAgentDesk).toHaveBeenCalledTimes(2));
     expect(screen.queryByRole("heading", { name: "Incoming call" })).toBeNull();

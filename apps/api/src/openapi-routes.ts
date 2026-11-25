@@ -809,10 +809,10 @@ add(
   "POST",
   "/agent/manual-dial/start",
   "Start manual call",
-  "Starts an authorized legacy manual outbound call and returns refreshed Agent Desk state. V1 manual admission is implemented behind an internal execution dependency; the current server bootstrap returns 409 coordination_unavailable before mutation. Native activation requires the rollout gates; native work rejects ambiguous legacy requests with legacy_initiator_required.",
+  "Starts a manual outbound call. The feature-off release returns Agent Desk state. When coordination is active, a v1 intent returns the durable call and execution operation. Requests without that intent return legacy_initiator_required.",
   {
     body: ref("StartManualCallRequest"),
-    success: ref("AgentDeskResponse"),
+    success: { anyOf: [ref("AgentDeskResponse"), ref("CoordinationMutationResponse")] },
     errors: [...agentErrors, 409]
   }
 );
@@ -820,10 +820,10 @@ add(
   "POST",
   "/agent/call-next",
   "Call next lead",
-  "Selects and starts the next callable lead in the legacy outbound campaign. V1 manual intent has staged atomic admission; the current server bootstrap returns 409 coordination_unavailable because its native execution dependency is not installed. V1 automatic intent validates a stable outbound source and defers to eligible queued inbound without selecting a contact; started retries replay the original call. Both intents remain staged behind the execution dependency; missing intent never authorizes native offer dismissal.",
+  "Selects and starts the next callable lead. When coordination is active, v1 manual intent uses atomic admission. Automatic intent validates the outbound source and defers when an eligible inbound call is queued. A retry reuses the original admission outcome.",
   {
     body: ref("StartNextCallRequest"),
-    success: ref("AgentDeskResponse"),
+    success: { anyOf: [ref("AgentDeskResponse"), ref("CoordinationMutationResponse")] },
     errors: [...agentErrors, 409]
   }
 );
@@ -831,11 +831,11 @@ add(
   "POST",
   "/agent/leads/:contactId/call",
   "Call selected lead",
-  "Starts a legacy call to an eligible contact. V1 manual admission is implemented behind an internal execution dependency; the current server bootstrap returns 409 coordination_unavailable before mutation. Native activation requires the rollout gates; native work rejects ambiguous legacy requests with legacy_initiator_required.",
+  "Starts a call to an eligible contact. With coordination active, supply the v1 manual intent and use the returned operation to track durable admission.",
   {
     params: contactParams,
     body: ref("StartLeadCallRequest"),
-    success: ref("AgentDeskResponse"),
+    success: { anyOf: [ref("AgentDeskResponse"), ref("CoordinationMutationResponse")] },
     errors: [...agentErrors, 404, 409]
   }
 );

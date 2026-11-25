@@ -28,6 +28,7 @@ import {
 import { sendFreeSwitchApiCommand } from "./esl.js";
 import { isCoordinatedCall, persistCoordinatedCallEvent } from "./call-cleanup.js";
 import { persistNativeCommandJob } from "./native-call-control.js";
+import { persistCoordinatedOutboundJob } from "./coordinated-outbound-execution.js";
 import { AdmissionDiscoveryChanged } from "./call-admission.js";
 import {
   configureFreeSwitchEventQueueMetrics,
@@ -142,7 +143,7 @@ export function startFreeSwitchEventListener(
             );
         await persistenceQueue.waitForIdle();
       }
-      if (recoveryFence.ticket()) {
+      if (recoveryFence.ticket() && !(nativeRecovery && config.CALL_COORDINATION_ENABLED)) {
         await reconcileActiveCalls(config, pool, logger);
       }
     },
@@ -151,7 +152,9 @@ export function startFreeSwitchEventListener(
 
   const reconciliationTimer = setInterval(
     () => reconciliationTask.request(),
-    config.FREESWITCH_ESL_RECONCILE_INTERVAL_SECONDS * 1000
+    nativeRecovery && config.CALL_COORDINATION_ENABLED
+      ? 1000
+      : config.FREESWITCH_ESL_RECONCILE_INTERVAL_SECONDS * 1000
   );
   reconciliationTimer.unref?.();
 
@@ -433,6 +436,11 @@ async function persistFreeSwitchLifecycleEvent(
       body: frame.body,
       headers: frame.headers
     })) ||
+      (await persistCoordinatedOutboundJob(pool, {
+        jobUuid: frame.headers["job-uuid"] ?? "",
+        body: frame.body,
+        headers: frame.headers
+      })) ||
       (await persistSupervisorJob(pool, {
         jobUuid: frame.headers["job-uuid"] ?? "",
         body: frame.body,
@@ -440,50 +448,7 @@ async function persistFreeSwitchLifecycleEvent(
       })))
   )
     return;
-  const concreteCallId =
-    frame.headers["outbound-dialer-call-id"] ??
-    frame.headers["variable_outbound_dialer_call_id"] ??
-    frame.headers["variable_voicemail_drop_call_id"];
-  if (
-    eventName &&
-    concreteCallId &&
-    isUuid(concreteCallId) &&
-    (await persistCoordinatedCallEvent(pool, {
-      callId: concreteCallId,
-      legUuid:
-        frame.headers["outbound-dialer-customer-leg-uuid"] ??
-        frame.headers["unique-id"] ??
-        frame.headers["variable_uuid"] ??
-        null,
-      eventName,
-      eventUuid: getFreeSwitchEventUuid(frame),
-      eventAt: parseFreeSwitchEventTimestamp(frame.headers),
-      hangupCause: frame.headers["hangup-cause"],
-      playback: frame.headers["event-subclass"]?.startsWith(VOICEMAIL_PLAYBACK_EVENT_PREFIX)
-        ? (frame.headers["event-subclass"].slice(VOICEMAIL_PLAYBACK_EVENT_PREFIX.length) as
-            "started" | "completed" | "failed")
-        : undefined,
-      raw: { headers: frame.headers, body: frame.body }
-    }))
-  )
-    return;
-  if (eventName === "BACKGROUND_JOB") {
-    const jobUuid = frame.headers["job-uuid"]?.trim();
-    if (jobUuid && isUuid(jobUuid) && isFailedBackgroundJob(frame)) {
-      await persistSupervisorBackgroundJobFailure(pool, jobUuid, frame.body.trim().slice(0, 1000));
-    }
-    await persistBackgroundJobEvent(config, pool, frame);
-    return;
-  }
-  if (eventName === "CUSTOM" && isAgentRegistrationEvent(frame)) {
-    await persistAgentRegistrationEvent(config, pool, frame, logger);
-    return;
-  }
-  if (eventName === "CUSTOM" && isVoicemailPlaybackEvent(frame)) {
-    await persistVoicemailPlaybackEvent(config, pool, frame);
-    return;
-  }
-  if (eventName === "CUSTOM" && isVoicemailDetectionEvent(frame)) {
+  if (eventName === "CUSTOM" && !isVoicemailPlaybackEvent(frame) && isVoicemailDetectionEvent(frame)) {
     await persistVoicemailDetectionEvent(pool, frame);
     return;
   }
@@ -511,6 +476,85 @@ async function persistFreeSwitchLifecycleEvent(
     return;
   }
 
+  const concreteCallId =
+    frame.headers["outbound-dialer-call-id"] ??
+    frame.headers["variable_outbound_dialer_call_id"] ??
+    frame.headers["variable_voicemail_drop_call_id"];
+  if (
+    eventName &&
+    concreteCallId &&
+    isUuid(concreteCallId) &&
+    (await persistCoordinatedCallEvent(pool, {
+      callId: concreteCallId,
+      legUuid:
+        frame.headers["outbound-dialer-customer-leg-uuid"] ??
+        frame.headers["unique-id"] ??
+        frame.headers["variable_uuid"] ??
+        null,
+      eventName,
+      eventUuid: getFreeSwitchEventUuid(frame),
+      eventAt: parseFreeSwitchEventTimestamp(frame.headers),
+      peerLegUuid: frame.headers["other-leg-unique-id"],
+      hangupCause: frame.headers["hangup-cause"],
+      playback: frame.headers["event-subclass"]?.startsWith(VOICEMAIL_PLAYBACK_EVENT_PREFIX)
+        ? (frame.headers["event-subclass"].slice(VOICEMAIL_PLAYBACK_EVENT_PREFIX.length) as
+            "started" | "completed" | "failed")
+        : undefined,
+      raw: { headers: frame.headers, body: frame.body }
+    }))
+  ) {
+    const leg = frame.headers["unique-id"] ?? frame.headers["variable_uuid"];
+    if (leg && eventName === "CHANNEL_HANGUP_COMPLETE") {
+      const {
+        rows: [matched]
+      } = await pool.query<{ type: "agent" | "customer" }>(
+        "select type from call_legs where call_id=$1 and freeswitch_uuid=$2 and type in ('agent','customer')",
+        [concreteCallId, leg]
+      );
+      if (matched)
+        await persistCallMediaStats(pool, {
+          callId: concreteCallId,
+          eventName,
+          frame,
+          legType: matched.type,
+          legUuid: leg
+        });
+    }
+    if (
+      leg &&
+      ["CHANNEL_PROGRESS_MEDIA", "CHANNEL_ANSWER", "CHANNEL_BRIDGE"].includes(eventName) &&
+      (
+        await pool.query(
+          `select 1 from call_legs l join calls c on c.id=l.call_id where l.call_id=$1 and l.freeswitch_uuid=$2
+          and l.type='customer' and l.ended_at is null and c.ended_at is null and c.direction='outbound'`,
+          [concreteCallId, leg]
+        )
+      ).rowCount
+    ) {
+      await startVoicemailDetection(config, pool, {
+        callId: concreteCallId,
+        customerLegUuid: leg,
+        phase: eventName === "CHANNEL_PROGRESS_MEDIA" ? "early_media" : "answered"
+      });
+    }
+    return;
+  }
+  if (eventName === "BACKGROUND_JOB") {
+    const jobUuid = frame.headers["job-uuid"]?.trim();
+    if (jobUuid && isUuid(jobUuid) && isFailedBackgroundJob(frame)) {
+      await persistSupervisorBackgroundJobFailure(pool, jobUuid, frame.body.trim().slice(0, 1000));
+    }
+    await persistBackgroundJobEvent(config, pool, frame);
+    return;
+  }
+  if (eventName === "CUSTOM" && isAgentRegistrationEvent(frame)) {
+    await persistAgentRegistrationEvent(config, pool, frame, logger);
+    return;
+  }
+  if (eventName === "CUSTOM" && isVoicemailPlaybackEvent(frame)) {
+    await persistVoicemailPlaybackEvent(config, pool, frame);
+    return;
+  }
   const callId = frame.headers["variable_outbound_dialer_call_id"];
   if (!eventName || !callId || !isUuid(callId)) {
     return;
@@ -1598,6 +1642,7 @@ async function persistVoicemailDetectionEvent(pool: pg.Pool, frame: EslFrame): P
           on customer_leg.call_id = calls.id
          and customer_leg.type = 'customer'
         where event_leg.freeswitch_uuid = $1
+          and event_leg.type = 'customer'
           and calls.ended_at is null
           and calls.state not in ('completed', 'failed', 'canceled')
         order by calls.created_at desc

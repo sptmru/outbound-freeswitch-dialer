@@ -46,6 +46,8 @@ services:
       API_PORT: 3000
       PUBLIC_APP_URL: ${PUBLIC_APP_URL}
       DATABASE_URL: ${DATABASE_URL}
+      CALL_COORDINATION_ENABLED: ${CALL_COORDINATION_ENABLED:-false}
+      CALL_EXECUTOR_DATABASE_URL: ${CALL_EXECUTOR_DATABASE_URL:-}
       FREESWITCH_ESL_HOST: ${FREESWITCH_ESL_HOST:-host.docker.internal}
       FREESWITCH_ESL_PORT: ${FREESWITCH_ESL_PORT:-8021}
       FREESWITCH_ESL_PASSWORD: ${FREESWITCH_ESL_PASSWORD}
@@ -83,6 +85,7 @@ services:
       FREESWITCH_INBOUND_TRUSTED_CIDRS: ${FREESWITCH_INBOUND_TRUSTED_CIDRS:-}
       FREESWITCH_INBOUND_PRE_ADMISSION_LIMIT: ${FREESWITCH_INBOUND_PRE_ADMISSION_LIMIT:-8}
       FREESWITCH_TRUNK_CHANNEL_LIMIT: ${FREESWITCH_TRUNK_CHANNEL_LIMIT:-40}
+      FREESWITCH_MAX_SESSIONS: ${FREESWITCH_MAX_SESSIONS:-80}
       FREESWITCH_INBOUND_WAIT_SECONDS: ${FREESWITCH_INBOUND_WAIT_SECONDS:-3}
       VOICEMAIL_RECORDINGS_STORAGE_DIR: /var/lib/freeswitch/storage/recordings
       VOICEMAIL_UPLOAD_MAX_BYTES: ${VOICEMAIL_UPLOAD_MAX_BYTES:-67108864}
@@ -355,6 +358,18 @@ services:
       ]
     volumes:
       - ingress_journal:/var/lib/outbound-dialer/ingress
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - >-
+          if (process.env.FREESWITCH_INGRESS_ENABLED === "true")
+          require("node:http").get({socketPath:process.env.FREESWITCH_INGRESS_SOCKET,path:"/status",timeout:1000},
+          r=>{r.resume();process.exit(r.statusCode===200?0:1)}).on("timeout",()=>process.exit(1)).on("error",()=>process.exit(1))
+      interval: 5s
+      timeout: 2s
+      retries: 10
 
   pcap-capture:
     image: outbound-dialer-pcap:${APP_VERSION:-local}

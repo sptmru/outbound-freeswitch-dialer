@@ -45,6 +45,7 @@
     "test:audio:freeswitch": "F02_AUDIO=1 bash scripts/test-d04-queue.sh",
     "test:transfers:offers:freeswitch": "G01_TRANSFERS=1 bash scripts/test-e02-acceptance.sh",
     "test:acceptance:freeswitch": "bash scripts/test-e02-acceptance.sh",
+    "test:rollout:freeswitch": "I05_RUNTIME=1 bash scripts/test-e02-acceptance.sh",
     "test:desk:offers:browser": "playwright test --config playwright.e03.config.ts",
     "test:service-invites:freeswitch": "E04_SERVICE_INVITES=1 bash scripts/test-d01-desk.sh --browser",
     "test:forwarding:freeswitch": "F04_FORWARDING=1 bash scripts/test-d04-queue.sh",

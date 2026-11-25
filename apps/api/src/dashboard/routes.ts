@@ -654,7 +654,19 @@ export function registerDashboardRoutes(
     }
 
     const query = agentDeskQuerySchema.parse(request.query);
-    return buildAgentDeskResponse(pool, toPublicUser(user), query.campaignId, contactRetryPolicy);
+    const publicUser = toPublicUser(user);
+    if (
+      config.CALL_COORDINATION_ENABLED &&
+      !(await pool.query("select 1 from agents where user_id=$1", [user.id])).rowCount
+    )
+      await ensureAgentForUser(pool, config, publicUser);
+    return buildAgentDeskResponse(
+      pool,
+      publicUser,
+      query.campaignId,
+      contactRetryPolicy,
+      config.CALL_COORDINATION_ENABLED
+    );
   });
 
   app.patch("/agent/availability", async (request, reply): Promise<AgentDeskResponse | void> => {
@@ -673,7 +685,13 @@ export function registerDashboardRoutes(
     if (!availability) {
       return reply.code(409).send({ message: "Agent availability could not be updated" });
     }
-    return buildAgentDeskResponse(pool, publicUser, input.campaignId, contactRetryPolicy);
+    return buildAgentDeskResponse(
+      pool,
+      publicUser,
+      input.campaignId,
+      contactRetryPolicy,
+      config.CALL_COORDINATION_ENABLED
+    );
   });
 
   app.get(

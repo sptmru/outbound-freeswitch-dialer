@@ -9,6 +9,7 @@ STATE_FILE="${ROOT_DIR}/logs/deployment-state.env"
 source "${ROOT_DIR}/scripts/deployment-state.sh"
 # shellcheck disable=SC1091
 source "${ROOT_DIR}/scripts/host-operation-lock.sh"
+source "${ROOT_DIR}/scripts/call-coordination-state.sh"
 acquire_host_operation_lock "${ROOT_DIR}" "deployment"
 
 if [[ "${DEPLOY_PULL:-false}" == "true" ]]; then
@@ -62,6 +63,34 @@ elif [[ -f "${STATE_FILE}" && "${ALLOW_UNVERIFIED_ACTIVE_CALL_STATE:-false}" != 
   exit 1
 fi
 
+check_coordinated_deploy_drain() {
+  if [[ -n "${current_version}" ]]; then
+    local active
+    active="$(call_coordination_database_mode)" || return 1
+    if [[ "${active}" != f && "${active}" != t ]]; then
+      echo "Could not verify the call coordination mode" >&2
+      return 1
+    fi
+    if [[ "${active}" == t && "${CALL_COORDINATION_ENABLED:-false}" != true ]]; then
+      echo "Drain and deactivate call coordination before deploying with its flag off" >&2
+      return 1
+    fi
+    if [[ "${active}" == f && "${CALL_COORDINATION_ENABLED:-false}" == true ]]; then
+      echo "Complete the call coordination cutover on the deployed release before deploying with its flag on" >&2
+      return 1
+    fi
+  fi
+  if [[ "${CALL_COORDINATION_ENABLED:-false}" == true ]]; then
+    [[ -n "${current_version}" ]] || {
+      echo "Deploy a feature-off release before the first call coordination activation" >&2
+      return 1
+    }
+    APP_ENV_FILE="${ENV_FILE}" APP_VERSION="${current_version}" docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" \
+      run --rm -T --no-deps --pull never api node apps/api/dist/coordination-cutover-cli.js check-drained
+  fi
+}
+
+check_coordinated_deploy_drain
 if [[ "${SKIP_PRE_DEPLOY_BACKUP:-false}" != "true" ]]; then
   ENV_FILE="${ENV_FILE}" "${ROOT_DIR}/scripts/backup.sh"
 fi
@@ -70,6 +99,7 @@ compose pull --ignore-buildable
 compose build api freeswitch pcap-capture web proxy
 compose run --rm monitoring-config
 ENV_FILE="${ENV_FILE}" "${ROOT_DIR}/scripts/validate-monitoring-config.sh"
+check_coordinated_deploy_drain
 ENV_FILE="${ENV_FILE}" APP_VERSION="${new_version}" "${ROOT_DIR}/scripts/notify-deploy-start.sh" "${new_version}"
 
 deployment_state_write \
@@ -102,6 +132,9 @@ trap mark_deploy_failed ERR
 compose up -d --wait postgres freeswitch
 compose run --rm --no-deps api npm --workspace @outbound-dialer/api run migrate
 ENV_FILE="${ENV_FILE}" "${ROOT_DIR}/scripts/configure-monitoring-db-role.sh"
+if [[ "${CALL_COORDINATION_ENABLED:-false}" == true ]]; then
+  compose up -d --no-deps --wait ingress-journal
+fi
 compose up -d --wait
 # Generated monitoring files are bind-mounted, so Compose does not recreate an
 # already-running Prometheus container when only their contents change.

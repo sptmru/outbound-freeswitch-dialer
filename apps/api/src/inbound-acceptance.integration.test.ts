@@ -140,6 +140,30 @@ async function queued(f: Fixture, changes: Partial<IngressRecord> = {}) {
   );
   return r.uuid;
 }
+
+test(
+  "I05 dispatcher waits for the exact FreeSWITCH waiting operation before publishing an offer",
+  options,
+  async () => {
+    const f = await fixture();
+    try {
+      const a = await f.agent();
+      const call = await f.seed();
+      const waiting = await admitInboundQueue(f.pool, call.uuid);
+      assert.ok(waiting);
+      assert.equal(await dispatchInboundOffers(f.pool, a.id), null);
+      await f.pool.query(
+        `update call_operations set state='succeeded',result='{}',resolved_at=clock_timestamp(),
+      resolution_evidence='waiting operation fixture' where id=$1`,
+        [waiting.id]
+      );
+      assert.equal((await dispatchInboundOffers(f.pool, a.id))?.callId, call.uuid);
+    } finally {
+      await f.cleanup();
+    }
+  }
+);
+
 async function worker(f: Fixture, a: Agent, offerId: string, hold = false) {
   const child = fork(
     new URL("../../../tests/fixtures/inbound/accept-worker.mjs", import.meta.url),

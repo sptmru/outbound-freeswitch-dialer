@@ -187,10 +187,8 @@ export async function admitCoordinatedOutbound(
             };
             const decision = await admission.eligibility(eligibility);
             if (!decision.eligible) throw new ManualOutboundError(decision.reason!);
-            const agent = (
-              await client.query("select registered,caller_id from agents where id=$1", [actor.agent_id])
-            ).rows[0];
-            if (!agent.registered) throw new ManualOutboundError("endpoint_unavailable");
+            const agent = (await client.query("select caller_id from agents where id=$1", [actor.agent_id]))
+              .rows[0];
             const campaign = (await client.query("select * from campaigns where id=$1", [campaignId]))
               .rows[0];
             if (!campaign || campaign.status !== "active")
@@ -419,7 +417,7 @@ export async function validateManualOutboundCommand(
     join campaigns p on p.id=c.campaign_id join agent_call_slots s on s.agent_id=a.id
     join agent_desk_sessions d on d.id=$5 and d.agent_id=a.id
     where c.id=$1 and c.direction='outbound' and c.ended_at is null and c.state='created'
-      and a.id=$2 and u.id=$9 and u.is_active and u.auth_version=$12 and a.registered and a.availability_status='available'
+      and a.id=$2 and u.id=$9 and u.is_active and u.auth_version=$12 and a.availability_status='available'
       and p.status='active' and (not c.manual_dial or p.manual_dialing_enabled)
       and s.call_id=c.id and s.generation=$3 and s.reservation_id=$4 and s.state='reserved' and not s.reconciliation_required
       and d.revoked_at is null and d.expires_at>clock_timestamp() and d.ready and d.campaign_id=c.campaign_id

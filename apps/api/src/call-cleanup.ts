@@ -3,6 +3,7 @@ import type { CallOutcome } from "@outbound-dialer/shared";
 import { resolveCustomerHangupOutcome } from "./call-outcomes.js";
 import { withCallAdmission, type CallAdmission } from "./call-admission.js";
 import { finishAgentCall } from "./agent-availability.js";
+import { prepareReleasedOutboundSource } from "./auto-next.js";
 
 type Queryable = pg.Pool | pg.PoolClient;
 // Native histories must never fall through a legacy role-wide UPDATE/uuid_exists
@@ -22,6 +23,7 @@ export async function isCoordinatedCall(db: Queryable, callId: string): Promise<
 export interface ConcreteCallEvent {
   callId: string;
   legUuid: string | null;
+  peerLegUuid?: string;
   eventName: string;
   eventUuid: string | null;
   eventAt?: Date | null;
@@ -114,6 +116,50 @@ export async function persistCoordinatedCallEvent(pool: pg.Pool, input: Concrete
             where id=$1 and ended_at is null`,
             [input.callId]
           );
+        if (call.direction === "outbound" && input.eventName === "CHANNEL_BRIDGE" && input.peerLegUuid) {
+          const bridge = (
+            await client.query(
+              `select p.id,p.agent_id,p.slot_generation,p.slot_reservation_id
+              from call_operations o
+              join call_legs a on a.call_id=o.call_id and a.freeswitch_uuid=o.target_uuid::text
+              join call_legs b on b.call_id=o.call_id and b.freeswitch_uuid=o.request->>'customerUuid'
+              join call_participants p on p.id=a.participant_id and p.left_at is null
+              where o.call_id=$1 and o.command_kind='originate' and o.request ? 'admission'
+              and exists(select 1 from call_execution_attempts t where t.operation_id=o.id)
+              and a.ended_at is null and b.ended_at is null
+              and ((a.id=$2 and b.freeswitch_uuid=$3) or (b.id=$2 and a.freeswitch_uuid=$3))`,
+              [call.id, leg.id, input.peerLegUuid]
+            )
+          ).rows[0];
+          if (
+            bridge &&
+            bridge.agent_id === call.agent_id &&
+            !call.agent_released_at &&
+            ["created", "agent_ringing", "agent_answered", "customer_dialing", "customer_ringing"].includes(
+              call.state
+            )
+          ) {
+            const token = {
+              agentId: bridge.agent_id,
+              callId: call.id,
+              reservationId: bridge.slot_reservation_id,
+              generation: bridge.slot_generation
+            };
+            await admission.transition(token, "connecting");
+            const active = await admission.transition(token, "active");
+            if (active) {
+              await client.query(
+                "update call_participants set connected_at=coalesce(connected_at,clock_timestamp()) where id=$1",
+                [bridge.id]
+              );
+              await client.query(
+                `update calls set state='bridged',started_at=coalesce(started_at,clock_timestamp()),
+                answered_at=coalesce(answered_at,clock_timestamp()),updated_at=clock_timestamp() where id=$1`,
+                [call.id]
+              );
+            }
+          }
+        }
       }
       const vm = ["voicemail_drop_requested", "voicemail_playback_started", "agent_released"].includes(
         call.state
@@ -260,6 +306,8 @@ async function settleCleanup(admission: CallAdmission, callId: string, cleanupRe
         );
       }
       await finishAgentCall(db, p.agent_id);
+      if (call.direction === "outbound" && call.agent_id === p.agent_id)
+        await prepareReleasedOutboundSource(admission, callId, p.agent_id);
     }
   }
   // Child/operation work precedes capacity, which precedes contact cleanup.

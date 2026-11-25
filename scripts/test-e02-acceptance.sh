@@ -101,6 +101,11 @@ chmod 777 "$RUN_DIR/socket"
 git rev-parse HEAD > "$RUN_DIR/base-revision.txt"
 sha256sum apps/api/src/call-recording*.ts apps/api/src/dashboard/campaign-recording-export.ts scripts/h02-recording-probe.mjs apps/api/src/command-recovery*.ts apps/api/src/recovery-cleanup.ts apps/api/src/lifecycle-recovery-runtime.ts scripts/h01-*.mjs apps/api/src/inbound-recovery*.ts apps/api/src/recovery-persistence-fence*.ts scripts/h01-quiescent-recovery.mjs apps/api/src/transfer-connection*.ts apps/api/src/supervisor-coordination*.ts scripts/g04-supervisor-handover.mjs scripts/g02-transfer-execution.mjs apps/api/src/transfer-offers.ts apps/api/src/call-offer-expiry.ts scripts/g01-transfer-continuity.mjs apps/api/src/service-invite*.ts apps/api/src/esl.ts apps/api/src/freeswitch/*.ts infra/freeswitch/entrypoint.sh infra/freeswitch/templates/inbound/* apps/api/src/ingress-*.ts apps/api/src/inbound-ingress*.ts apps/api/src/inbound-queue*.ts apps/api/src/esl-events.ts apps/api/src/call-cleanup.ts infra/freeswitch/templates/dialplan/inbound-wait.xml.tpl \
   apps/api/db/migrations/*.sql apps/api/src/call-executor.ts apps/api/src/call-admission.ts apps/api/src/call-capacity.ts apps/api/src/dashboard/recordings.ts apps/api/src/inbound-acceptance*.ts apps/api/src/inbound-connection.ts scripts/e02-acceptance-probe.mjs scripts/a02-ingress-probe.mjs scripts/a05-media.mjs tests/fixtures/inbound/cleanup.mjs tests/fixtures/inbound/supervisor.mjs "$0" > "$RUN_DIR/source-sha256.txt"
+if [[ "${I05_RUNTIME:-0}" == 1 ]]; then
+  sha256sum apps/api/src/{call-coordination-runtime,coordination-cutover,coordinated-outbound-execution,esl-events,server}.ts \
+    apps/api/src/dashboard/{desk-coordination,responders,routes}.ts \
+    scripts/{call-coordination,call-coordination-state,deploy,rollback}.sh >> "$RUN_DIR/source-sha256.txt"
+fi
 docker image inspect "$IMAGE" "$PG_IMAGE" --format '{{.Id}} {{json .RepoDigests}}' > "$RUN_DIR/images.txt"
 docker run -d --name "$NET_CONTAINER" --network none --memory 32m --pids-limit 8 \
   --cap-drop ALL --entrypoint sleep "$IMAGE" 3600 > "$RUN_DIR/net-id.txt"

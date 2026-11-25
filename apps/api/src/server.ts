@@ -36,6 +36,7 @@ import {
 } from "./security.js";
 import { bootstrapAdmin, migrateAgentSipSecretEncryption } from "./users.js";
 import { RuntimeSettingsService } from "./runtime-settings.js";
+import { createCallCoordinationRuntime } from "./call-coordination-runtime.js";
 
 const config = loadConfig();
 const app = Fastify({
@@ -67,6 +68,8 @@ let stopAgentDirectoryReconciler: (() => void) | null = null;
 let stopInboundConfigurationReconciler: (() => void) | null = null;
 let stopCallRecordingFinalizer: (() => void) | null = null;
 let stopPcapCaptureFinalizer: (() => void) | null = null;
+let stopOfferDispatcher: (() => void) | null = null;
+let coordination: Awaited<ReturnType<typeof createCallCoordinationRuntime>> = null;
 
 app.setErrorHandler((error, _request, reply) => {
   if (error instanceof ZodError) {
@@ -136,7 +139,6 @@ registerAdminAudit(app, config, pool);
 registerHealthRoutes(app, config, pool);
 registerMetrics(app, config, pool);
 registerAuthRoutes(app, config, pool);
-registerDashboardRoutes(app, config, pool, runtimeSettings);
 registerLiveEventRoutes(app, config, pool, liveEventHub);
 
 app.get("/", async () => ({
@@ -146,6 +148,18 @@ app.get("/", async () => ({
 
 async function start() {
   await runMigrations(pool);
+  coordination = await createCallCoordinationRuntime(pool, config);
+  registerDashboardRoutes(
+    app,
+    config,
+    pool,
+    runtimeSettings,
+    coordination?.outbound,
+    coordination?.controls,
+    coordination?.supervisor,
+    coordination?.connection,
+    coordination?.transfer
+  );
   await runtimeSettings.initialize();
   const migratedSipSecrets = await migrateAgentSipSecretEncryption(pool, config);
   if (migratedSipSecrets) {
@@ -165,8 +179,12 @@ async function start() {
   stopRetentionScheduler = startRetentionScheduler(pool, config, app.log).stop;
   stopCallRecordingFinalizer = startCallRecordingFinalizer(pool, config.FFPROBE_PATH, app.log).stop;
   stopPcapCaptureFinalizer = startPcapCaptureFinalizer(pool, config, app.log).stop;
-  stopIngressReconciler = startIngressReconciler(pool, config, app.log);
-  stopFreeSwitchEventListener = startFreeSwitchEventListener(config, pool, app.log);
+  if (!coordination) stopIngressReconciler = startIngressReconciler(pool, config, app.log);
+  stopFreeSwitchEventListener = startFreeSwitchEventListener(config, pool, app.log, coordination?.recovery);
+  stopOfferDispatcher =
+    coordination?.startDispatcher((error) =>
+      app.log.warn({ err: error }, "Inbound offer dispatch deferred")
+    ) ?? null;
   stopAgentRegistrationReconciler = startAgentRegistrationReconciler(config, pool, app.log);
   stopAgentDirectoryReconciler = startAgentDirectoryReconciler(pool, config, app.log);
   stopInboundConfigurationReconciler = startInboundConfigurationReconciler(pool, config, app.log);
@@ -174,6 +192,7 @@ async function start() {
 
 const shutdown = async () => {
   app.log.info("shutting down");
+  stopOfferDispatcher?.();
   stopAgentRegistrationReconciler?.();
   stopAgentDirectoryReconciler?.();
   stopInboundConfigurationReconciler?.();
@@ -184,6 +203,7 @@ const shutdown = async () => {
   stopRetentionScheduler?.();
   stopDatabaseLiveEventListener?.();
   await app.close();
+  await coordination?.close();
   await pool.end();
 };
 

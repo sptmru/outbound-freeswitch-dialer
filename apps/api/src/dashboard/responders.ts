@@ -19,23 +19,29 @@ import { getAgentAvailability } from "../agent-availability.js";
 import { getUsers } from "./admin-libraries.js";
 import { getAgentCampaign, getAgentCampaigns, getCampaigns, type ContactRetryPolicy } from "./campaigns.js";
 import { getRecordings } from "./recordings.js";
+import { readDeskCoordination } from "./desk-coordination.js";
 
 export async function buildAgentDeskResponse(
   pool: pg.Pool,
   user: PublicUser,
   selectedCampaignId?: string,
-  retryPolicy?: ContactRetryPolicy
+  retryPolicy?: ContactRetryPolicy,
+  coordinated = false
 ): Promise<AgentDeskResponse> {
   const [campaign, availableCampaigns, availability, activeCall, metrics, recentCalls, voicemailJobs] =
     await Promise.all([
       getAgentCampaign(pool, selectedCampaignId, { userId: user.id, ...retryPolicy }),
       getAgentCampaigns(pool, retryPolicy),
       getAgentAvailability(pool, user.id),
-      getActiveCall(pool, user.id),
+      coordinated ? Promise.resolve(null) : getActiveCall(pool, user.id),
       getAgentMetrics(pool, user.id),
       getAgentRecentCalls(pool, user.id),
       getAgentVoicemailJobs(pool, user.id)
     ]);
+  const coordination = coordinated ? await readDeskCoordination(pool, user.id, campaign?.id ?? null) : null;
+  const ownedCall = coordination?.slot.callId
+    ? await getActiveCall(pool, user.id, coordination.slot.callId, coordination.slot.reservationId)
+    : activeCall;
   if (!campaign) {
     return {
       user,
@@ -45,14 +51,15 @@ export async function buildAgentDeskResponse(
       softphone: {
         registered: false,
         microphoneAllowed: true,
-        status: activeCall ? "in_call" : "offline"
+        status: ownedCall ? "in_call" : "offline"
       },
       metrics,
       recentCalls,
       voicemailJobs,
       leads: [],
       recordings: [],
-      activeCall
+      activeCall: ownedCall,
+      ...(coordination ? { coordination } : {})
     };
   }
 
@@ -73,16 +80,19 @@ export async function buildAgentDeskResponse(
     },
     availableCampaigns,
     softphone: {
-      registered: Boolean(campaign.agent_registered),
+      registered: coordination
+        ? Boolean(coordination.session?.endpointVerified)
+        : Boolean(campaign.agent_registered),
       microphoneAllowed: true,
-      status: activeCall ? "in_call" : "ready"
+      status: ownedCall ? "in_call" : "ready"
     },
     metrics,
     recentCalls,
     voicemailJobs,
     leads,
     recordings: [],
-    activeCall
+    activeCall: ownedCall,
+    ...(coordination ? { coordination } : {})
   };
 }
 
@@ -191,10 +201,16 @@ export async function getLeadQueue(
   }));
 }
 
-async function getActiveCall(pool: pg.Pool, userId: string): Promise<AgentDeskResponse["activeCall"]> {
+async function getActiveCall(
+  pool: pg.Pool,
+  userId: string,
+  nativeCallId?: string,
+  reservationId?: string | null
+): Promise<AgentDeskResponse["activeCall"]> {
   const result = await pool.query<{
     id: string;
     manual_dial: boolean;
+    direction: "inbound" | "outbound";
     state: CallState;
     destination_number: string;
     contact_name: string | null;
@@ -211,6 +227,7 @@ async function getActiveCall(pool: pg.Pool, userId: string): Promise<AgentDeskRe
       select
         calls.id,
         calls.manual_dial,
+        calls.direction,
         calls.state,
         calls.destination_number,
         contacts.display_name as contact_name,
@@ -249,12 +266,19 @@ async function getActiveCall(pool: pg.Pool, userId: string): Promise<AgentDeskRe
           and call_supervisor_sessions.state in ('connecting', 'active')
       ) supervisor on true
       where agents.user_id = $1
+        ${
+          nativeCallId
+            ? `and calls.id=$2 and exists(select 1 from agent_call_slots s
+          join call_participants p on p.id=s.participant_id and p.agent_id=s.agent_id and p.left_at is null
+          where s.agent_id=agents.id and s.call_id=calls.id and s.reservation_id=$3 and s.state<>'free')`
+            : ""
+        }
         and calls.ended_at is null
         and calls.state not in ('completed', 'failed', 'canceled', 'agent_released')
       order by calls.created_at desc
       limit 1
     `,
-    [userId]
+    nativeCallId ? [userId, nativeCallId, reservationId] : [userId]
   );
 
   const row = result.rows[0];
@@ -268,7 +292,7 @@ async function getActiveCall(pool: pg.Pool, userId: string): Promise<AgentDeskRe
     id: row.id,
     manualDial: row.manual_dial,
     state: row.state,
-    leadName: row.contact_name ?? "Manual dial",
+    leadName: row.contact_name ?? (row.direction === "inbound" ? "Incoming call" : "Manual dial"),
     phoneNumber: row.destination_number,
     durationSeconds,
     status: mapCallStatus(row.state),

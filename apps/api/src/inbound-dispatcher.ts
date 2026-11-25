@@ -173,6 +173,18 @@ async function refresh(
   const callId = await oldest(c, agentId, desk.campaign_id);
   if (!callId) return null;
   a.assertExecutionCall(callId);
+  // Preserve FIFO while FreeSWITCH is entering the waiting application. The
+  // accept path cannot grant a connection until this exact job has succeeded.
+  if (
+    (
+      await c.query(
+        `select 1 from inbound_queue_admissions q join call_operations o on o.id=q.operation_id
+      where q.call_id=$1 and o.state<>'succeeded'`,
+        [callId]
+      )
+    ).rowCount
+  )
+    return null;
   const captured = (
     await c.query("select route_snapshot from inbound_ingress_evidence where call_id=$1", [callId])
   ).rows[0];

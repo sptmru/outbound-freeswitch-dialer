@@ -56,6 +56,7 @@ const inheritedFlags = [
   "F04_SCENARIO",
   "G01_TRANSFERS",
   "H01_MATRIX_ONLY",
+  "I05_RUNTIME",
   "D01_BROWSER_SMOKE"
 ];
 

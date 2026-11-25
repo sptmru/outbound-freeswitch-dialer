@@ -215,6 +215,7 @@ export class IngressJournal {
       .filter((r) => Number(r.ack) < Number(r.sequence))
       .map((r) => JSON.parse(String(r.record)));
     return {
+      journalId: this.id,
       capacity: this.slots,
       used: all.filter(
         (r) => JSON.parse(String(r.record)).terminalUs === null || Number(r.ack) < Number(r.sequence)

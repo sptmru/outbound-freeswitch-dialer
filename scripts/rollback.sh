@@ -9,6 +9,7 @@ STATE_FILE="${ROOT_DIR}/logs/deployment-state.env"
 source "${ROOT_DIR}/scripts/deployment-state.sh"
 # shellcheck disable=SC1091
 source "${ROOT_DIR}/scripts/host-operation-lock.sh"
+source "${ROOT_DIR}/scripts/call-coordination-state.sh"
 acquire_host_operation_lock "${ROOT_DIR}" "rollback"
 
 [[ -f "${ENV_FILE}" ]] || { echo "Missing ${ENV_FILE}" >&2; exit 1; }
@@ -17,6 +18,15 @@ set -a
 source "${ENV_FILE}"
 set +a
 deployment_state_load "${STATE_FILE}"
+
+compose() {
+  APP_ENV_FILE="${ENV_FILE}" docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" "$@"
+}
+
+if [[ "$(call_coordination_database_mode)" != f || "${CALL_COORDINATION_ENABLED:-false}" == true ]]; then
+  echo "Drain and deactivate coordinated calling, then set its environment flags to false before rollback" >&2
+  exit 1
+fi
 
 case "${DEPLOYMENT_STATUS}" in
   stable)
@@ -44,6 +54,18 @@ target_version="${1:-${default_target_version}}"
 for image in api web proxy freeswitch pcap; do
   docker image inspect "outbound-dialer-${image}:${target_version}" >/dev/null
 done
+coordination_history="$(call_coordination_database_has_history)"
+case "${coordination_history}" in
+  t)
+    if ! docker run --rm --network none --entrypoint node "outbound-dialer-api:${target_version}" \
+      -e 'process.exit(require("node:fs").existsSync("apps/api/dist/coordination-cutover-cli.js") ? 0 : 1)'; then
+      echo "Rollback target predates the supported I05 feature-off release for retained native histories" >&2
+      exit 1
+    fi
+    ;;
+  f) ;;
+  *) echo "Could not verify whether the database retains coordinated call histories" >&2; exit 1 ;;
+esac
 
 current_version="${CURRENT_VERSION}"
 previous_version="${PREVIOUS_VERSION}"
