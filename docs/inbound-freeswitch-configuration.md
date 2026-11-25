@@ -68,7 +68,12 @@ credentials and authoritative `sofia_contact` pinning; this change uses their ex
 generated directory rather than a shared agent registration flag.
 
 Trust uses the actual channel `network_addr` against a finite list of literal
-IPv4/IPv6 CIDRs. Empty lists, `/0`, malformed input and XML/ESL injection are rejected.
+IPv4/IPv6 CIDRs. For testing, set `FREESWITCH_INBOUND_TRUSTED_CIDRS=*` to accept
+any SIP source for public DID routing. DID status, capacity and admission checks
+still apply. The wildcard must be the entire value. Empty lists, `/0`, malformed
+input and XML/ESL injection are rejected.
+After testing, replace `*` with the trusted CIDRs and verify the applied revision.
+An empty value fails validation and can leave the previously applied wildcard active.
 This is transport peer trust, so any SIP proxy must be included only after I04's
 actual trust review. No provider CIDR is inferred from the local fixtures. DID
 normalization is deliberately limited to the configured canonical digits with an
@@ -103,15 +108,15 @@ Use `.env.example`, the existing Compose model and `scripts/deploy.sh`. No host
 ports, firewall rules or parallel deployment path were added. The API image includes
 the inbound templates, and the FS image already includes the template tree.
 
-| Variable                                 | Default / allowed values                                         | Consumer                             |
-| ---------------------------------------- | ---------------------------------------------------------------- | ------------------------------------ |
-| `FREESWITCH_INBOUND_CONFIG_ENABLED`      | `false`; exactly `true` or `false`                               | API publisher and FS startup restore |
-| `FREESWITCH_INBOUND_TRUSTED_CIDRS`       | empty; 1–32 comma-separated literal CIDRs required when applying | API renderer                         |
-| `FREESWITCH_INBOUND_PRE_ADMISSION_LIMIT` | `8`; 1–16 channels                                               | API renderer, native hash guard      |
-| `FREESWITCH_TRUNK_CHANNEL_LIMIT`         | `40`; 2–80 external legs                                         | API renderer, native hash guard      |
-| `FREESWITCH_INBOUND_WAIT_SECONDS`        | `3`; 1–3 seconds                                                 | API renderer                         |
-| `FREESWITCH_MAX_SESSIONS`                | `80`; 16–200 channels                                            | FS core at startup                   |
-| `FREESWITCH_SESSIONS_PER_SECOND`         | `20`; 1–100 new sessions/s                                       | FS core at startup                   |
+| Variable                                 | Default / allowed values                                                                  | Consumer                             |
+| ---------------------------------------- | ----------------------------------------------------------------------------------------- | ------------------------------------ |
+| `FREESWITCH_INBOUND_CONFIG_ENABLED`      | `false`; exactly `true` or `false`                                                        | API publisher and FS startup restore |
+| `FREESWITCH_INBOUND_TRUSTED_CIDRS`       | Empty by default. Applying requires 1–32 comma-separated CIDRs or `*` for any SIP source. | API renderer                         |
+| `FREESWITCH_INBOUND_PRE_ADMISSION_LIMIT` | `8`; 1–16 channels                                                                        | API renderer, native hash guard      |
+| `FREESWITCH_TRUNK_CHANNEL_LIMIT`         | `40`; 2–80 external legs                                                                  | API renderer, native hash guard      |
+| `FREESWITCH_INBOUND_WAIT_SECONDS`        | `3`; 1–3 seconds                                                                          | API renderer                         |
+| `FREESWITCH_MAX_SESSIONS`                | `80`; 16–200 channels                                                                     | FS core at startup                   |
+| `FREESWITCH_SESSIONS_PER_SECOND`         | `20`; 1–100 new sessions/s                                                                | FS core at startup                   |
 
 Run with Node 22:
 

@@ -39,7 +39,7 @@ export function inboundPolicy(config: AppConfig): InboundPolicy {
   };
 }
 
-export function validateInboundPolicy(policy: InboundPolicy): string[] {
+export function validateInboundPolicy(policy: InboundPolicy): string[] | "*" {
   for (const [value, min, max] of [
     [policy.preAdmission, 1, 16],
     [policy.trunk, 2, 80],
@@ -48,6 +48,7 @@ export function validateInboundPolicy(policy: InboundPolicy): string[] {
     if (!Number.isInteger(value) || value < min || value > max)
       throw new Error("Invalid inbound capacity/wait policy");
   }
+  if (policy.trustedCidrs.trim() === "*") return "*";
   const cidrs = policy.trustedCidrs
     .split(",")
     .map((v) => v.trim())
@@ -154,7 +155,11 @@ export async function renderInboundConfiguration(routes: InboundRoute[], policy:
     .join("\n");
   const xml = bundle
     .replace("__HASH__", hash)
-    .replace("__TRUST__", cidrs.map((c) => `\${acl(\${network_addr} ${c})}`).join(":"))
+    .replace(
+      "__TRUST__",
+      cidrs === "*" ? "${network_addr}" : cidrs.map((c) => `\${acl(\${network_addr} ${c})}`).join(":")
+    )
+    .replace("__TRUST_EXPRESSION__", cidrs === "*" ? "^.*$" : "(^|:)true(:|$)")
     .replace("__ROUTES__", renderedRoutes);
   if (/__[A-Z]+__/.test(xml)) throw new Error("Unresolved inbound template placeholder");
   validateInboundXml(xml);

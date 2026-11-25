@@ -5,7 +5,7 @@
     <action application="unset" data="outbound_dialer_supervisor_session_id"/>
     <action application="unset" data="outbound_dialer_leg_type"/>
   </condition></extension>
-  <extension name="d02_transport" continue="true"><condition field="__TRUST__" expression="(^|:)true(:|$)">
+  <extension name="d02_transport" continue="true"><condition field="__TRUST__" expression="__TRUST_EXPRESSION__">
     <anti-action application="respond" data="403 Untrusted ingress"/>
     <anti-action application="hangup" data="CALL_REJECTED"/>
   </condition></extension>

@@ -105,6 +105,22 @@ try {
       messages: result.messages.map((m) => ({ first: m.first, ms: m.ms }))
     });
   }
+  const trustedCidrs = config.FREESWITCH_INBOUND_TRUSTED_CIDRS;
+  config.FREESWITCH_INBOUND_TRUSTED_CIDRS = "*";
+  assert.equal(await publisher().reconcile(), "applied");
+  for (const spec of [
+    { did: "+12025550100", status: 503 },
+    { did: "+12025550101", status: 403 },
+    { did: "+12025550109", status: 404 }
+  ]) {
+    const result = await invite({ did: spec.did, source: "127.0.0.3", port: 5090 });
+    assert.equal(result.final, spec.status, JSON.stringify(result.messages));
+    assert.equal(result.rtp.length, 0);
+    await pass(`D02.1 wildcard routes ${spec.did} from a previously untrusted SIP source`, {
+      sipStatus: result.final,
+      messages: result.messages.map((m) => ({ first: m.first, ms: m.ms }))
+    });
+  }
   // Authenticated UDP media endpoints use the product generated directory and
   // deny-all agent-ingress context. No browser or mock media is involved.
   for (let i = 0; i < 2; i++) {
@@ -135,6 +151,9 @@ try {
     !observer.events.some((e) => e["event-name"] === "CHANNEL_BRIDGE" && e["variable_sip_call_id"] === callId)
   );
   await pass("D02.1 authenticated agent-originated INVITE rejected");
+  config.FREESWITCH_INBOUND_TRUSTED_CIDRS = trustedCidrs;
+  assert.equal(await publisher().reconcile(), "applied");
+  assert.equal((await invite({ source: "127.0.0.3", port: 5090 })).final, 403);
   const legs = [];
   for (const c of clients) {
     const target = await command(`sofia_contact internal-webrtc/${c.username}@a04.invalid`);

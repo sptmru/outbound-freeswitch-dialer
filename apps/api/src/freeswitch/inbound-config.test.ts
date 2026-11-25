@@ -52,11 +52,24 @@ test("D02.1 U: bounded trusted DID routes never answer, bridge, trust headers or
   );
 });
 
+test("D02.1 U: the explicit wildcard accepts every SIP source and retains DID and capacity checks", async () => {
+  const routes = [route(), { ...route(), normalized_did: "+12025550101", enabled: false }];
+  const { xml, hash } = await renderInboundConfiguration(routes, { ...policy, trustedCidrs: "*" });
+  assert.ok(xml.includes('field="${network_addr}" expression="^.*$"'));
+  assert.doesNotMatch(xml, /\$\{acl\(/);
+  assert.match(xml, /403 DID disabled/);
+  assert.match(xml, /404 Unknown DID/);
+  assert.match(xml, /hash outbound_dialer pre_admission 8/);
+  assert.match(xml, /hash outbound_dialer trunk 40/);
+  assert.notEqual(hash, (await renderInboundConfiguration(routes, policy)).hash);
+});
+
 test("D02.2 U: reject malformed XML, unbounded policy, duplicate DID and configuration/command injection before write", async () => {
   for (const cidr of [
     "",
     "0.0.0.0/0",
     "::/0",
+    "*,127.0.0.2/32",
     "127.0.0.2/33",
     "127.0.0.2/32\n<evil/>",
     "${api(system x)}/32"
