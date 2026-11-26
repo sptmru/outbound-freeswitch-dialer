@@ -110,13 +110,13 @@ function server(direction: "inbound" | "outbound" = "inbound") {
     });
     await page.goto("/tests/fixtures/e03/index.html");
     await expect(page.getByRole("button", { name: "Refresh snapshot" })).toBeVisible();
-    if (agent === 0) await expect(page.getByRole("button", { name: "Choose colleague" })).toBeVisible();
+    if (agent === 0) await expect(page.getByRole("button", { name: "Transfer", exact: true })).toBeVisible();
     else await expect(page.getByLabel("Manual call")).toBeVisible();
   }
   async function offer(page: Page) {
-    await page.getByRole("button", { name: "Choose colleague" }).click();
-    await page.getByLabel("Transfer recipient").selectOption(targetId);
-    await page.getByRole("button", { name: "Request transfer" }).click();
+    await page.getByRole("button", { name: "Transfer", exact: true }).click();
+    await page.getByLabel("Transfer to colleague").selectOption(targetId);
+    await page.getByRole("button", { name: "Send request" }).click();
     await expect(page.getByRole("button", { name: "Cancel transfer" })).toBeVisible();
   }
   return { state, transition, install, offer };
@@ -127,6 +127,35 @@ async function refresh(page: Page) {
 async function publish(page: Page, desk: AgentDeskResponse) {
   await page.evaluate((d) => window.e03.snapshot(d), desk);
 }
+
+test("the transfer picker stays with the active call and can be closed by keyboard", async ({ page }) => {
+  const sim = server();
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await sim.install(page, 0);
+  const call = page.locator(".active-call");
+  const transfer = call.getByRole("button", { name: "Transfer", exact: true });
+  const hangUp = call.getByRole("button", { name: "Hang up", exact: true });
+  const picker = call.getByRole("region", { name: "Call transfer" });
+  const recipient = picker.getByLabel("Transfer to colleague");
+  await expect(picker).toHaveCount(0);
+  await expect(transfer).toHaveAttribute("aria-expanded", "false");
+  await expect(hangUp).toBeInViewport({ ratio: 1 });
+  await transfer.focus();
+  await page.keyboard.press("Enter");
+  await expect(transfer).toHaveAttribute("aria-expanded", "true");
+  await expect(recipient).toBeFocused();
+  await expect(hangUp).toBeInViewport({ ratio: 1 });
+
+  await page.setViewportSize({ width: 360, height: 700 });
+  const pickerBox = (await picker.boundingBox())!;
+  expect(pickerBox.x + pickerBox.width).toBeLessThanOrEqual(360);
+  await expect(hangUp).toBeEnabled();
+  await picker.getByRole("button", { name: "Cancel", exact: true }).press("Enter");
+  await expect(picker).toHaveCount(0);
+  await expect(transfer).toBeFocused();
+  expect(sim.state.requests).toHaveLength(0);
+});
+
 for (const direction of ["inbound", "outbound"] as const) {
   for (const result of ["completed", "declined", "canceled", "expired", "failed"] as const) {
     test(`G03.1/G03.3 paired ${direction} ${result}, cross-campaign labels and source continuity`, async ({
@@ -139,7 +168,11 @@ for (const direction of ["inbound", "outbound"] as const) {
       await sim.install(target, 1);
       await sim.offer(page);
       await refresh(target);
-      await expect(target.getByText("Call campaign: Campaign One")).toBeVisible();
+      await expect(
+        target
+          .getByRole("region", { name: "Incoming offer" })
+          .getByText("Call campaign: Campaign One", { exact: true })
+      ).toBeVisible();
       await expect(target.getByText("Your selected campaign will not change.")).toBeVisible();
       await expect(page.getByRole("button", { name: "Hang up", exact: true })).toBeEnabled();
       if (result === "declined") await target.getByRole("button", { name: "Decline", exact: true }).click();
@@ -256,28 +289,28 @@ for (const kind of ["next", "lead", "number"] as const) {
 test("G03.1 target becomes busy after list; failed request keeps source and refreshes", async ({ page }) => {
   const sim = server();
   await sim.install(page, 0);
-  await page.getByRole("button", { name: "Choose colleague" }).click();
-  await page.getByLabel("Transfer recipient").selectOption(targetId);
+  await page.getByRole("button", { name: "Transfer", exact: true }).click();
+  await page.getByLabel("Transfer to colleague").selectOption(targetId);
   sim.state.busyTarget = true;
-  await page.getByRole("button", { name: "Request transfer" }).click();
+  await page.getByRole("button", { name: "Send request" }).click();
   await expect(page.getByText("A call is already in progress. The desk has been refreshed.")).toBeVisible();
   await expect(page.getByRole("button", { name: "Hang up", exact: true })).toBeEnabled();
-  await page.getByRole("button", { name: "Choose colleague" }).click();
+  await page.getByRole("button", { name: "Transfer", exact: true }).click();
   await expect(page.getByRole("option", { name: "Colleague — unavailable" })).toHaveAttribute("disabled", "");
-  await expect(page.getByRole("button", { name: "Request transfer" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Send request" })).toBeDisabled();
 });
 test("G03.3 late create response cannot restore source controls after confirmed handover", async ({
   page
 }) => {
   const sim = server();
   await sim.install(page, 0);
-  await page.getByRole("button", { name: "Choose colleague" }).click();
-  await page.getByLabel("Transfer recipient").selectOption(targetId);
+  await page.getByRole("button", { name: "Transfer", exact: true }).click();
+  await page.getByLabel("Transfer to colleague").selectOption(targetId);
   let release!: () => void;
   sim.state.hold = new Promise((r) => {
     release = r;
   });
-  await page.getByRole("button", { name: "Request transfer" }).click();
+  await page.getByRole("button", { name: "Send request" }).click();
   await expect.poll(() => sim.state.requests.length).toBe(1);
   const done = structuredClone(sim.state.desks[0]);
   done.activeCall = null;

@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from "react";
+import { PhoneIncoming, PhoneForwarded } from "lucide-react";
 import type { AgentDeskResponse, DeskMutationRequest } from "../../types";
 import { acceptCallOffer, ignoreCallOffer } from "../../api";
 import { actionUnavailable } from "./coordination";
 import { createRingbackWaveBlob } from "../../browser-ringback";
+import { formatDuration } from "../../lib/formatters";
 
 /** One mounted offer owns one audio element; snapshots cannot restart it. */
 function useOfferRingtone(id: string | undefined, outputId: string) {
@@ -137,49 +139,80 @@ export function CallOfferCard({
     }
   }
 
-  if (!visible && !feedback) return null;
+  const isTransfer = offer?.kind === "transfer";
+  const title = isTransfer ? "Transfer offer" : "Incoming call";
+  const campaign = desk.availableCampaigns.find((item) => item.id === offer?.campaignId);
+  const Icon = isTransfer ? PhoneForwarded : PhoneIncoming;
   return (
-    <section className="panel call-offer-card" aria-label="Incoming offer">
+    <>
+      <span className="visually-hidden" role="status">
+        {visible ? `${title} from ${offer.callingNumber}` : ""}
+      </span>
       {visible && (
-        <>
-          <h2>{offer.kind === "transfer" ? "Transfer offer" : "Incoming call"}</h2>
-          <strong>{offer.callingNumber}</strong>
-          <p>
-            Call campaign:{" "}
-            {desk.availableCampaigns.find((c) => c.id === offer.campaignId)?.name ?? "Another campaign"}
-          </p>
-          {offer.kind === "transfer" && <p>Your selected campaign will not change.</p>}
-          <p>Waiting · respond within {Math.max(0, Math.ceil((deadline - now) / 1000))}s</p>
-          {ringtone.blocked && (
-            <p>
-              Sound is off.{" "}
-              <button type="button" onClick={() => void ringtone.play()}>
-                Enable ringtone
-              </button>
-            </p>
-          )}
+        <section className="call-offer-banner" aria-label="Incoming offer">
+          <div className="call-offer-identity">
+            <span className="call-offer-icon" aria-hidden="true">
+              <Icon size={20} />
+            </span>
+            <div>
+              <h2>{title}</h2>
+              <div className="call-offer-caller">
+                <strong>{offer.callingNumber}</strong>
+                <span>
+                  <span className="visually-hidden">Call campaign: </span>
+                  {campaign?.name ?? "Another campaign"}
+                </span>
+              </div>
+            </div>
+          </div>
           <div className="call-offer-actions">
+            <span className="status-badge neutral" role="timer" aria-label="Time to respond">
+              {formatDuration(Math.ceil((deadline - now) / 1000))}
+            </span>
             <button
+              className="secondary-action"
+              type="button"
+              disabled={busy || pending || !mutation || !desk.coordination?.actions.ignore.allowed}
+              onClick={() => void act("ignore")}
+            >
+              {isTransfer ? "Decline" : "Ignore"}
+            </button>
+            <button
+              className="primary-action"
               type="button"
               disabled={busy || pending || !mutation || !desk.coordination?.actions.accept.allowed}
               onClick={() => void act("accept")}
             >
               Accept
             </button>
-            <button
-              type="button"
-              disabled={busy || pending || !mutation || !desk.coordination?.actions.ignore.allowed}
-              onClick={() => void act("ignore")}
-            >
-              {offer.kind === "transfer" ? "Decline" : "Ignore"}
-            </button>
           </div>
-          {!desk.coordination?.actions.accept.allowed && (
-            <p role="status">{actionUnavailable(desk.coordination?.actions.accept.reason)}</p>
+          {isTransfer && offer.campaignId !== desk.campaign?.id && (
+            <p className="call-offer-note">Your selected campaign will not change.</p>
           )}
-        </>
+          {ringtone.blocked && (
+            <div className="call-offer-note call-offer-sound">
+              <span>Sound is off.</span>
+              <button
+                className="secondary-action compact-action"
+                type="button"
+                onClick={() => void ringtone.play()}
+              >
+                Enable ringtone
+              </button>
+            </div>
+          )}
+          {!desk.coordination?.actions.accept.allowed && (
+            <p className="call-offer-note" role="status">
+              {actionUnavailable(desk.coordination?.actions.accept.reason)}
+            </p>
+          )}
+        </section>
       )}
-      {feedback && <p role="status">{feedback}</p>}
-    </section>
+      {feedback && (
+        <p className="desk-notice" role="status">
+          {feedback}
+        </p>
+      )}
+    </>
   );
 }

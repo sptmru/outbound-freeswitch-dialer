@@ -14,7 +14,7 @@ import {
 import type { SoftphoneRuntime } from "../../softphone";
 import type { AgentDeskResponse, LeadSummary } from "../../types";
 import { CallOfferCard } from "./call-offer";
-import { TransferControls } from "./transfer-controls";
+import { useTransferControls } from "./transfer-controls";
 import { actionUnavailable, conflictMessage, controllerMutation } from "./coordination";
 import type { ManualStartIntent } from "../../types";
 import { ActiveCall } from "./active-call";
@@ -452,9 +452,26 @@ export function AgentDesk({
     }
   }
 
-  const offerCard = (
+  const transfer = useTransferControls({
+    desk,
+    mutation,
+    busy: callNextPending || callControlPending !== null,
+    refresh: refreshDesk
+  });
+  const deskAlerts = (
     <>
-      {desk.coordination && !desk.coordination.actions.manualStart.allowed && (
+      {desk.coordination && (
+        <CallOfferCard
+          desk={desk}
+          dismissedOfferId={dismissedOfferId}
+          mutation={mutation}
+          outputId={softphone.audioSetup.selectedOutputId}
+          busy={callNextPending}
+          run={runOffer}
+          refresh={refreshDesk}
+        />
+      )}
+      {desk.coordination && !desk.activeCall && !desk.coordination.actions.manualStart.allowed && (
         <p role="status" className="desk-notice">
           {actionUnavailable(desk.coordination.actions.manualStart.reason)}
         </p>
@@ -470,32 +487,14 @@ export function AgentDesk({
             {desk.coordination.slot.state === "uncertain" ? "Checking call connection…" : "Connecting…"}
           </p>
         )}
-      {desk.coordination && (
-        <TransferControls
-          desk={desk}
-          mutation={mutation}
-          busy={callNextPending || callControlPending !== null}
-          refresh={refreshDesk}
-        />
-      )}
-      {desk.coordination && (
-        <CallOfferCard
-          desk={desk}
-          dismissedOfferId={dismissedOfferId}
-          mutation={mutation}
-          outputId={softphone.audioSetup.selectedOutputId}
-          busy={callNextPending}
-          run={runOffer}
-          refresh={refreshDesk}
-        />
-      )}
+      {!desk.activeCall && transfer.details}
     </>
   );
 
   if (!campaign) {
     return (
       <section className={desk.activeCall ? "agent-grid active-agent-grid" : "ready-desk-grid"}>
-        {offerCard}
+        {deskAlerts}
         <NoCampaignPanel />
         {desk.activeCall && (
           <ActiveCall
@@ -509,6 +508,7 @@ export function AgentDesk({
             onAvailabilityChangeStarted={handleAvailabilityChangeStarted}
             onDeskChanged={onDeskChanged}
             softphone={softphone}
+            transfer={transfer}
           />
         )}
         <AgentNoCampaignStatus desk={desk} onDeskChanged={onDeskChanged} softphone={softphone} />
@@ -526,7 +526,7 @@ export function AgentDesk({
     );
     return (
       <section className="agent-grid active-agent-grid">
-        {offerCard}
+        {deskAlerts}
         <LeadQueue
           canStartCalls={canStartCalls}
           error={callNextError}
@@ -547,6 +547,7 @@ export function AgentDesk({
           onAvailabilityChangeStarted={handleAvailabilityChangeStarted}
           onDeskChanged={onDeskChanged}
           softphone={softphone}
+          transfer={transfer}
         />
         <LeadContextPanel lead={activeLead} />
         <VoicemailJobs jobs={desk.voicemailJobs} />
@@ -556,7 +557,7 @@ export function AgentDesk({
 
   return (
     <section className="ready-desk-grid">
-      {offerCard}
+      {deskAlerts}
       <LeadQueue
         canStartCalls={canStartCalls}
         error={callNextError}

@@ -6,8 +6,11 @@ Base: `26644da2b40cdc0bee29d57c81a6d88442530ead`; local branch
 
 ## Browser behavior
 
-With a v1 `desk.coordination` snapshot, Agent Desk renders one inbound offer:
-caller number, campaign, response deadline countdown, Accept and Ignore. Server
+With a v1 `desk.coordination` snapshot, Agent Desk shows one compact banner
+above the workspace with the caller number, campaign, response deadline
+countdown, Accept and Ignore. A transfer offer uses the same banner with
+Accept and Decline. While the banner is visible, **Start next call** uses
+secondary styling. Server
 `actions.accept`, `actions.ignore` and `actions.manualStart` control availability;
 the browser also requires its exact current, ready D01 session/revision/binding.
 A pending offer does not itself occupy the interactive slot or disable manual

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Phone, PhoneOff, Play, Shield, Voicemail } from "lucide-react";
 
 import { PanelHeader, StatusBadge } from "../../components/ui-primitives";
@@ -18,7 +18,8 @@ export function ActiveCall({
   onDropVoicemail,
   onHangUp,
   onSendDtmf,
-  softphone
+  softphone,
+  transfer
 }: {
   controlPending: "hangup" | "voicemail" | "dtmf" | null;
   desk: AgentDeskResponse;
@@ -30,6 +31,7 @@ export function ActiveCall({
   onHangUp: (callId: string, browserEventTrusted: boolean) => Promise<void>;
   onSendDtmf: (callId: string, digit: string) => Promise<void>;
   softphone: SoftphoneRuntime;
+  transfer: { action: ReactNode; details: ReactNode };
 }) {
   const activeCall = desk.activeCall as ActiveCallUi | null;
   const displayedDurationSeconds = useActiveCallDuration(activeCall);
@@ -182,7 +184,13 @@ export function ActiveCall({
           <strong>{activeCall.recordingName}</strong>
         </div>
       </div>
-      <div className="call-actions call-actions-stacked">
+      <div
+        className={
+          transfer.action || transfer.details
+            ? "call-actions call-actions-with-transfer"
+            : "call-actions call-actions-stacked"
+        }
+      >
         <button
           className="primary-action voicemail-primary-action"
           disabled={
@@ -199,6 +207,7 @@ export function ActiveCall({
           <Voicemail size={17} />
           {controlPending === "voicemail" ? "Dropping" : "Drop voicemail"}
         </button>
+        {transfer.action}
         <button
           className="danger-action"
           disabled={!canControl || controlPending !== null}
@@ -209,6 +218,7 @@ export function ActiveCall({
           {controlPending === "hangup" ? "Ending" : "Hang up"}
         </button>
       </div>
+      {transfer.details}
       {!dropEligibility.allowed && dropEligibility.reason && (
         <p className="action-hint">{dropEligibility.reason}</p>
       )}

@@ -107,6 +107,25 @@ async function publish(page: Page, desk: AgentDeskResponse) {
   await page.evaluate((d) => window.e03.snapshot(d), desk);
 }
 
+test("the incoming banner keeps its actions and outbound dialing available on narrow screens", async ({
+  page
+}) => {
+  const sim = server();
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await sim.install(page);
+  const banner = page.getByRole("region", { name: "Incoming offer" });
+  const accept = banner.getByRole("button", { name: "Accept", exact: true });
+  const ignore = banner.getByRole("button", { name: "Ignore", exact: true });
+  await expect(banner.getByRole("timer", { name: "Time to respond" })).toHaveText(/^\d{2}:\d{2}$/);
+  expect((await banner.boundingBox())!.height).toBeLessThan(110);
+  await expect(page.getByRole("button", { name: "Start next call" })).toBeEnabled();
+
+  await page.setViewportSize({ width: 360, height: 700 });
+  await expect(accept).toBeInViewport({ ratio: 1 });
+  await expect(ignore).toBeInViewport({ ratio: 1 });
+  await expect(page.getByLabel("Manual call")).toBeEnabled();
+});
+
 test("E03.1 repeated/out-of-order/reconnect snapshots, autoplay denial, keyboard Ignore and Desk exit", async ({
   page
 }) => {

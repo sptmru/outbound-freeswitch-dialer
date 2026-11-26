@@ -3,9 +3,11 @@
 Task: [G03 #36](https://github.com/sptmru/outbound-freeswitch-dialer/issues/36).
 Local branch: `feat/g03-agent-desk-transfers`. Base: `7d77e4d`.
 
-The staged native Desk consumer now supports both sides of a transfer. A current
-connected source can choose an available colleague, request a transfer and cancel
-an offered request. Availability is a hint, never a reservation: the G01 endpoint
+The Desk supports both sides of a transfer. The agent selects **Transfer**
+beside **Hang up** in the active call card, chooses an available colleague
+and selects **Send request**. The same card shows progress and **Cancel transfer**
+while the request is offered. The Desk shows transfer status supplied by the server
+when there is no active call card. Availability is a hint, never a reservation: the G01 endpoint
 revalidates it. An unavailable target remains unselectable; rejection discards the
 hint list and refetches the Desk. The recipient explicitly accepts or declines
 through the existing transfer-capable offer endpoints. The call campaign label

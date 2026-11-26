@@ -33,9 +33,9 @@ const manualCall = (page: Page) =>
 const hangup = (page: Page) => page.getByRole("button", { name: "Hang up", exact: true });
 const transfer = (page: Page, recipient: string) =>
   (async () => {
-    await page.getByRole("button", { name: "Choose colleague" }).click();
-    await page.getByLabel("Transfer recipient").selectOption(recipient);
-    await page.getByRole("button", { name: "Request transfer" }).click();
+    await page.getByRole("button", { name: "Transfer", exact: true }).click();
+    await page.getByLabel("Transfer to colleague").selectOption(recipient);
+    await page.getByRole("button", { name: "Send request" }).click();
   })();
 
 const test = base.extend<{ f: Fixture }>({

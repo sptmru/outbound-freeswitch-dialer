@@ -2156,10 +2156,15 @@ input[type="checkbox"] {
   box-shadow: 0 8px 20px -12px rgba(89, 53, 202, 0.7);
 }
 
-.secondary-action {
+.secondary-action,
+.call-offer-banner ~ .lead-queue .recommended-call .teal-action {
   background: #f3f5fa;
   border: 1px solid #dce2ee;
   color: #252b39;
+}
+
+.call-offer-banner ~ .lead-queue .recommended-call .teal-action {
+  box-shadow: none;
 }
 
 .danger-action {
@@ -3801,22 +3806,163 @@ input[type="checkbox"] {
   }
 }
 
-.call-offer-card,
-.desk-notice {
+.call-offer-banner,
+.desk-notice,
+.agent-grid > .transfer-details,
+.ready-desk-grid > .transfer-details {
   grid-column: 1 / -1;
 }
-.call-offer-card {
-  padding: 1.25rem;
-  border: 2px solid var(--accent, #087f8c);
+
+.visually-hidden {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  clip-path: inset(50%);
+  overflow: hidden;
+  white-space: nowrap;
 }
-.call-offer-actions {
+
+.call-offer-banner,
+.transfer-details {
+  background: var(--relay-purple-soft);
+  border: 1px solid #d8cff8;
+  border-radius: 12px;
+}
+
+.call-offer-banner {
+  align-items: center;
   display: flex;
   flex-wrap: wrap;
-  gap: 0.75rem;
+  gap: 8px 16px;
+  padding: 14px 16px;
 }
+
+.call-offer-identity {
+  align-items: center;
+  display: flex;
+  flex: 1 1 auto;
+  gap: 14px;
+  min-width: 0;
+}
+
+.call-offer-icon {
+  align-items: center;
+  background: #fff;
+  border: 1px solid #d8cff8;
+  border-radius: 10px;
+  color: var(--relay-purple);
+  display: inline-flex;
+  flex: 0 0 44px;
+  height: 44px;
+  justify-content: center;
+}
+
+.call-offer-identity h2 {
+  color: #5b3ec1;
+  font-size: 12px;
+  margin: 0 0 3px;
+}
+
+.call-offer-caller {
+  align-items: baseline;
+  color: var(--relay-muted);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 12px;
+  gap: 2px 10px;
+  overflow-wrap: anywhere;
+}
+
+.call-offer-caller strong {
+  color: #0f131f;
+  font-size: 19px;
+  line-height: 1.25;
+}
+
+.call-offer-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.call-offer-actions .status-badge {
+  background: #fff;
+  font-variant-numeric: tabular-nums;
+  margin-right: 4px;
+}
+
 .call-offer-actions button {
   min-height: 44px;
-  padding: 0.5rem 1.25rem;
+  padding-inline: 18px;
+}
+
+.call-offer-note {
+  color: var(--relay-muted);
+  flex-basis: 100%;
+  font-size: 12px;
+  margin: 0;
+}
+
+.call-offer-sound,
+.transfer-picker-actions,
+.transfer-progress,
+.call-actions-with-transfer {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.call-actions-with-transfer > button {
+  min-height: 44px;
+}
+
+.transfer-details {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 12px;
+}
+
+.transfer-picker {
+  align-items: end;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.transfer-picker label {
+  flex: 1 1 170px;
+  min-width: 0;
+}
+
+.transfer-picker select {
+  width: 100%;
+}
+
+.transfer-details p {
+  color: #536078;
+  font-size: 13px;
+  margin: 0;
+}
+
+.transfer-picker > p {
+  flex-basis: 100%;
+}
+
+.transfer-progress p {
+  flex: 1 1 170px;
+}
+
+@media (max-width: 540px) {
+  .call-offer-actions {
+    width: 100%;
+  }
+
+  .call-offer-actions .status-badge {
+    margin-inline-end: auto;
+  }
 }
 
 .inbound-admin {

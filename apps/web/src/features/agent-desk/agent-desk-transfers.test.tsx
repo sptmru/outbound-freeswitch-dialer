@@ -75,11 +75,11 @@ for (const direction of ["inbound", "outbound"] as const) {
       transfer: transferSnapshot(),
       offerId: "offer"
     });
-    fireEvent.click(screen.getByRole("button", { name: "Choose colleague" }));
+    fireEvent.click(screen.getByRole("button", { name: "Transfer" }));
     await screen.findByRole("option", { name: "Colleague" });
     expect(screen.getByRole("option", { name: /Busy colleague/ })).toBeDisabled();
-    fireEvent.change(screen.getByLabelText("Transfer recipient"), { target: { value: targetId } });
-    fireEvent.click(screen.getByRole("button", { name: "Request transfer" }));
+    fireEvent.change(screen.getByLabelText("Transfer to colleague"), { target: { value: targetId } });
+    fireEvent.click(screen.getByRole("button", { name: "Send request" }));
     await waitFor(() => expect(api.createTransfer).toHaveBeenCalledTimes(1));
     expect(vi.mocked(api.createTransfer).mock.calls[0]).toEqual([
       desk.activeCall!.id,
@@ -103,10 +103,10 @@ it("G03.1 busy target and HTTP loss refetch, rediscovery retains mutation identi
   mount();
   vi.mocked(api.createTransfer).mockRejectedValue(new TypeError("Response lost"));
   for (let i = 0; i < 2; i++) {
-    fireEvent.click(screen.getByRole("button", { name: "Choose colleague" }));
-    await screen.findByLabelText("Transfer recipient");
-    fireEvent.change(screen.getByLabelText("Transfer recipient"), { target: { value: targetId } });
-    fireEvent.click(screen.getByRole("button", { name: "Request transfer" }));
+    fireEvent.click(screen.getByRole("button", { name: "Transfer" }));
+    await screen.findByLabelText("Transfer to colleague");
+    fireEvent.change(screen.getByLabelText("Transfer to colleague"), { target: { value: targetId } });
+    fireEvent.click(screen.getByRole("button", { name: "Send request" }));
     await screen.findByText("Response lost");
   }
   expect(api.createTransfer).toHaveBeenCalledTimes(2);
@@ -160,7 +160,7 @@ it("G03.3 delayed create/target responses cannot act in a replacement Desk", asy
       resolve = r;
     })
   );
-  fireEvent.click(screen.getByRole("button", { name: "Choose colleague" }));
+  fireEvent.click(screen.getByRole("button", { name: "Transfer" }));
   const next = structuredClone(desk);
   next.coordination!.revision = "2";
   next.coordination!.session!.revision = "2";
