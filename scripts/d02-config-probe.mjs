@@ -94,12 +94,35 @@ try {
     { name: "vanilla extension cannot bypass trust", source: "127.0.0.3", did: "1000", status: 403 },
     { name: "disabled", did: "+12025550101", status: 403 },
     { name: "admission-unavailable", status: 503 },
+    { name: "gateway DID without plus", gateway: "sip-trunk", did: "12025550100", status: 503 },
+    { name: "gateway DID with plus", gateway: "sip-trunk", status: 503 },
+    { name: "gateway disabled DID without plus", gateway: "sip-trunk", did: "12025550101", status: 403 },
+    {
+      name: "gateway unknown Request-URI DID with known To DID",
+      gateway: "sip-trunk",
+      did: "12025550109",
+      toDid: "12025550100",
+      status: 404
+    },
+    { name: "untrusted gateway DID", gateway: "sip-trunk", source: "127.0.0.3", status: 403 },
     { name: "forged headers", forged: true, status: 503 }
   ]) {
     const result = await invite({ ...spec, port: 5090 });
     assert.equal(result.final, spec.status, JSON.stringify(result.messages));
     assert.equal(result.rtp.length, 0);
     assert.ok(result.messages.find((m) => m.first.startsWith(`SIP/2.0 ${spec.status}`)).ms < 3000);
+    if (spec.gateway) {
+      await until(
+        () =>
+          observer.events.some(
+            (e) =>
+              e["event-name"] === "CHANNEL_HANGUP_COMPLETE" &&
+              e["variable_sip_call_id"] === result.callId &&
+              e["variable_sip_gateway"] === spec.gateway
+          ),
+        "gateway INVITE observed"
+      );
+    }
     await pass(`D02.1 ${spec.name}`, {
       sipStatus: result.final,
       messages: result.messages.map((m) => ({ first: m.first, ms: m.ms }))

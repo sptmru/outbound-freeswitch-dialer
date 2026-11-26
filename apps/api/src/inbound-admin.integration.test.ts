@@ -224,7 +224,7 @@ test(
         "+14155550199"
       );
       const q = await f.queue(c.versionId);
-      const nInput = f.numberInput(q.id);
+      const nInput = f.numberInput(q.id, "14155550100");
       const n = await f.save<InboundNumberSnapshot>("POST", "numbers", nInput);
       const replay = await f.save<InboundNumberSnapshot>("POST", "numbers", {
         ...nInput,
@@ -242,7 +242,7 @@ test(
         "idempotency_conflict"
       );
       assert.equal(
-        (await f.request("POST", "numbers", { ...nInput, ...key() })).json().code,
+        (await f.request("POST", "numbers", { ...nInput, ...key(), did: "+14155550100" })).json().code,
         "duplicate_configuration"
       );
       const q2 = await f.save<InboundQueueSnapshot>("PATCH", `queues/${q.id}`, {
@@ -768,12 +768,13 @@ test(
         assert.deepEqual(await f.state(), old);
       }
       const updated = await f.save<InboundNumberSnapshot>("PATCH", `numbers/${n.id}`, {
-        ...f.numberInput(q.id),
+        ...f.numberInput(q.id, "14155550100"),
         label: "Edited",
         enabled: true,
         expectedRevision: n.revision
       });
       assert.equal(updated.revision, "2");
+      assert.equal(updated.did, n.did);
       const off = await f.save<InboundNumberSnapshot>("PATCH", `numbers/${n.id}`, {
         ...f.numberInput(q.id),
         label: "Edited",

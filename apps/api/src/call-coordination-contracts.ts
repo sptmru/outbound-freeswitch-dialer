@@ -85,14 +85,17 @@ export const saveInboundNumberSchema = z
   .object({
     ...adminMutationFields,
     label: z.string().trim().min(1).max(160),
-    did: z.string().transform((value, ctx) => {
-      try {
-        return normalizeInboundNumber(value);
-      } catch {
-        ctx.addIssue({ code: "custom", message: "Invalid international DID" });
-        return z.NEVER;
-      }
-    }),
+    did: z
+      .string()
+      .trim()
+      .transform((value, ctx) => {
+        try {
+          return normalizeInboundNumber(/^[1-9]\d{0,14}$/.test(value) ? `+${value}` : value);
+        } catch {
+          ctx.addIssue({ code: "custom", message: "Invalid international DID" });
+          return z.NEVER;
+        }
+      }),
     queueId: uuid,
     enabled: z.boolean()
   })

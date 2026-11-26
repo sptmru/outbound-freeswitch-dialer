@@ -27,7 +27,8 @@ mkdir "$RUN_DIR/socket"
 chmod 777 "$RUN_DIR/socket"
 git rev-parse HEAD > "$RUN_DIR/base-revision.txt"
 sha256sum apps/api/src/freeswitch/*.ts infra/freeswitch/entrypoint.sh infra/freeswitch/templates/inbound/* \
-  apps/api/db/migrations/*.sql scripts/d02-config-probe.mjs "$0" > "$RUN_DIR/source-sha256.txt"
+  infra/freeswitch/templates/sip_profiles/external/sip-trunk-gateway.xml.tpl \
+  apps/api/db/migrations/*.sql scripts/a02-ingress-probe.mjs scripts/d02-config-probe.mjs "$0" > "$RUN_DIR/source-sha256.txt"
 docker image inspect "$IMAGE" "$PG_IMAGE" --format '{{.Id}} {{json .RepoDigests}}' > "$RUN_DIR/images.txt"
 docker run -d --name "$NET_CONTAINER" --network none --memory 32m --pids-limit 8 \
   --cap-drop ALL --entrypoint sleep "$IMAGE" 3600 > "$RUN_DIR/net-id.txt"
@@ -49,7 +50,9 @@ docker run -d --name "$FS_CONTAINER" --network "container:$NET_CONTAINER" --memo
   -e FREESWITCH_EXTERNAL_SIP_IP=127.0.0.1 -e FREESWITCH_EXTERNAL_RTP_IP=127.0.0.1 \
   -e FREESWITCH_INTERNAL_SIP_PORT=5080 -e FREESWITCH_EXTERNAL_PROFILE_SIP_PORT=5090 \
   -e FREESWITCH_EXTERNAL_PROFILE_TLS_PORT=5091 -e FREESWITCH_WEBRTC_WSS_PORT=7443 \
-  -e FREESWITCH_INBOUND_CONFIG_ENABLED=true -e SIP_TRUNK_MODE=ip_auth \
+  -e FREESWITCH_INBOUND_CONFIG_ENABLED=true -e SIP_TRUNK_MODE=registration \
+  -e SIP_TRUNK_PROXY=127.0.0.1:5099 -e SIP_TRUNK_REALM=a04.invalid \
+  -e SIP_TRUNK_USERNAME=12025550101 -e SIP_TRUNK_PASSWORD=a02-disposable-only \
   --entrypoint sh "$IMAGE" -c 'if [ ! -d /a02/conf ]; then cp -a /usr/share/freeswitch/conf/vanilla /a02/conf; fi; exec sh /repo/entrypoint.sh' > "$RUN_DIR/fs-id.txt"
 docker inspect "$FS_CONTAINER" "$PG_CONTAINER" "$NET_CONTAINER" --format '{{.Name}} {{json .HostConfig.NetworkMode}} {{json .HostConfig.PortBindings}}' > "$RUN_DIR/isolation.txt"
 PID="$(docker inspect "$NET_CONTAINER" --format '{{.State.Pid}}')"

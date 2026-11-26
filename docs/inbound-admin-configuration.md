@@ -44,8 +44,11 @@ defaults when fields are omitted, so clients should submit all intended settings
   `enabled` is explicit, including on create. At most 200 saved numbers match D02's
   renderer bound. International DID/target input is normalized before strict
   `libphonenumber-js` validation: `0014155550100` and `+1 (415) 555-0100` save as
-  `+14155550100`. These contracts require international input; they do not guess a
-  country or accept SIP URIs or arbitrary dial strings.
+  `+14155550100`. A DID can also be entered as digits with the country calling code
+  (`14155550100`). Both SIP Request-URI forms, with and without the `+`, route to the
+  same saved DID. The registration gateway preserves the Request-URI number when an
+  INVITE includes `;gw=sip-trunk`. These contracts require international input and
+  reject SIP URIs and arbitrary dial strings.
 - Queue: `name`, immutable `campaignId`, nullable `waitingRecordingId` and
   `noAnswerFlowVersionId`, plus `configuration`: `offerTimeoutMs`, `queueTimeoutMs`,
   `connectTimeoutMs`, `transferTimeoutMs`, `maxWaitingCalls`, `overflowPolicy` and

@@ -7,7 +7,8 @@
     <param name="outbound-proxy" value="__SIP_TRUNK_OUTBOUND_PROXY__"/>
     <param name="register" value="true"/>
     <param name="caller-id-in-from" value="true"/>
-    <param name="extension" value="__SIP_TRUNK_USERNAME__"/>
+    <!-- Preserve the Request-URI user on gateway-tagged inbound calls. -->
+    <param name="extension" value="auto"/>
     <param name="expire-seconds" value="300"/>
     <param name="retry-seconds" value="30"/>
   </gateway>

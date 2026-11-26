@@ -122,6 +122,8 @@ export async function invite({
   port = 5080,
   source = "127.0.0.2",
   did = "+12025550100",
+  gateway,
+  toDid = did,
   forged = false,
   caller = "+12025550199",
   codec = "PCMU",
@@ -165,10 +167,10 @@ export async function invite({
         packets.push({ ms: Date.now() - started, type: data[1] & 127, payload: [...data.subarray(12)] });
     });
     const address = `${source}:${sip.address().port}`;
-    const uri = `sip:${did}@127.0.0.1:${port}`;
+    const uri = `sip:${did}@127.0.0.1:${port}${gateway ? `;transport=udp;gw=${gateway}` : ""}`;
     const branch = `z9hG4bK${randomUUID()}`;
     const from = `<sip:${caller}@a02.invalid>;tag=a02`;
-    const to = `<${uri}>`;
+    const to = `<sip:${toDid}@127.0.0.1:${port}>`;
     const payloadType = codec === "PCMA" ? 8 : 0;
     const sdp = [
       "v=0",

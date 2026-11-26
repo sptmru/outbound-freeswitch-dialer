@@ -246,26 +246,12 @@ test("B05.2 canonical fingerprints, scoped retries and changed-payload conflict"
 
 test("B05.1/B05.4 admin payloads reuse bounded B01 validators and normalized DID", () => {
   const mutation = { idempotencyKey: id, expectedRevision: null };
-  assert.equal(
-    saveInboundNumberSchema.parse({
-      ...mutation,
-      label: "Main",
-      did: "+1 (415) 555-0100",
-      queueId: id,
-      enabled: false
-    }).did,
-    "+14155550100"
-  );
-  assert.equal(
-    saveInboundNumberSchema.safeParse({
-      ...mutation,
-      label: "Main",
-      did: "sip:evil",
-      queueId: id,
-      enabled: true
-    }).success,
-    false
-  );
+  const number = { ...mutation, label: "Main", queueId: id, enabled: false };
+  assert.equal(saveInboundNumberSchema.parse({ ...number, did: "+1 (415) 555-0100" }).did, "+14155550100");
+  assert.equal(saveInboundNumberSchema.parse({ ...number, did: " 61491570006 " }).did, "+61491570006");
+  for (const did of ["0491570006", "999123456789", "sip:61491570006@example.com"]) {
+    assert.equal(saveInboundNumberSchema.safeParse({ ...number, did }).success, false);
+  }
   const queue = {
     ...mutation,
     name: "Queue",
