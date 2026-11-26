@@ -128,7 +128,13 @@ const mutation = (agent: Agent) => ({
 });
 async function queued(f: Fixture, changes: Partial<IngressRecord> = {}) {
   const r = await f.seed(changes);
-  await admitInboundQueue(f.pool, r.uuid);
+  const waiting = await admitInboundQueue(f.pool, r.uuid);
+  assert.ok(waiting);
+  await f.pool.query(
+    `update call_operations set state='succeeded',result='{}',resolved_at=clock_timestamp(),
+      resolution_evidence='synthetic waiting fixture' where id=$1`,
+    [waiting.id]
+  );
   return r.uuid;
 }
 async function due(f: Fixture, a: Agent, callId: string) {
