@@ -32,6 +32,7 @@ COPY --from=build /app/packages/shared/dist packages/shared/dist
 COPY --from=build /app/apps/api/dist apps/api/dist
 COPY apps/api/db apps/api/db
 COPY infra/freeswitch/templates/inbound infra/freeswitch/templates/inbound
+COPY infra/freeswitch/templates/dialplan/inbound-wait.xml.tpl infra/freeswitch/templates/dialplan/inbound-wait.xml.tpl
 
 EXPOSE 3000
 CMD ["npm", "--workspace", "@outbound-dialer/api", "run", "start"]
